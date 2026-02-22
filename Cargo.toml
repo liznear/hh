@@ -1,0 +1,21 @@
+[package]
+name = "hh"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+clap = { version = "4.5", features = ["derive"] }
+dirs = "6.0"
+glob = "0.3"
+regex = "1.11"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.46", features = ["macros", "rt-multi-thread", "process", "time", "io-util"] }
+toml = "0.8"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3.15"
