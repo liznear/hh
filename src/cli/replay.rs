@@ -11,8 +11,7 @@ use crossterm::{
     terminal::{Clear, ClearType},
 };
 
-pub fn replay_frames(dir: &Path, delay_ms: u64, loop_replay: bool) -> anyhow::Result<()> {
-    // Collect all screen files
+fn collect_screen_files(dir: &Path) -> anyhow::Result<Vec<std::fs::DirEntry>> {
     let mut files: Vec<_> = fs::read_dir(dir)?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
@@ -31,15 +30,20 @@ pub fn replay_frames(dir: &Path, delay_ms: u64, loop_replay: bool) -> anyhow::Re
             .unwrap_or(0)
     });
 
-    if files.is_empty() {
+    Ok(files)
+}
+
+pub fn replay_frames(dir: &Path, delay_ms: u64, loop_replay: bool) -> anyhow::Result<()> {
+    let initial_files = collect_screen_files(dir)?;
+
+    if initial_files.is_empty() {
         anyhow::bail!("No screen dump files found in {}", dir.display());
     }
 
     let is_tty = io::stdin().is_terminal();
 
     println!(
-        "Replaying {} frames from {} (delay: {}ms, loop: {})",
-        files.len(),
+        "Replaying frames from {} (delay: {}ms, loop: {})",
         dir.display(),
         delay_ms,
         loop_replay
@@ -53,9 +57,23 @@ pub fn replay_frames(dir: &Path, delay_ms: u64, loop_replay: bool) -> anyhow::Re
 
     let delay = Duration::from_millis(delay_ms);
     let mut paused = false;
+    let mut last_shown_frame: usize = 0;
 
     loop {
-        for entry in &files {
+        // Re-scan directory to pick up new frames
+        let files = collect_screen_files(dir)?;
+
+        for entry in files.iter() {
+            // Skip frames we've already shown
+            let frame_name = entry.file_name().to_string_lossy().to_string();
+            let frame_num = frame_name
+                .trim_start_matches("screen-")
+                .trim_end_matches(".txt")
+                .parse::<usize>()
+                .unwrap_or(0);
+            if frame_num <= last_shown_frame {
+                continue;
+            }
             // Check for quit/pause input (only if TTY)
             if is_tty && event::poll(Duration::from_millis(0))? {
                 if let Event::Key(key) = event::read()? {
@@ -116,7 +134,6 @@ pub fn replay_frames(dir: &Path, delay_ms: u64, loop_replay: bool) -> anyhow::Re
             }
 
             // Show frame info
-            let frame_name = entry.file_name().to_string_lossy().to_string();
             if is_tty {
                 println!("\n[{} - press 'q' to quit, 'p' to pause]", frame_name);
             } else {
@@ -125,11 +142,29 @@ pub fn replay_frames(dir: &Path, delay_ms: u64, loop_replay: bool) -> anyhow::Re
 
             std::io::stdout().flush()?;
 
+            last_shown_frame = frame_num;
             std::thread::sleep(delay);
         }
 
         if !loop_replay {
-            break;
+            // In non-loop mode, wait for new frames before exiting
+            // Re-scan to check if there are new frames
+            let files = collect_screen_files(dir)?;
+            let max_frame = files.iter().map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                name.trim_start_matches("screen-")
+                    .trim_end_matches(".txt")
+                    .parse::<usize>()
+                    .unwrap_or(0)
+            }).max().unwrap_or(0);
+
+            if max_frame <= last_shown_frame {
+                break;
+            }
+            // If there are new frames, continue the loop to display them
+        } else {
+            // In loop mode, add a small delay before rescanning
+            std::thread::sleep(Duration::from_millis(100));
         }
     }
 

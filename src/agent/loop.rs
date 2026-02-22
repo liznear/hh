@@ -69,15 +69,10 @@ where
                 })
                 .await?;
 
-            if !assistant_content.is_empty() {
-                self.events.on_assistant_done();
-            }
-
             if assistant_content.is_empty() {
                 assistant_content = response.assistant_message.content.clone();
                 if !assistant_content.is_empty() {
                     self.events.on_assistant_delta(&assistant_content);
-                    self.events.on_assistant_done();
                 }
             }
 
@@ -89,7 +84,7 @@ where
 
             let assistant = Message {
                 role: Role::Assistant,
-                content: assistant_content,
+                content: assistant_content.clone(),
                 tool_call_id: None,
             };
 
@@ -107,8 +102,15 @@ where
             }
             state.push(assistant.clone());
 
+            // If no tool calls, the agent is done - always call on_assistant_done
             if response.done {
-                return Ok(assistant.content);
+                self.events.on_assistant_done();
+                return Ok(assistant_content);
+            }
+
+            // For tool calls, only call on_assistant_done if there was content
+            if !assistant_content.is_empty() {
+                self.events.on_assistant_done();
             }
 
             for call in response.tool_calls {

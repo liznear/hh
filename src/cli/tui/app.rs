@@ -19,6 +19,7 @@ pub struct ChatApp {
     pub thinking_expanded: bool,
     pub should_quit: bool,
     pub is_processing: bool,
+    pub auto_scroll: bool, // When true, follow new content
 }
 
 impl ChatApp {
@@ -30,6 +31,7 @@ impl ChatApp {
             thinking_expanded: false,
             should_quit: false,
             is_processing: false,
+            auto_scroll: true,
         }
     }
 
@@ -98,6 +100,7 @@ impl ChatApp {
         if !input.is_empty() {
             self.messages.push(ChatMessage::User(input.clone()));
             self.is_processing = true;
+            self.auto_scroll = true; // Follow the new response
         }
         input
     }
@@ -109,12 +112,18 @@ impl ChatApp {
     pub fn scroll_up(&mut self) {
         if self.scroll_offset > 0 {
             self.scroll_offset -= 1;
+            self.auto_scroll = false; // User took control
         }
     }
 
-    pub fn scroll_down(&mut self, max_lines: usize) {
+    pub fn scroll_down(&mut self, max_lines: usize, visible_height: usize) {
         if self.scroll_offset < max_lines.saturating_sub(1) {
             self.scroll_offset += 1;
+        }
+        // Re-enable auto-scroll when scrolled to bottom
+        let max_offset = max_lines.saturating_sub(visible_height);
+        if self.scroll_offset >= max_offset {
+            self.auto_scroll = true;
         }
     }
 }

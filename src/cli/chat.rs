@@ -319,13 +319,11 @@ pub async fn run_chat_debug_with_prompt(
             }
 
             result = &mut agent_handle => {
-                // Agent finished (join handle resolved)
+                // Agent task finished - just log, don't exit
+                // Continue processing events until AssistantDone or channel closes
                 if let Err(e) = result {
-                    eprintln!("Agent task panicked: {}", e);
+                    eprintln!("Agent task error: {}", e);
                 }
-                // Render final state
-                renderer.render(&app)?;
-                break;
             }
         }
     }
