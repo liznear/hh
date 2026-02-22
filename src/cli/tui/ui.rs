@@ -140,7 +140,7 @@ fn render_input(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
     // Always show cursor at end of input
     let cursor_x = (prefix.len() + app.input.len()) as u16;
     if cursor_x < area.width {
-        f.set_cursor_position((area.x + cursor_x, area.y + 1));
+        f.set_cursor_position((area.x + cursor_x, area.y));
     }
 
     f.render_widget(paragraph, area);
