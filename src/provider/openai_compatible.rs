@@ -1,4 +1,7 @@
-use crate::provider::{Message, Provider, ProviderRequest, ProviderResponse, Role, ToolCall};
+use crate::provider::{
+    Message, Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role,
+    StreamedToolCall, ToolCall,
+};
 use anyhow::{Context, bail};
 use async_trait::async_trait;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -37,11 +40,8 @@ impl OpenAiCompatibleProvider {
         );
         Ok(headers)
     }
-}
 
-#[async_trait]
-impl Provider for OpenAiCompatibleProvider {
-    async fn complete(&self, req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
+    fn request_body(&self, req: &ProviderRequest, stream: bool) -> Value {
         let tools = req
             .tools
             .iter()
@@ -78,29 +78,16 @@ impl Provider for OpenAiCompatibleProvider {
             })
             .collect::<Vec<_>>();
 
-        let body = json!({
+        json!({
             "model": if req.model.is_empty() { &self.model } else { &req.model },
             "messages": messages,
             "tools": tools,
             "tool_choice": "auto",
-        });
+            "stream": stream,
+        })
+    }
 
-        let response = self
-            .client
-            .post(self.endpoint())
-            .headers(self.auth_headers()?)
-            .json(&body)
-            .send()
-            .await
-            .context("provider request failed")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            bail!("provider error {}: {}", status, body);
-        }
-
-        let value: Value = response.json().await.context("invalid provider JSON")?;
+    fn parse_chat_response(value: &Value) -> anyhow::Result<ProviderResponse> {
         let choice = value
             .get("choices")
             .and_then(|v| v.as_array())
@@ -118,35 +105,8 @@ impl Provider for OpenAiCompatibleProvider {
             .unwrap_or_default()
             .to_string();
 
-        let mut tool_calls = Vec::new();
-        if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
-            for call in calls {
-                let id = call
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                let function = call
-                    .get("function")
-                    .and_then(|v| v.as_object())
-                    .context("tool call missing function")?;
-                let name = function
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                let args_raw = function
-                    .get("arguments")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("{}");
-                let arguments: Value = serde_json::from_str(args_raw).unwrap_or_else(|_| json!({}));
-                tool_calls.push(ToolCall {
-                    id,
-                    name,
-                    arguments,
-                });
-            }
-        }
+        let thinking = extract_thinking(message);
+        let tool_calls = parse_tool_calls(message)?;
 
         Ok(ProviderResponse {
             assistant_message: Message {
@@ -156,6 +116,258 @@ impl Provider for OpenAiCompatibleProvider {
             },
             done: tool_calls.is_empty(),
             tool_calls,
+            thinking,
         })
+    }
+
+    async fn complete_stream_inner<F>(
+        &self,
+        req: ProviderRequest,
+        mut on_event: F,
+    ) -> anyhow::Result<ProviderResponse>
+    where
+        F: FnMut(ProviderStreamEvent) + Send,
+    {
+        let response = self
+            .client
+            .post(self.endpoint())
+            .headers(self.auth_headers()?)
+            .json(&self.request_body(&req, true))
+            .send()
+            .await
+            .context("provider stream request failed")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("provider error {}: {}", status, body);
+        }
+
+        let mut assistant = String::new();
+        let mut thinking = String::new();
+        let mut partial_calls: Vec<StreamedToolCall> = Vec::new();
+
+        let mut buffer = String::new();
+        let mut resp = response;
+        while let Some(chunk) = resp.chunk().await.context("stream read failed")? {
+            let txt = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&txt);
+
+            while let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim_end_matches('\r').to_string();
+                buffer.drain(..=pos);
+
+                let line = line.trim();
+                if line.is_empty() || !line.starts_with("data:") {
+                    continue;
+                }
+
+                let payload = line.trim_start_matches("data:").trim();
+                if payload == "[DONE]" {
+                    break;
+                }
+
+                let value: Value = match serde_json::from_str(payload) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                apply_stream_chunk(
+                    &value,
+                    &mut assistant,
+                    &mut thinking,
+                    &mut partial_calls,
+                    &mut on_event,
+                );
+            }
+        }
+
+        if !buffer.trim().is_empty() {
+            let trailing = buffer.trim();
+            if trailing.starts_with("data:") {
+                let payload = trailing.trim_start_matches("data:").trim();
+                if payload != "[DONE]"
+                    && let Ok(value) = serde_json::from_str::<Value>(payload)
+                {
+                    apply_stream_chunk(
+                        &value,
+                        &mut assistant,
+                        &mut thinking,
+                        &mut partial_calls,
+                        &mut on_event,
+                    );
+                }
+            }
+        }
+
+        let tool_calls = partial_calls
+            .into_iter()
+            .filter(|c| !c.name.is_empty())
+            .map(StreamedToolCall::into_tool_call)
+            .collect::<Vec<_>>();
+
+        Ok(ProviderResponse {
+            assistant_message: Message {
+                role: Role::Assistant,
+                content: assistant,
+                tool_call_id: None,
+            },
+            done: tool_calls.is_empty(),
+            tool_calls,
+            thinking: if thinking.is_empty() {
+                None
+            } else {
+                Some(thinking)
+            },
+        })
+    }
+}
+
+#[async_trait]
+impl Provider for OpenAiCompatibleProvider {
+    async fn complete(&self, req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
+        let response = self
+            .client
+            .post(self.endpoint())
+            .headers(self.auth_headers()?)
+            .json(&self.request_body(&req, false))
+            .send()
+            .await
+            .context("provider request failed")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("provider error {}: {}", status, body);
+        }
+
+        let value: Value = response.json().await.context("invalid provider JSON")?;
+        Self::parse_chat_response(&value)
+    }
+
+    async fn complete_stream<F>(
+        &self,
+        req: ProviderRequest,
+        mut on_event: F,
+    ) -> anyhow::Result<ProviderResponse>
+    where
+        F: FnMut(ProviderStreamEvent) + Send,
+    {
+        let stream_req = req.clone();
+        match self.complete_stream_inner(stream_req, &mut on_event).await {
+            Ok(response) => Ok(response),
+            Err(_) => {
+                let response = self.complete(req).await?;
+                if let Some(thinking) = &response.thinking {
+                    on_event(ProviderStreamEvent::ThinkingDelta(thinking.clone()));
+                }
+                if !response.assistant_message.content.is_empty() {
+                    on_event(ProviderStreamEvent::AssistantDelta(
+                        response.assistant_message.content.clone(),
+                    ));
+                }
+                Ok(response)
+            }
+        }
+    }
+}
+
+fn parse_tool_calls(message: &serde_json::Map<String, Value>) -> anyhow::Result<Vec<ToolCall>> {
+    let mut tool_calls = Vec::new();
+    if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
+        for call in calls {
+            let id = call
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let function = call
+                .get("function")
+                .and_then(|v| v.as_object())
+                .context("tool call missing function")?;
+            let name = function
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let args_raw = function
+                .get("arguments")
+                .and_then(|v| v.as_str())
+                .unwrap_or("{}");
+            let arguments: Value = serde_json::from_str(args_raw).unwrap_or_else(|_| json!({}));
+            tool_calls.push(ToolCall {
+                id,
+                name,
+                arguments,
+            });
+        }
+    }
+    Ok(tool_calls)
+}
+
+fn extract_thinking(message: &serde_json::Map<String, Value>) -> Option<String> {
+    ["reasoning", "thinking", "reasoning_content"]
+        .iter()
+        .find_map(|k| {
+            message
+                .get(*k)
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.is_empty())
+                .map(ToString::to_string)
+        })
+}
+
+fn apply_stream_chunk<F>(
+    value: &Value,
+    assistant: &mut String,
+    thinking: &mut String,
+    partial_calls: &mut Vec<StreamedToolCall>,
+    on_event: &mut F,
+) where
+    F: FnMut(ProviderStreamEvent) + Send,
+{
+    let Some(choice) = value
+        .get("choices")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+    else {
+        return;
+    };
+
+    let Some(delta) = choice.get("delta").and_then(|v| v.as_object()) else {
+        return;
+    };
+
+    if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
+        assistant.push_str(content);
+        on_event(ProviderStreamEvent::AssistantDelta(content.to_string()));
+    }
+
+    for key in ["reasoning", "thinking", "reasoning_content"] {
+        if let Some(text) = delta.get(key).and_then(|v| v.as_str()) {
+            thinking.push_str(text);
+            on_event(ProviderStreamEvent::ThinkingDelta(text.to_string()));
+        }
+    }
+
+    if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+        for call in tool_calls {
+            let index = call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            while partial_calls.len() <= index {
+                partial_calls.push(StreamedToolCall::default());
+            }
+
+            let entry = &mut partial_calls[index];
+            if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
+                entry.id = id.to_string();
+            }
+            if let Some(function) = call.get("function").and_then(|v| v.as_object()) {
+                if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
+                    entry.name = name.to_string();
+                }
+                if let Some(args_piece) = function.get("arguments").and_then(|v| v.as_str()) {
+                    entry.arguments_json.push_str(args_piece);
+                }
+            }
+        }
     }
 }

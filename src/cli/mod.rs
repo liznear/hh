@@ -3,6 +3,7 @@ pub mod commands;
 pub mod render;
 
 use crate::cli::commands::{Cli, Commands, ConfigCommand};
+use crate::cli::render::LiveRender;
 use crate::config::{load_settings, write_default_project_config};
 use clap::Parser;
 
@@ -14,8 +15,9 @@ pub async fn run() -> anyhow::Result<()> {
     match cli.command {
         Commands::Chat => chat::run_chat(settings, &cwd).await,
         Commands::Run { prompt } => {
-            let answer = chat::run_single_prompt(settings, &cwd, prompt).await?;
-            println!("{}", answer);
+            let render = LiveRender::new();
+            render.begin_turn();
+            chat::run_single_prompt_with_events(settings, &cwd, prompt, render).await?;
             Ok(())
         }
         Commands::Tools => {

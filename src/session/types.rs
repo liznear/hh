@@ -26,4 +26,8 @@ pub enum SessionEvent {
         tool_name: String,
         approved: bool,
     },
+    Thinking {
+        id: String,
+        content: String,
+    },
 }

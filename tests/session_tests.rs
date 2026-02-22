@@ -27,6 +27,13 @@ fn appends_and_replays_messages() {
         })
         .expect("append assistant");
 
+    store
+        .append(&SessionEvent::Thinking {
+            id: "3".to_string(),
+            content: "hidden reasoning".to_string(),
+        })
+        .expect("append thinking");
+
     let replayed = store.replay_messages().expect("replay");
     assert_eq!(replayed.len(), 2);
     assert_eq!(replayed[0].content, "hello");
