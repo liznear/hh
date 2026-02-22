@@ -13,5 +13,6 @@ fn default_permission_matrix_matches_policy() {
     assert_eq!(matcher.decision_for_tool("write"), Decision::Ask);
     assert_eq!(matcher.decision_for_tool("bash"), Decision::Ask);
     assert_eq!(matcher.decision_for_tool("web_fetch"), Decision::Ask);
+    assert_eq!(matcher.decision_for_tool("web_search"), Decision::Ask);
     assert_eq!(matcher.decision_for_tool("unknown"), Decision::Deny);
 }
