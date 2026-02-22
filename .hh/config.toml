@@ -22,4 +22,4 @@ bash = "ask"
 web = "ask"
 
 [session]
-root = "/Users/nearsyh/.local/state/hh/sessions"
+root = "~/.local/state/hh/sessions"
