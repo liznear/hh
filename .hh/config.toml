@@ -1,0 +1,25 @@
+[provider]
+base_url = "https://api.z.ai/api/coding/paas/v4"
+model = "glm-5"
+api_key_env = "ZAI_API_KEY"
+
+[agent]
+max_steps = 12
+token_budget = 32000
+
+[tools]
+fs = true
+bash = true
+web = true
+
+[permission]
+read = "allow"
+list = "allow"
+glob = "allow"
+grep = "allow"
+write = "ask"
+bash = "ask"
+web = "ask"
+
+[session]
+root = "/Users/nearsyh/.local/state/hh/sessions"
