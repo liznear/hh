@@ -1,6 +1,7 @@
 pub mod chat;
 pub mod commands;
 pub mod render;
+pub mod tui;
 
 use crate::cli::commands::{Cli, Commands, ConfigCommand};
 use crate::cli::render::LiveRender;
