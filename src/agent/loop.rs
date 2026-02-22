@@ -108,11 +108,6 @@ where
                 return Ok(assistant_content);
             }
 
-            // For tool calls, only call on_assistant_done if there was content
-            if !assistant_content.is_empty() {
-                self.events.on_assistant_done();
-            }
-
             for call in response.tool_calls {
                 self.session.append(&SessionEvent::ToolCall {
                     id: call.id.clone(),

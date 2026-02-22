@@ -34,10 +34,11 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
 fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
     // Use actual area width for wrapping (account for border)
     let wrap_width = area.width.saturating_sub(2) as usize;
-    let lines = build_message_lines(app, wrap_width);
-    let total_lines = lines.len();
-
     let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
+
+    // Get cached lines and calculate scroll offset
+    let lines = app.get_lines(wrap_width);
+    let total_lines = lines.len();
 
     // Calculate scroll offset: auto-scroll to bottom if enabled, otherwise use manual offset
     let scroll_offset = if app.auto_scroll {
@@ -48,7 +49,7 @@ fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
         app.scroll_offset
     };
 
-    let text = Text::from(lines);
+    let text = Text::from(lines.to_vec());
     let paragraph = Paragraph::new(text)
         .block(Block::default().borders(Borders::TOP).title("Messages"))
         .scroll((scroll_offset as u16, 0));
@@ -56,7 +57,17 @@ fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
     f.render_widget(paragraph, area);
 }
 
-fn build_message_lines(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
+/// Build message lines (used for caching in ChatApp)
+pub fn build_message_lines_internal(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
+    build_message_lines_impl(app, width)
+}
+
+/// Public function for external callers (e.g., calculating scroll bounds)
+pub fn build_message_lines(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
+    build_message_lines_impl(app, width)
+}
+
+fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     for msg in &app.messages {

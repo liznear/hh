@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
 use tokio::sync::mpsc;
 
 use crate::agent::{AgentEvents, AgentLoop, NoopEvents};
@@ -33,7 +33,7 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
             // Handle terminal input events
             input_result = handle_input() => {
                 match input_result? {
-                    Some(key_event) => {
+                    Some(InputEvent::Key(key_event)) => {
                         // Check for Ctrl+C first
                         if key_event.code == KeyCode::Char('c')
                             && key_event.modifiers.contains(KeyModifiers::CONTROL)
@@ -66,12 +66,50 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
                                 KeyCode::Esc => {
                                     app.input.clear();
                                 }
+                                KeyCode::Up => {
+                                    app.scroll_up();
+                                }
+                                KeyCode::Down => {
+                                    let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
+                                    let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
+                                    let lines = crate::cli::tui::build_message_lines(&app, wrap_width);
+                                    app.scroll_down(lines.len(), visible_height);
+                                }
+                                KeyCode::PageUp => {
+                                    let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
+                                    for _ in 0..visible_height.saturating_sub(1) {
+                                        app.scroll_up();
+                                    }
+                                }
+                                KeyCode::PageDown => {
+                                    let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
+                                    let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
+                                    let lines = crate::cli::tui::build_message_lines(&app, wrap_width);
+                                    for _ in 0..visible_height.saturating_sub(1) {
+                                        app.scroll_down(lines.len(), visible_height);
+                                    }
+                                }
                                 _ => {}
                             }
                         }
                     }
+                    Some(InputEvent::ScrollUp) => {
+                        // Mouse scroll: scroll 3 lines at a time
+                        for _ in 0..3 {
+                            app.scroll_up();
+                        }
+                    }
+                    Some(InputEvent::ScrollDown) => {
+                        // Mouse scroll: scroll 3 lines at a time
+                        let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
+                        let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
+                        let lines = crate::cli::tui::build_message_lines(&app, wrap_width);
+                        for _ in 0..3 {
+                            app.scroll_down(lines.len(), visible_height);
+                        }
+                    }
                     None => {
-                        // No key event available, continue loop
+                        // No event available, continue loop
                     }
                 }
             }
@@ -126,7 +164,7 @@ pub async fn run_chat_with_debug(
             // Handle terminal input events
             input_result = handle_input() => {
                 match input_result? {
-                    Some(key_event) => {
+                    Some(InputEvent::Key(key_event)) => {
                         // Check for Ctrl+C first
                         if key_event.code == KeyCode::Char('c')
                             && key_event.modifiers.contains(KeyModifiers::CONTROL)
@@ -159,13 +197,47 @@ pub async fn run_chat_with_debug(
                                 KeyCode::Esc => {
                                     app.input.clear();
                                 }
+                                KeyCode::Up => {
+                                    app.scroll_up();
+                                }
+                                KeyCode::Down => {
+                                    let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
+                                    let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
+                                    let lines = crate::cli::tui::build_message_lines(&app, wrap_width);
+                                    app.scroll_down(lines.len(), visible_height);
+                                }
+                                KeyCode::PageUp => {
+                                    let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
+                                    for _ in 0..visible_height.saturating_sub(1) {
+                                        app.scroll_up();
+                                    }
+                                }
+                                KeyCode::PageDown => {
+                                    let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
+                                    let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
+                                    let lines = crate::cli::tui::build_message_lines(&app, wrap_width);
+                                    for _ in 0..visible_height.saturating_sub(1) {
+                                        app.scroll_down(lines.len(), visible_height);
+                                    }
+                                }
                                 _ => {}
                             }
                         }
                     }
-                    None => {
-                        // No key event available, continue loop
+                    Some(InputEvent::ScrollUp) => {
+                        for _ in 0..3 {
+                            app.scroll_up();
+                        }
                     }
+                    Some(InputEvent::ScrollDown) => {
+                        let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
+                        let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
+                        let lines = crate::cli::tui::build_message_lines(&app, wrap_width);
+                        for _ in 0..3 {
+                            app.scroll_down(lines.len(), visible_height);
+                        }
+                    }
+                    None => {}
                 }
             }
 
@@ -337,16 +409,32 @@ pub async fn run_chat_debug_with_prompt(
     Ok(())
 }
 
-async fn handle_input() -> anyhow::Result<Option<event::KeyEvent>> {
-    if event::poll(Duration::from_millis(100))? {
+/// Input event from terminal
+enum InputEvent {
+    Key(event::KeyEvent),
+    ScrollUp,
+    ScrollDown,
+}
+
+async fn handle_input() -> anyhow::Result<Option<InputEvent>> {
+    if event::poll(Duration::from_millis(16))? {
         match event::read()? {
-            Event::Key(key) => Ok(Some(key)),
+            Event::Key(key) => Ok(Some(InputEvent::Key(key))),
+            Event::Mouse(mouse) => Ok(handle_mouse_event(mouse)),
             _ => Ok(None),
         }
     } else {
         // No event available, yield and continue
-        tokio::time::sleep(Duration::from_millis(16)).await;
+        tokio::time::sleep(Duration::from_millis(8)).await;
         Ok(None)
+    }
+}
+
+fn handle_mouse_event(mouse: MouseEvent) -> Option<InputEvent> {
+    match mouse.kind {
+        MouseEventKind::ScrollUp => Some(InputEvent::ScrollUp),
+        MouseEventKind::ScrollDown => Some(InputEvent::ScrollDown),
+        _ => None,
     }
 }
 

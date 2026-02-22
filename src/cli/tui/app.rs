@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+
+use ratatui::text::Line;
 use serde_json::Value;
 
 use super::event::TuiEvent;
@@ -20,6 +23,10 @@ pub struct ChatApp {
     pub should_quit: bool,
     pub is_processing: bool,
     pub auto_scroll: bool, // When true, follow new content
+    // Cached rendered lines (rebuilt only when messages change)
+    cached_lines: RefCell<Vec<Line<'static>>>,
+    cached_width: RefCell<usize>,
+    needs_rebuild: RefCell<bool>,
 }
 
 impl ChatApp {
@@ -32,6 +39,9 @@ impl ChatApp {
             should_quit: false,
             is_processing: false,
             auto_scroll: true,
+            cached_lines: RefCell::new(Vec::new()),
+            cached_width: RefCell::new(0),
+            needs_rebuild: RefCell::new(true),
         }
     }
 
@@ -42,6 +52,7 @@ impl ChatApp {
                     if let Some(last) = self.messages.last_mut() {
                         if let ChatMessage::Thinking(existing) = last {
                             existing.push_str(text);
+                            *self.needs_rebuild.borrow_mut() = true;
                             return;
                         }
                     }
@@ -55,11 +66,13 @@ impl ChatApp {
                             "…".to_string()
                         },
                     ));
+                    *self.needs_rebuild.borrow_mut() = true;
                 } else if self.thinking_expanded {
                     // Append to existing thinking message
                     if let Some(last) = self.messages.last_mut() {
                         if let ChatMessage::Thinking(existing) = last {
                             existing.push_str(text);
+                            *self.needs_rebuild.borrow_mut() = true;
                         }
                     }
                 }
@@ -70,6 +83,7 @@ impl ChatApp {
                     name: name.clone(),
                     args: args_preview,
                 });
+                *self.needs_rebuild.borrow_mut() = true;
             }
             TuiEvent::ToolEnd { name, is_error, output } => {
                 self.messages.push(ChatMessage::ToolEnd {
@@ -77,15 +91,18 @@ impl ChatApp {
                     is_error: *is_error,
                     output: truncate_text(output, 200),
                 });
+                *self.needs_rebuild.borrow_mut() = true;
             }
             TuiEvent::AssistantDelta(delta) => {
                 if let Some(last) = self.messages.last_mut() {
                     if let ChatMessage::Assistant(existing) = last {
                         existing.push_str(delta);
+                        *self.needs_rebuild.borrow_mut() = true;
                         return;
                     }
                 }
                 self.messages.push(ChatMessage::Assistant(delta.clone()));
+                *self.needs_rebuild.borrow_mut() = true;
             }
             TuiEvent::AssistantDone => {
                 self.is_processing = false;
@@ -101,12 +118,28 @@ impl ChatApp {
             self.messages.push(ChatMessage::User(input.clone()));
             self.is_processing = true;
             self.auto_scroll = true; // Follow the new response
+            *self.needs_rebuild.borrow_mut() = true;
         }
         input
     }
 
     pub fn toggle_thinking(&mut self) {
         self.thinking_expanded = !self.thinking_expanded;
+        *self.needs_rebuild.borrow_mut() = true;
+    }
+
+    /// Get or rebuild cached lines for the given width (interior mutability)
+    pub fn get_lines(&self, width: usize) -> std::cell::Ref<'_, Vec<Line<'static>>> {
+        let needs_rebuild = *self.needs_rebuild.borrow();
+        let cached_width = *self.cached_width.borrow();
+
+        if needs_rebuild || cached_width != width {
+            let lines = super::ui::build_message_lines_internal(self, width);
+            *self.cached_lines.borrow_mut() = lines;
+            *self.cached_width.borrow_mut() = width;
+            *self.needs_rebuild.borrow_mut() = false;
+        }
+        self.cached_lines.borrow()
     }
 
     pub fn scroll_up(&mut self) {
