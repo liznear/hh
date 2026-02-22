@@ -1,7 +1,7 @@
 use crate::config::Settings;
 use crate::tool::bash::BashTool;
 use crate::tool::fs::{FsGlob, FsGrep, FsList, FsRead, FsWrite};
-use crate::tool::web::WebFetchTool;
+use crate::tool::web::{WebFetchTool, WebSearchTool};
 use crate::tool::{Tool, ToolSchema};
 use std::collections::HashMap;
 use std::path::Path;
@@ -32,6 +32,7 @@ impl ToolRegistry {
 
         if settings.tools.web {
             tools.insert("web_fetch".to_string(), Arc::new(WebFetchTool::new()));
+            tools.insert("web_search".to_string(), Arc::new(WebSearchTool::new()));
         }
 
         Self { tools }

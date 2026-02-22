@@ -20,7 +20,7 @@ impl PermissionMatcher {
             "grep" => &p.grep,
             "write" => &p.write,
             "bash" => &p.bash,
-            "web_fetch" => &p.web,
+            "web_fetch" | "web_search" => &p.web,
             _ => "deny",
         };
         Decision::parse(raw)
