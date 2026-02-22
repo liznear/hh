@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -10,7 +12,28 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Start interactive chat session
-    Chat,
+    Chat {
+        /// Run in headless mode and dump screen to files for debugging
+        #[arg(long)]
+        debug_headless: bool,
+        /// Directory to write screen dumps (default: /tmp/hh-debug-<timestamp>)
+        #[arg(long)]
+        debug_dir: Option<PathBuf>,
+        /// Also dump frames to files while running interactive TUI
+        #[arg(long)]
+        debug: Option<PathBuf>,
+    },
+    /// Replay debug frames from a directory
+    Replay {
+        /// Directory containing screen dump files
+        dir: PathBuf,
+        /// Delay between frames in milliseconds (default: 100)
+        #[arg(short, long, default_value = "100")]
+        delay: u64,
+        /// Loop replay continuously
+        #[arg(short, long)]
+        loop_replay: bool,
+    },
     /// Run one prompt and exit
     Run { prompt: String },
     /// List available tools
