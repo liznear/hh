@@ -19,7 +19,7 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
     let mut tui_guard = tui::TuiGuard::new(terminal);
 
     // Create app state and event channel
-    let mut app = ChatApp::new();
+    let mut app = ChatApp::new(build_session_name(cwd), cwd, settings.agent.token_budget);
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
@@ -39,6 +39,10 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
                             && key_event.modifiers.contains(KeyModifiers::CONTROL)
                         {
                             app.should_quit = true;
+                        } else if key_event.code == KeyCode::Char('t')
+                            && key_event.modifiers.contains(KeyModifiers::CONTROL)
+                        {
+                            app.toggle_progress();
                         } else {
                             match key_event.code {
                                 KeyCode::Char(c) => {
@@ -51,8 +55,8 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
                                     let input = app.submit_input();
                                     if input == ":quit" {
                                         app.should_quit = true;
-                                    } else if input == ":thinking" {
-                                        app.toggle_thinking();
+                                    } else if input == ":thinking" || input == ":progress" {
+                                        app.toggle_progress();
                                     } else if !input.is_empty() {
                                         // Run agent in background
                                         let settings = settings.clone();
@@ -70,22 +74,25 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
                                     app.scroll_up();
                                 }
                                 KeyCode::Down => {
-                                    let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
-                                    let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
+                                    let terminal_size = tui_guard.get().size()?;
+                                    let visible_height = app.message_viewport_height(terminal_size.height);
+                                    let wrap_width = app.message_wrap_width(terminal_size.width);
                                     let lines = app.get_lines(wrap_width);
                                     let total_lines = lines.len();
                                     drop(lines);
                                     app.scroll_down(total_lines, visible_height);
                                 }
                                 KeyCode::PageUp => {
-                                    let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
+                                    let terminal_size = tui_guard.get().size()?;
+                                    let visible_height = app.message_viewport_height(terminal_size.height);
                                     for _ in 0..visible_height.saturating_sub(1) {
                                         app.scroll_up();
                                     }
                                 }
                                 KeyCode::PageDown => {
-                                    let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
-                                    let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
+                                    let terminal_size = tui_guard.get().size()?;
+                                    let visible_height = app.message_viewport_height(terminal_size.height);
+                                    let wrap_width = app.message_wrap_width(terminal_size.width);
                                     let lines = app.get_lines(wrap_width);
                                     let total_lines = lines.len();
                                     drop(lines);
@@ -103,8 +110,9 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
                         }
                     }
                     Some(InputEvent::ScrollDown) => {
-                        let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
-                        let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
+                        let terminal_size = tui_guard.get().size()?;
+                        let visible_height = app.message_viewport_height(terminal_size.height);
+                        let wrap_width = app.message_wrap_width(terminal_size.width);
                         let lines = app.get_lines(wrap_width);
                         let total_lines = lines.len();
                         drop(lines);
@@ -148,7 +156,7 @@ pub async fn run_chat_with_debug(
     let mut debug_renderer = DebugRenderer::new(debug_dir.clone())?;
 
     // Create app state and event channel
-    let mut app = ChatApp::new();
+    let mut app = ChatApp::new(build_session_name(cwd), cwd, settings.agent.token_budget);
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
@@ -174,6 +182,10 @@ pub async fn run_chat_with_debug(
                             && key_event.modifiers.contains(KeyModifiers::CONTROL)
                         {
                             app.should_quit = true;
+                        } else if key_event.code == KeyCode::Char('t')
+                            && key_event.modifiers.contains(KeyModifiers::CONTROL)
+                        {
+                            app.toggle_progress();
                         } else {
                             match key_event.code {
                                 KeyCode::Char(c) => {
@@ -186,8 +198,8 @@ pub async fn run_chat_with_debug(
                                     let input = app.submit_input();
                                     if input == ":quit" {
                                         app.should_quit = true;
-                                    } else if input == ":thinking" {
-                                        app.toggle_thinking();
+                                    } else if input == ":thinking" || input == ":progress" {
+                                        app.toggle_progress();
                                     } else if !input.is_empty() {
                                         // Run agent in background
                                         let settings = settings.clone();
@@ -205,22 +217,25 @@ pub async fn run_chat_with_debug(
                                     app.scroll_up();
                                 }
                                 KeyCode::Down => {
-                                    let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
-                                    let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
+                                    let terminal_size = tui_guard.get().size()?;
+                                    let visible_height = app.message_viewport_height(terminal_size.height);
+                                    let wrap_width = app.message_wrap_width(terminal_size.width);
                                     let lines = app.get_lines(wrap_width);
                                     let total_lines = lines.len();
                                     drop(lines);
                                     app.scroll_down(total_lines, visible_height);
                                 }
                                 KeyCode::PageUp => {
-                                    let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
+                                    let terminal_size = tui_guard.get().size()?;
+                                    let visible_height = app.message_viewport_height(terminal_size.height);
                                     for _ in 0..visible_height.saturating_sub(1) {
                                         app.scroll_up();
                                     }
                                 }
                                 KeyCode::PageDown => {
-                                    let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
-                                    let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
+                                    let terminal_size = tui_guard.get().size()?;
+                                    let visible_height = app.message_viewport_height(terminal_size.height);
+                                    let wrap_width = app.message_wrap_width(terminal_size.width);
                                     let lines = app.get_lines(wrap_width);
                                     let total_lines = lines.len();
                                     drop(lines);
@@ -238,8 +253,9 @@ pub async fn run_chat_with_debug(
                         }
                     }
                     Some(InputEvent::ScrollDown) => {
-                        let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
-                        let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
+                        let terminal_size = tui_guard.get().size()?;
+                        let visible_height = app.message_viewport_height(terminal_size.height);
+                        let wrap_width = app.message_wrap_width(terminal_size.width);
                         let lines = app.get_lines(wrap_width);
                         let total_lines = lines.len();
                         drop(lines);
@@ -280,15 +296,15 @@ pub fn generate_debug_dir() -> PathBuf {
 
 /// Run chat in debug/headless mode - renders to files instead of terminal
 pub async fn run_chat_debug(
-    _settings: Settings,
-    _cwd: &std::path::Path,
+    settings: Settings,
+    cwd: &std::path::Path,
     output_dir: PathBuf,
 ) -> anyhow::Result<()> {
     // Create debug renderer
     let mut renderer = DebugRenderer::new(output_dir.clone())?;
 
     // Create app state and event channel
-    let mut app = ChatApp::new();
+    let mut app = ChatApp::new(build_session_name(cwd), cwd, settings.agent.token_budget);
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TuiEvent>();
     let _event_sender = TuiEventSender::new(event_tx);
 
@@ -299,7 +315,10 @@ pub async fn run_chat_debug(
     // For now, just wait for events and render them
     // This is meant to be driven by piping input or running with a prompt
 
-    println!("Debug mode: writing screen dumps to {}", output_dir.display());
+    println!(
+        "Debug mode: writing screen dumps to {}",
+        output_dir.display()
+    );
 
     // Main loop - process events and render
     loop {
@@ -353,7 +372,7 @@ pub async fn run_chat_debug_with_prompt(
     let mut renderer = DebugRenderer::new(output_dir.clone())?;
 
     // Create app state and event channel
-    let mut app = ChatApp::new();
+    let mut app = ChatApp::new(build_session_name(cwd), cwd, settings.agent.token_budget);
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
@@ -364,7 +383,10 @@ pub async fn run_chat_debug_with_prompt(
     // Render initial state with prompt
     renderer.render(&app)?;
 
-    println!("Debug mode: writing screen dumps to {}", output_dir.display());
+    println!(
+        "Debug mode: writing screen dumps to {}",
+        output_dir.display()
+    );
 
     // Run agent in background
     let settings_clone = settings.clone();
@@ -444,6 +466,13 @@ fn handle_mouse_event(mouse: MouseEvent) -> Option<InputEvent> {
         MouseEventKind::ScrollDown => Some(InputEvent::ScrollDown),
         _ => None,
     }
+}
+
+fn build_session_name(cwd: &std::path::Path) -> String {
+    cwd.file_name()
+        .and_then(|name| name.to_str())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "Session".to_string())
 }
 
 async fn run_agent(
