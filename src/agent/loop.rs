@@ -1,7 +1,7 @@
 use crate::agent::events::AgentEvents;
 use crate::agent::state::AgentState;
+use crate::core::{Message, Provider, ProviderRequest, ProviderStreamEvent, Role, ToolCall};
 use crate::permission::{Decision, PermissionMatcher};
-use crate::provider::{Message, Provider, ProviderRequest, ProviderStreamEvent, Role, ToolCall};
 use crate::safety::sanitize_tool_output;
 use crate::session::{SessionEvent, SessionStore, event_id};
 use crate::tool::registry::ToolRegistry;
@@ -41,9 +41,11 @@ where
         });
         self.session.append(&SessionEvent::Message {
             id: event_id(),
-            role: Role::User,
-            content: prompt,
-            tool_call_id: None,
+            message: Message {
+                role: Role::User,
+                content: prompt,
+                tool_call_id: None,
+            },
         })?;
 
         while state.step < self.max_steps {
@@ -90,9 +92,11 @@ where
 
             self.session.append(&SessionEvent::Message {
                 id: event_id(),
-                role: Role::Assistant,
-                content: assistant.content.clone(),
-                tool_call_id: None,
+                message: Message {
+                    role: Role::Assistant,
+                    content: assistant.content.clone(),
+                    tool_call_id: None,
+                },
             })?;
             if !thinking_content.is_empty() {
                 self.session.append(&SessionEvent::Thinking {
@@ -109,11 +113,8 @@ where
             }
 
             for call in response.tool_calls {
-                self.session.append(&SessionEvent::ToolCall {
-                    id: call.id.clone(),
-                    name: call.name.clone(),
-                    arguments: call.arguments.clone(),
-                })?;
+                self.session
+                    .append(&SessionEvent::ToolCall { call: call.clone() })?;
 
                 match self.permissions.decision_for_tool(&call.name) {
                     Decision::Deny => {

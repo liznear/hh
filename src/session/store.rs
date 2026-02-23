@@ -1,4 +1,4 @@
-use crate::provider::{Message, Role};
+use crate::core::{Message, Role};
 use crate::session::types::SessionEvent;
 use anyhow::Context;
 use std::fs::{self, OpenOptions};
@@ -48,18 +48,8 @@ impl SessionStore {
                 continue;
             }
             let event: SessionEvent = serde_json::from_str(&line)?;
-            if let SessionEvent::Message {
-                role,
-                content,
-                tool_call_id,
-                ..
-            } = event
-            {
-                messages.push(Message {
-                    role,
-                    content,
-                    tool_call_id,
-                });
+            if let SessionEvent::Message { message, .. } = event {
+                messages.push(message);
             }
         }
 
@@ -87,8 +77,10 @@ pub fn event_id() -> String {
 pub fn user_message(content: String) -> SessionEvent {
     SessionEvent::Message {
         id: event_id(),
-        role: Role::User,
-        content,
-        tool_call_id: None,
+        message: Message {
+            role: Role::User,
+            content,
+            tool_call_id: None,
+        },
     }
 }

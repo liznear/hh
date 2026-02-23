@@ -1,4 +1,4 @@
-use crate::provider::Message;
+use crate::core::Message;
 
 #[derive(Debug, Default)]
 pub struct AgentState {

@@ -1,7 +1,7 @@
-use crate::provider::{
-    Message, Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role,
-    StreamedToolCall, ToolCall,
+use crate::core::{
+    Message, Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role, ToolCall,
 };
+use crate::provider::StreamedToolCall;
 use anyhow::{Context, bail};
 use async_trait::async_trait;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
