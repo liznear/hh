@@ -9,7 +9,6 @@ use super::event::TuiEvent;
 use crate::cli::render::truncate_text;
 
 const SIDEBAR_WIDTH: u16 = 38;
-const PROGRESS_PANEL_HEIGHT: u16 = 12;
 const MAX_PROGRESS_LINES_PER_PROMPT: usize = 200;
 
 #[derive(Debug, Clone, Default)]
@@ -190,7 +189,7 @@ impl ChatApp {
     }
 
     pub fn progress_panel_height(&self) -> u16 {
-        PROGRESS_PANEL_HEIGHT
+        0
     }
 
     pub fn message_viewport_height(&self, total_height: u16) -> usize {

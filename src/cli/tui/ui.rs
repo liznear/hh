@@ -16,7 +16,6 @@ const PROGRESS_MODAL_MARGIN_PERCENT: u16 = 5;
 
 const PAGE_BG: Color = Color::Rgb(246, 247, 251);
 const PANEL_BG: Color = Color::Rgb(255, 255, 255);
-const SUBTLE_PANEL_BG: Color = Color::Rgb(242, 244, 248);
 const INPUT_PANEL_BG: Color = Color::Rgb(229, 233, 241);
 const TEXT_PRIMARY: Color = Color::Rgb(37, 45, 58);
 const TEXT_SECONDARY: Color = Color::Rgb(98, 108, 124);
@@ -44,7 +43,6 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
-            Constraint::Length(app.progress_panel_height()),
             Constraint::Length(1), // Status bar
             Constraint::Length(3), // Input area
             Constraint::Length(1), // Global processing indicator
@@ -52,10 +50,9 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
         .split(main_area);
 
     render_messages(f, app, main_chunks[0]);
-    render_progress(f, app, main_chunks[1]);
-    render_status(f, app, main_chunks[2]);
-    render_input(f, app, main_chunks[3]);
-    render_processing_indicator(f, app, main_chunks[4]);
+    render_status(f, app, main_chunks[1]);
+    render_input(f, app, main_chunks[2]);
+    render_processing_indicator(f, app, main_chunks[3]);
 
     if let Some(area) = sidebar_area {
         render_sidebar(f, app, area);
@@ -171,74 +168,6 @@ fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
     f.render_widget(paragraph, area);
 }
 
-fn render_progress(f: &mut Frame, app: &ChatApp, area: Rect) {
-    let Some(section) = app.selected_progress() else {
-        let panel = Paragraph::new("Waiting for activity...")
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Progress ")
-                    .style(Style::default().bg(SUBTLE_PANEL_BG).fg(TEXT_SECONDARY)),
-            )
-            .style(Style::default().bg(SUBTLE_PANEL_BG).fg(TEXT_MUTED));
-        f.render_widget(panel, area);
-        return;
-    };
-
-    let total_sections = app.progress_sections.len();
-    let section_idx = app.selected_progress_section.saturating_add(1);
-    let total = section.lines.len();
-    let start = total.saturating_sub(PROGRESS_LINES_COLLAPSED);
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(vec![
-        Span::styled("Prompt: ", Style::default().fg(TEXT_MUTED)),
-        Span::styled(
-            format!("{}/{} ", section_idx, total_sections),
-            Style::default().fg(TEXT_MUTED),
-        ),
-        Span::styled(
-            truncate_for_panel(&section.prompt, area.width.saturating_sub(12) as usize),
-            Style::default().fg(TEXT_PRIMARY).bold(),
-        ),
-    ]));
-
-    if start > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("...{} earlier events", start),
-            Style::default().fg(TEXT_MUTED),
-        )));
-    }
-
-    if total == 0 {
-        lines.push(Line::from(Span::styled(
-            "Waiting for activity...",
-            Style::default().fg(TEXT_MUTED),
-        )));
-    } else {
-        for item in section.lines.iter().skip(start) {
-            lines.push(Line::from(Span::styled(
-                item.clone(),
-                Style::default().fg(TEXT_SECONDARY),
-            )));
-        }
-    }
-
-    let title = " Progress (Ctrl+T opens modal) ";
-
-    let panel = Paragraph::new(Text::from(lines))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .style(Style::default().bg(SUBTLE_PANEL_BG).fg(TEXT_SECONDARY)),
-        )
-        .style(Style::default().bg(SUBTLE_PANEL_BG).fg(TEXT_SECONDARY))
-        .wrap(Wrap { trim: true });
-
-    f.render_widget(panel, area);
-}
-
 fn render_progress_modal(f: &mut Frame, app: &ChatApp) {
     if app.progress_sections.is_empty() {
         return;
@@ -309,6 +238,7 @@ pub fn build_message_lines(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
 
 fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+    let mut user_prompt_idx = 0usize;
 
     for msg in &app.messages {
         match msg {
@@ -323,6 +253,11 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                 for line in wrapped {
                     lines.push(Line::from(Span::raw(line)));
                 }
+
+                if let Some(section) = app.progress_sections.get(user_prompt_idx) {
+                    append_inlined_progress_lines(&mut lines, section.lines.as_slice());
+                }
+                user_prompt_idx = user_prompt_idx.saturating_add(1);
             }
             ChatMessage::Assistant(text) => {
                 // First line with prefix
@@ -477,6 +412,33 @@ fn parse_markdown_spans(text: &str) -> Vec<Span<'static>> {
     spans
 }
 
+fn append_inlined_progress_lines(lines: &mut Vec<Line<'static>>, progress_lines: &[String]) {
+    if progress_lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  progress: waiting for activity...",
+            Style::default().fg(TEXT_MUTED).italic(),
+        )));
+        return;
+    }
+
+    let total = progress_lines.len();
+    let start = total.saturating_sub(PROGRESS_LINES_COLLAPSED);
+
+    if start > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  progress: ...{} earlier events", start),
+            Style::default().fg(TEXT_MUTED),
+        )));
+    }
+
+    for item in progress_lines.iter().skip(start) {
+        lines.push(Line::from(Span::styled(
+            format!("  progress: {}", item),
+            Style::default().fg(TEXT_SECONDARY),
+        )));
+    }
+}
+
 /// Wrap spans to fit within a given width
 fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
     if width == 0 {
@@ -577,7 +539,7 @@ fn render_status(f: &mut Frame, app: &ChatApp, area: Rect) {
         ""
     };
     let status = format!(
-        "{} | Ctrl+T progress | :quit{} | Ctrl+C",
+        "{} | Ctrl+T progress history | :quit{} | Ctrl+C",
         progress_mode, processing_text
     );
 
@@ -681,25 +643,6 @@ fn centered_rect(horizontal_margin_percent: u16, vertical_margin_percent: u16, a
         width,
         height,
     }
-}
-
-fn truncate_for_panel(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-
-    let char_count = text.chars().count();
-    if char_count <= max_chars {
-        return text.to_string();
-    }
-
-    if max_chars <= 1 {
-        return "...".to_string();
-    }
-
-    let keep = max_chars.saturating_sub(3);
-    let prefix: String = text.chars().take(keep).collect();
-    format!("{}...", prefix)
 }
 
 fn abbreviate_path(path: &str, max_chars: usize) -> String {
