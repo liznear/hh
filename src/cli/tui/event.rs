@@ -8,8 +8,15 @@ use crate::agent::AgentEvents;
 #[derive(Debug, Clone)]
 pub enum TuiEvent {
     Thinking(String),
-    ToolStart { name: String, args: Value },
-    ToolEnd { name: String, is_error: bool, output: String },
+    ToolStart {
+        name: String,
+        args: Value,
+    },
+    ToolEnd {
+        name: String,
+        is_error: bool,
+        output: String,
+    },
     AssistantDelta(String),
     AssistantDone,
     Key(crossterm::event::KeyEvent),

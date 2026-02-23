@@ -103,7 +103,10 @@ impl Tool for WebSearchTool {
     }
 
     async fn execute(&self, args: Value) -> ToolResult {
-        let query = args.get("query").and_then(|v| v.as_str()).unwrap_or_default();
+        let query = args
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
 
         if query.is_empty() {
             return ToolResult {

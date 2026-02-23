@@ -1,7 +1,7 @@
 pub mod chat;
 pub mod commands;
-pub mod replay;
 pub mod render;
+pub mod replay;
 pub mod tui;
 
 use crate::cli::commands::{Cli, Commands, ConfigCommand};
@@ -23,9 +23,15 @@ pub async fn run() -> anyhow::Result<()> {
             if debug_headless {
                 let dir = debug_dir.unwrap_or_else(chat::generate_debug_dir);
                 // In debug mode, read prompt from stdin or use empty
-                let prompt = std::io::stdin().lines().next().transpose()?.unwrap_or_default();
+                let prompt = std::io::stdin()
+                    .lines()
+                    .next()
+                    .transpose()?
+                    .unwrap_or_default();
                 if prompt.is_empty() {
-                    anyhow::bail!("--debug-headless requires a prompt via stdin, e.g.: echo 'your prompt' | hh chat --debug-headless");
+                    anyhow::bail!(
+                        "--debug-headless requires a prompt via stdin, e.g.: echo 'your prompt' | hh chat --debug-headless"
+                    );
                 }
                 chat::run_chat_debug_with_prompt(settings, &cwd, dir, prompt).await
             } else if let Some(debug_path) = debug {

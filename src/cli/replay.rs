@@ -101,7 +101,11 @@ pub fn replay_frames(dir: &Path, delay_ms: u64, loop_replay: bool) -> anyhow::Re
                         if let Event::Key(key) = event::read()? {
                             match key.code {
                                 KeyCode::Char('q') => {
-                                    execute!(std::io::stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
+                                    execute!(
+                                        std::io::stdout(),
+                                        Clear(ClearType::All),
+                                        MoveTo(0, 0)
+                                    )?;
                                     return Ok(());
                                 }
                                 KeyCode::Char('p') => {
@@ -150,13 +154,17 @@ pub fn replay_frames(dir: &Path, delay_ms: u64, loop_replay: bool) -> anyhow::Re
             // In non-loop mode, wait for new frames before exiting
             // Re-scan to check if there are new frames
             let files = collect_screen_files(dir)?;
-            let max_frame = files.iter().map(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                name.trim_start_matches("screen-")
-                    .trim_end_matches(".txt")
-                    .parse::<usize>()
-                    .unwrap_or(0)
-            }).max().unwrap_or(0);
+            let max_frame = files
+                .iter()
+                .map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    name.trim_start_matches("screen-")
+                        .trim_end_matches(".txt")
+                        .parse::<usize>()
+                        .unwrap_or(0)
+                })
+                .max()
+                .unwrap_or(0);
 
             if max_frame <= last_shown_frame {
                 break;
