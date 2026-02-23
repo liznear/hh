@@ -81,82 +81,8 @@ pub async fn run_chat_with_debug(
     Ok(())
 }
 
-/// Generate a debug directory path with timestamp
-pub fn generate_debug_dir() -> PathBuf {
-    let id = uuid::Uuid::new_v4();
-    let short_id = &id.to_string()[..8];
-    std::env::temp_dir().join(format!("hh-debug-{}", short_id))
-}
-
-/// Run chat in debug/headless mode - renders to files instead of terminal
-pub async fn run_chat_debug(
-    settings: Settings,
-    cwd: &std::path::Path,
-    output_dir: PathBuf,
-) -> anyhow::Result<()> {
-    // Create debug renderer
-    let mut renderer = DebugRenderer::new(output_dir.clone())?;
-
-    // Create app state and event channel
-    let mut app = ChatApp::new(build_session_name(cwd), cwd, settings.agent.token_budget);
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TuiEvent>();
-    let _event_sender = TuiEventSender::new(event_tx);
-
-    // Render initial empty state
-    renderer.render(&app)?;
-
-    // For debug mode, we need a prompt from stdin or args
-    // For now, just wait for events and render them
-    // This is meant to be driven by piping input or running with a prompt
-
-    println!(
-        "Debug mode: writing screen dumps to {}",
-        output_dir.display()
-    );
-
-    // Main loop - process events and render
-    loop {
-        // Handle agent events
-        tokio::select! {
-            event = event_rx.recv() => {
-                if let Some(event) = event {
-                    app.handle_event(&event);
-
-                    // Render after each event
-                    renderer.render(&app)?;
-
-                    // Check if processing is done
-                    if matches!(event, TuiEvent::AssistantDone) {
-                        // Wait a bit for any final rendering
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        // Render final state
-                        renderer.render(&app)?;
-                        break;
-                    }
-                } else {
-                    // Channel closed, we're done
-                    break;
-                }
-            }
-
-            _ = tokio::time::sleep(Duration::from_secs(300)) => {
-                // Timeout after 5 minutes of inactivity
-                break;
-            }
-        }
-    }
-
-    println!(
-        "Debug complete: {} frames written to {}",
-        renderer.frame_count(),
-        output_dir.display()
-    );
-
-    Ok(())
-}
-
-/// Run chat in debug mode with a specific prompt
-pub async fn run_chat_debug_with_prompt(
+/// Run one prompt in headless debug mode and dump frames to files
+pub async fn run_prompt_with_debug(
     settings: Settings,
     cwd: &std::path::Path,
     output_dir: PathBuf,

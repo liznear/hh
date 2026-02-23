@@ -13,12 +13,6 @@ pub struct Cli {
 pub enum Commands {
     /// Start interactive chat session
     Chat {
-        /// Run in headless mode and dump screen to files for debugging
-        #[arg(long)]
-        debug_headless: bool,
-        /// Directory to write screen dumps (default: /tmp/hh-debug-<timestamp>)
-        #[arg(long)]
-        debug_dir: Option<PathBuf>,
         /// Also dump frames to files while running interactive TUI
         #[arg(long)]
         debug: Option<PathBuf>,
@@ -35,7 +29,12 @@ pub enum Commands {
         loop_replay: bool,
     },
     /// Run one prompt and exit
-    Run { prompt: String },
+    Run {
+        prompt: String,
+        /// Dump headless debug frames to this directory
+        #[arg(long)]
+        debug: Option<PathBuf>,
+    },
     /// List available tools
     Tools,
     /// Manage configuration

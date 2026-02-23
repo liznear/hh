@@ -13,18 +13,18 @@
 
 ## Debugging TUI
 
-The TUI can be debugged without a real terminal using headless debug mode. This allows AI assistants to "see" the screen state.
+The TUI can be debugged in both interactive and single-prompt modes by dumping frames to a directory.
 
-### Headless Debug Mode
+### Single-Prompt Debug Mode
 
-Run the TUI in headless mode and capture screen dumps:
+Run a single prompt and capture screen dumps:
 
 ```bash
-# Basic usage - reads prompt from stdin
-echo "list files in current directory" | hh chat --debug-headless
+# Basic usage
+hh run "list files in current directory" --debug ./debug
 
 # With custom output directory
-echo "what is 2+2?" | hh chat --debug-headless --debug-dir ./my-debug
+hh run "what is 2+2?" --debug ./my-debug
 ```
 
 This creates numbered screen dump files (`screen-000.txt`, `screen-001.txt`, etc.) in the output directory.
@@ -60,9 +60,9 @@ When running in a terminal:
 
 ### Debugging Workflow for AI
 
-1. Run the problematic prompt in headless mode:
+1. Run the problematic prompt in single-prompt debug mode:
    ```bash
-   echo "your problematic prompt" | hh chat --debug-headless --debug-dir ./debug
+   hh run "your problematic prompt" --debug ./debug
    ```
 
 2. Read the screen dumps to understand what happened:

@@ -15,26 +15,8 @@ pub async fn run() -> anyhow::Result<()> {
     let settings = load_settings(&cwd)?;
 
     match cli.command {
-        Commands::Chat {
-            debug_headless,
-            debug_dir,
-            debug,
-        } => {
-            if debug_headless {
-                let dir = debug_dir.unwrap_or_else(chat::generate_debug_dir);
-                // In debug mode, read prompt from stdin or use empty
-                let prompt = std::io::stdin()
-                    .lines()
-                    .next()
-                    .transpose()?
-                    .unwrap_or_default();
-                if prompt.is_empty() {
-                    anyhow::bail!(
-                        "--debug-headless requires a prompt via stdin, e.g.: echo 'your prompt' | hh chat --debug-headless"
-                    );
-                }
-                chat::run_chat_debug_with_prompt(settings, &cwd, dir, prompt).await
-            } else if let Some(debug_path) = debug {
+        Commands::Chat { debug } => {
+            if let Some(debug_path) = debug {
                 // Interactive mode with debug dumping
                 chat::run_chat_with_debug(settings, &cwd, debug_path).await
             } else {
@@ -49,11 +31,15 @@ pub async fn run() -> anyhow::Result<()> {
             replay::replay_frames(&dir, delay, loop_replay)?;
             Ok(())
         }
-        Commands::Run { prompt } => {
-            let render = LiveRender::new();
-            render.begin_turn();
-            chat::run_single_prompt_with_events(settings, &cwd, prompt, render).await?;
-            Ok(())
+        Commands::Run { prompt, debug } => {
+            if let Some(debug_path) = debug {
+                chat::run_prompt_with_debug(settings, &cwd, debug_path, prompt).await
+            } else {
+                let render = LiveRender::new();
+                render.begin_turn();
+                chat::run_single_prompt_with_events(settings, &cwd, prompt, render).await?;
+                Ok(())
+            }
         }
         Commands::Tools => {
             let registry = crate::tool::registry::ToolRegistry::new(&settings, &cwd);
