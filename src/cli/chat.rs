@@ -4,10 +4,10 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
 use tokio::sync::mpsc;
 
-use crate::agent::{AgentEvents, AgentLoop, NoopEvents};
 use crate::cli::render;
 use crate::cli::tui::{self, ChatApp, DebugRenderer, TuiEvent, TuiEventSender};
 use crate::config::Settings;
+use crate::core::agent::{AgentEvents, AgentLoop, NoopEvents};
 use crate::permission::PermissionMatcher;
 use crate::provider::openai_compatible::OpenAiCompatibleProvider;
 use crate::session::SessionStore;

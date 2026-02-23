@@ -1,10 +1,13 @@
-use crate::agent::events::AgentEvents;
-use crate::agent::state::AgentState;
+pub mod state;
+
+pub use super::{AgentEvents, NoopEvents};
+
 use crate::core::{Message, Provider, ProviderRequest, ProviderStreamEvent, Role, ToolCall};
 use crate::permission::{Decision, PermissionMatcher};
 use crate::safety::sanitize_tool_output;
 use crate::session::{SessionEvent, SessionStore, event_id};
 use crate::tool::registry::ToolRegistry;
+use state::AgentState;
 
 pub struct AgentLoop<P, E>
 where
@@ -106,7 +109,6 @@ where
             }
             state.push(assistant.clone());
 
-            // If no tool calls, the agent is done - always call on_assistant_done
             if response.done {
                 self.events.on_assistant_done();
                 return Ok(assistant_content);

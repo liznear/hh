@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::agent::AgentEvents;
+use crate::core::agent::AgentEvents;
 
 #[derive(Debug, Clone)]
 pub enum TuiEvent {

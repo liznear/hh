@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use hh::agent::{AgentEvents, AgentLoop, NoopEvents};
 use hh::config::settings::Settings;
+use hh::core::agent::{AgentEvents, AgentLoop, NoopEvents};
 use hh::permission::PermissionMatcher;
 use hh::provider::{
     Message, Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role, ToolCall,

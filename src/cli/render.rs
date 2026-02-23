@@ -1,4 +1,4 @@
-use crate::agent::AgentEvents;
+use crate::core::agent::AgentEvents;
 use serde_json::Value;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
