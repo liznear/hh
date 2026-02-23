@@ -56,25 +56,18 @@ fn merge_settings(base: &mut Settings, override_with: Settings) {
 fn expand_path(path: &std::path::Path) -> PathBuf {
     let path_str = path.to_string_lossy();
 
-    // Expand ~ to home directory
-    if path_str.starts_with('~') {
-        if let Some(home) = dirs::home_dir() {
-            if path_str == "~" {
-                return home;
-            }
+    if let Some(home) = dirs::home_dir() {
+        if path_str == "~" {
+            return home;
+        }
+        if path_str.starts_with('~') {
             return home.join(path_str[2..].trim_start_matches('/'));
         }
-    }
-
-    // Expand $HOME or ${HOME}
-    if path_str.starts_with("$HOME") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(path_str[5..].trim_start_matches('/'));
+        if let Some(rest) = path_str.strip_prefix("$HOME") {
+            return home.join(rest.trim_start_matches('/'));
         }
-    }
-    if path_str.starts_with("${HOME}") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(path_str[7..].trim_start_matches('/'));
+        if let Some(rest) = path_str.strip_prefix("${HOME}") {
+            return home.join(rest.trim_start_matches('/'));
         }
     }
 

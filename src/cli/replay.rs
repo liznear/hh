@@ -75,18 +75,19 @@ pub fn replay_frames(dir: &Path, delay_ms: u64, loop_replay: bool) -> anyhow::Re
                 continue;
             }
             // Check for quit/pause input (only if TTY)
-            if is_tty && event::poll(Duration::from_millis(0))? {
-                if let Event::Key(key) = event::read()? {
-                    match key.code {
-                        KeyCode::Char('q') => {
-                            execute!(std::io::stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
-                            return Ok(());
-                        }
-                        KeyCode::Char('p') => {
-                            paused = !paused;
-                        }
-                        _ => {}
+            if is_tty
+                && event::poll(Duration::from_millis(0))?
+                && let Event::Key(key) = event::read()?
+            {
+                match key.code {
+                    KeyCode::Char('q') => {
+                        execute!(std::io::stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
+                        return Ok(());
                     }
+                    KeyCode::Char('p') => {
+                        paused = !paused;
+                    }
+                    _ => {}
                 }
             }
 
@@ -97,23 +98,19 @@ pub fn replay_frames(dir: &Path, delay_ms: u64, loop_replay: bool) -> anyhow::Re
                         // Non-TTY mode: can't pause, just continue
                         break;
                     }
-                    if event::poll(Duration::from_millis(100))? {
-                        if let Event::Key(key) = event::read()? {
-                            match key.code {
-                                KeyCode::Char('q') => {
-                                    execute!(
-                                        std::io::stdout(),
-                                        Clear(ClearType::All),
-                                        MoveTo(0, 0)
-                                    )?;
-                                    return Ok(());
-                                }
-                                KeyCode::Char('p') => {
-                                    paused = false;
-                                    break;
-                                }
-                                _ => {}
+                    if event::poll(Duration::from_millis(100))?
+                        && let Event::Key(key) = event::read()?
+                    {
+                        match key.code {
+                            KeyCode::Char('q') => {
+                                execute!(std::io::stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
+                                return Ok(());
                             }
+                            KeyCode::Char('p') => {
+                                paused = false;
+                                break;
+                            }
+                            _ => {}
                         }
                     }
                 }

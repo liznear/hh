@@ -187,7 +187,7 @@ fn parse_ddg_results(html: &str) -> Vec<String> {
 
         let url = title_el
             .and_then(|el| el.value().attr("href"))
-            .and_then(|h| extract_ddg_url(h))
+            .and_then(extract_ddg_url)
             .unwrap_or_default();
 
         let snippet = result

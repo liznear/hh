@@ -100,12 +100,10 @@ impl ChatApp {
                 ));
             }
             TuiEvent::AssistantDelta(delta) => {
-                if let Some(last) = self.messages.last_mut() {
-                    if let ChatMessage::Assistant(existing) = last {
-                        existing.push_str(delta);
-                        *self.needs_rebuild.borrow_mut() = true;
-                        return;
-                    }
+                if let Some(ChatMessage::Assistant(existing)) = self.messages.last_mut() {
+                    existing.push_str(delta);
+                    *self.needs_rebuild.borrow_mut() = true;
+                    return;
                 }
                 self.messages.push(ChatMessage::Assistant(delta.clone()));
                 *self.needs_rebuild.borrow_mut() = true;
@@ -332,10 +330,10 @@ fn extract_todos(input: &str) -> Vec<String> {
 }
 
 fn split_numbered_list(line: &str) -> Option<&str> {
-    let mut chars = line.char_indices();
+    let chars = line.char_indices();
     let mut end_digits = None;
 
-    while let Some((idx, ch)) = chars.next() {
+    for (idx, ch) in chars {
         if ch.is_ascii_digit() {
             end_digits = Some(idx + ch.len_utf8());
             continue;

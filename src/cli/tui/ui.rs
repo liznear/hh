@@ -146,9 +146,7 @@ fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
     let total_lines = lines.len();
 
     // Calculate scroll offset: auto-scroll to bottom if enabled, otherwise use manual offset
-    let scroll_offset = if app.auto_scroll {
-        total_lines.saturating_sub(visible_height)
-    } else if app.scroll_offset + visible_height > total_lines {
+    let scroll_offset = if app.auto_scroll || app.scroll_offset + visible_height > total_lines {
         total_lines.saturating_sub(visible_height)
     } else {
         app.scroll_offset

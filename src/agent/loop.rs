@@ -1,7 +1,7 @@
 use crate::agent::events::AgentEvents;
 use crate::agent::state::AgentState;
 use crate::permission::{Decision, PermissionMatcher};
-use crate::provider::{Message, Provider, ProviderRequest, ProviderStreamEvent, Role};
+use crate::provider::{Message, Provider, ProviderRequest, ProviderStreamEvent, Role, ToolCall};
 use crate::safety::sanitize_tool_output;
 use crate::session::{SessionEvent, SessionStore, event_id};
 use crate::tool::registry::ToolRegistry;
@@ -117,20 +117,8 @@ where
 
                 match self.permissions.decision_for_tool(&call.name) {
                     Decision::Deny => {
-                        self.events.on_tool_start(&call.name, &call.arguments);
                         let output = format!("tool denied: {}", call.name);
-                        let output = sanitize_tool_output(&output);
-                        self.events.on_tool_end(&call.name, true, &preview(&output));
-                        state.push(Message {
-                            role: Role::Tool,
-                            content: output.clone(),
-                            tool_call_id: Some(call.id.clone()),
-                        });
-                        self.session.append(&SessionEvent::ToolResult {
-                            id: call.id,
-                            is_error: true,
-                            output,
-                        })?;
+                        self.record_tool_error(&call, output, &mut state)?;
                     }
                     Decision::Ask => {
                         self.events.on_tool_start(&call.name, &call.arguments);
@@ -142,57 +130,16 @@ where
                         })?;
                         if !approved {
                             let output = format!("tool approval denied: {}", call.name);
+                            let output = sanitize_tool_output(&output);
                             self.events.on_tool_end(&call.name, true, &preview(&output));
-                            state.push(Message {
-                                role: Role::Tool,
-                                content: output.clone(),
-                                tool_call_id: Some(call.id.clone()),
-                            });
-                            self.session.append(&SessionEvent::ToolResult {
-                                id: call.id,
-                                is_error: true,
-                                output,
-                            })?;
+                            self.record_tool_result(call.id.clone(), true, output, &mut state)?;
                             continue;
                         }
 
-                        let result = self
-                            .tool_registry
-                            .execute(&call.name, call.arguments.clone())
-                            .await;
-                        let output = sanitize_tool_output(&result.output);
-                        self.events
-                            .on_tool_end(&call.name, result.is_error, &preview(&output));
-                        state.push(Message {
-                            role: Role::Tool,
-                            content: output.clone(),
-                            tool_call_id: Some(call.id.clone()),
-                        });
-                        self.session.append(&SessionEvent::ToolResult {
-                            id: call.id,
-                            is_error: result.is_error,
-                            output,
-                        })?;
+                        self.execute_tool_call(&call, &mut state).await?;
                     }
                     Decision::Allow => {
-                        self.events.on_tool_start(&call.name, &call.arguments);
-                        let result = self
-                            .tool_registry
-                            .execute(&call.name, call.arguments.clone())
-                            .await;
-                        let output = sanitize_tool_output(&result.output);
-                        self.events
-                            .on_tool_end(&call.name, result.is_error, &preview(&output));
-                        state.push(Message {
-                            role: Role::Tool,
-                            content: output.clone(),
-                            tool_call_id: Some(call.id.clone()),
-                        });
-                        self.session.append(&SessionEvent::ToolResult {
-                            id: call.id,
-                            is_error: result.is_error,
-                            output,
-                        })?;
+                        self.execute_tool_call(&call, &mut state).await?;
                     }
                 }
             }
@@ -201,6 +148,54 @@ where
         }
 
         Ok("Reached max steps without final answer".to_string())
+    }
+
+    async fn execute_tool_call(
+        &self,
+        call: &ToolCall,
+        state: &mut AgentState,
+    ) -> anyhow::Result<()> {
+        self.events.on_tool_start(&call.name, &call.arguments);
+        let result = self
+            .tool_registry
+            .execute(&call.name, call.arguments.clone())
+            .await;
+        let output = sanitize_tool_output(&result.output);
+        self.events
+            .on_tool_end(&call.name, result.is_error, &preview(&output));
+        self.record_tool_result(call.id.clone(), result.is_error, output, state)
+    }
+
+    fn record_tool_error(
+        &self,
+        call: &ToolCall,
+        output: String,
+        state: &mut AgentState,
+    ) -> anyhow::Result<()> {
+        self.events.on_tool_start(&call.name, &call.arguments);
+        let output = sanitize_tool_output(&output);
+        self.events.on_tool_end(&call.name, true, &preview(&output));
+        self.record_tool_result(call.id.clone(), true, output, state)
+    }
+
+    fn record_tool_result(
+        &self,
+        call_id: String,
+        is_error: bool,
+        output: String,
+        state: &mut AgentState,
+    ) -> anyhow::Result<()> {
+        state.push(Message {
+            role: Role::Tool,
+            content: output.clone(),
+            tool_call_id: Some(call_id.clone()),
+        });
+        self.session.append(&SessionEvent::ToolResult {
+            id: call_id,
+            is_error,
+            output,
+        })?;
+        Ok(())
     }
 }
 
