@@ -99,7 +99,6 @@ pub async fn run_prompt_with_debug(
     // Submit the prompt
     app.messages.push(tui::ChatMessage::User(prompt.clone()));
     app.begin_prompt_progress(prompt.clone());
-    app.push_progress_line("user: submitted prompt".to_string());
     app.set_processing(true);
 
     // Render initial state with prompt
@@ -198,11 +197,6 @@ where
         return Ok(());
     }
 
-    if key_event.code == KeyCode::Char('t') && key_event.modifiers.contains(KeyModifiers::CONTROL) {
-        app.toggle_progress();
-        return Ok(());
-    }
-
     match key_event.code {
         KeyCode::Char(c) => {
             app.input.push(c);
@@ -214,8 +208,8 @@ where
             let input = app.submit_input();
             if input == ":quit" {
                 app.should_quit = true;
-            } else if input == ":thinking" || input == ":progress" {
-                app.toggle_progress();
+            } else if input == ":thinking" {
+                // Placeholder command for parity with non-TUI mode.
             } else if !input.is_empty() {
                 spawn_agent_task(settings, cwd, input, event_sender);
             }
