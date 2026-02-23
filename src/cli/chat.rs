@@ -72,8 +72,10 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
                                 KeyCode::Down => {
                                     let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
                                     let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
-                                    let lines = crate::cli::tui::build_message_lines(&app, wrap_width);
-                                    app.scroll_down(lines.len(), visible_height);
+                                    let lines = app.get_lines(wrap_width);
+                                    let total_lines = lines.len();
+                                    drop(lines);
+                                    app.scroll_down(total_lines, visible_height);
                                 }
                                 KeyCode::PageUp => {
                                     let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
@@ -84,9 +86,11 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
                                 KeyCode::PageDown => {
                                     let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
                                     let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
-                                    let lines = crate::cli::tui::build_message_lines(&app, wrap_width);
+                                    let lines = app.get_lines(wrap_width);
+                                    let total_lines = lines.len();
+                                    drop(lines);
                                     for _ in 0..visible_height.saturating_sub(1) {
-                                        app.scroll_down(lines.len(), visible_height);
+                                        app.scroll_down(total_lines, visible_height);
                                     }
                                 }
                                 _ => {}
@@ -94,18 +98,18 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
                         }
                     }
                     Some(InputEvent::ScrollUp) => {
-                        // Mouse scroll: scroll 3 lines at a time
                         for _ in 0..3 {
                             app.scroll_up();
                         }
                     }
                     Some(InputEvent::ScrollDown) => {
-                        // Mouse scroll: scroll 3 lines at a time
                         let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
                         let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
-                        let lines = crate::cli::tui::build_message_lines(&app, wrap_width);
+                        let lines = app.get_lines(wrap_width);
+                        let total_lines = lines.len();
+                        drop(lines);
                         for _ in 0..3 {
-                            app.scroll_down(lines.len(), visible_height);
+                            app.scroll_down(total_lines, visible_height);
                         }
                     }
                     None => {
@@ -203,8 +207,10 @@ pub async fn run_chat_with_debug(
                                 KeyCode::Down => {
                                     let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
                                     let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
-                                    let lines = crate::cli::tui::build_message_lines(&app, wrap_width);
-                                    app.scroll_down(lines.len(), visible_height);
+                                    let lines = app.get_lines(wrap_width);
+                                    let total_lines = lines.len();
+                                    drop(lines);
+                                    app.scroll_down(total_lines, visible_height);
                                 }
                                 KeyCode::PageUp => {
                                     let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
@@ -215,9 +221,11 @@ pub async fn run_chat_with_debug(
                                 KeyCode::PageDown => {
                                     let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
                                     let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
-                                    let lines = crate::cli::tui::build_message_lines(&app, wrap_width);
+                                    let lines = app.get_lines(wrap_width);
+                                    let total_lines = lines.len();
+                                    drop(lines);
                                     for _ in 0..visible_height.saturating_sub(1) {
-                                        app.scroll_down(lines.len(), visible_height);
+                                        app.scroll_down(total_lines, visible_height);
                                     }
                                 }
                                 _ => {}
@@ -232,10 +240,10 @@ pub async fn run_chat_with_debug(
                     Some(InputEvent::ScrollDown) => {
                         let visible_height = tui_guard.get().size()?.height.saturating_sub(4) as usize;
                         let wrap_width = tui_guard.get().size()?.width.saturating_sub(2) as usize;
-                        let lines = crate::cli::tui::build_message_lines(&app, wrap_width);
-                        for _ in 0..3 {
-                            app.scroll_down(lines.len(), visible_height);
-                        }
+                        let lines = app.get_lines(wrap_width);
+                        let total_lines = lines.len();
+                        drop(lines);
+                        app.scroll_down(total_lines, visible_height);
                     }
                     None => {}
                 }
