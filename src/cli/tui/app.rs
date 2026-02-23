@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::path::Path;
+use std::time::Instant;
 
 use ratatui::text::Line;
 use serde_json::Value;
@@ -8,6 +9,14 @@ use super::event::TuiEvent;
 use crate::cli::render::truncate_text;
 
 const SIDEBAR_WIDTH: u16 = 38;
+const PROGRESS_PANEL_HEIGHT: u16 = 12;
+const MAX_PROGRESS_LINES_PER_PROMPT: usize = 200;
+
+#[derive(Debug, Clone, Default)]
+pub struct PromptProgress {
+    pub prompt: String,
+    pub lines: Vec<String>,
+}
 
 #[derive(Debug, Clone)]
 pub enum ChatMessage {
@@ -29,14 +38,16 @@ pub struct ChatApp {
     pub messages: Vec<ChatMessage>,
     pub input: String,
     pub scroll_offset: usize,
-    pub progress_expanded: bool,
+    pub progress_modal_open: bool,
     pub should_quit: bool,
     pub is_processing: bool,
     pub auto_scroll: bool, // When true, follow new content
     pub session_name: String,
     pub working_directory: String,
     pub context_budget: usize,
-    pub progress_log: Vec<String>,
+    pub progress_sections: Vec<PromptProgress>,
+    pub selected_progress_section: usize,
+    processing_started_at: Option<Instant>,
     pub todo_items: Vec<String>,
     // Cached rendered lines (rebuilt only when messages change)
     cached_lines: RefCell<Vec<Line<'static>>>,
@@ -50,14 +61,16 @@ impl ChatApp {
             messages: Vec::new(),
             input: String::new(),
             scroll_offset: 0,
-            progress_expanded: true,
+            progress_modal_open: false,
             should_quit: false,
             is_processing: false,
             auto_scroll: true,
             session_name,
             working_directory: cwd.display().to_string(),
             context_budget,
-            progress_log: Vec::new(),
+            progress_sections: Vec::new(),
+            selected_progress_section: 0,
+            processing_started_at: None,
             todo_items: Vec::new(),
             cached_lines: RefCell::new(Vec::new()),
             cached_width: RefCell::new(0),
@@ -68,7 +81,7 @@ impl ChatApp {
     pub fn handle_event(&mut self, event: &TuiEvent) {
         match event {
             TuiEvent::Thinking(text) => {
-                self.push_progress_line(format!("thinking: {}", text.trim()));
+                self.append_thinking_delta(text);
             }
             TuiEvent::ToolStart { name, args } => {
                 let args_preview = format_args_preview(args, 100);
@@ -99,7 +112,7 @@ impl ChatApp {
                 *self.needs_rebuild.borrow_mut() = true;
             }
             TuiEvent::AssistantDone => {
-                self.is_processing = false;
+                self.set_processing(false);
                 self.push_progress_line("assistant: done".to_string());
             }
             TuiEvent::Tick => {}
@@ -115,16 +128,33 @@ impl ChatApp {
                 self.todo_items = extracted_todos;
             }
             self.messages.push(ChatMessage::User(input.clone()));
+            self.begin_prompt_progress(input.clone());
             self.push_progress_line("user: submitted prompt".to_string());
-            self.is_processing = true;
+            self.set_processing(true);
             self.auto_scroll = true; // Follow the new response
             *self.needs_rebuild.borrow_mut() = true;
         }
         input
     }
 
+    pub fn begin_prompt_progress(&mut self, prompt: String) {
+        self.progress_sections.push(PromptProgress {
+            prompt,
+            lines: Vec::new(),
+        });
+        self.selected_progress_section = self.progress_sections.len().saturating_sub(1);
+    }
+
     pub fn toggle_progress(&mut self) {
-        self.progress_expanded = !self.progress_expanded;
+        self.progress_modal_open = !self.progress_modal_open;
+    }
+
+    pub fn selected_progress(&self) -> Option<&PromptProgress> {
+        self.progress_sections.get(self.selected_progress_section)
+    }
+
+    pub fn is_progress_modal_open(&self) -> bool {
+        self.progress_modal_open
     }
 
     /// Get or rebuild cached lines for the given width (interior mutability)
@@ -160,11 +190,11 @@ impl ChatApp {
     }
 
     pub fn progress_panel_height(&self) -> u16 {
-        if self.progress_expanded { 12 } else { 3 }
+        PROGRESS_PANEL_HEIGHT
     }
 
     pub fn message_viewport_height(&self, total_height: u16) -> usize {
-        total_height.saturating_sub(self.progress_panel_height() + 1 + 3 + 2) as usize
+        total_height.saturating_sub(self.progress_panel_height() + 1 + 3 + 1 + 2) as usize
     }
 
     pub fn message_wrap_width(&self, total_width: u16) -> usize {
@@ -187,21 +217,86 @@ impl ChatApp {
                 ChatMessage::ToolEnd { name, output, .. } => name.len() + output.len(),
             };
         }
-        for line in &self.progress_log {
-            chars += line.len();
+        for section in &self.progress_sections {
+            chars += section.prompt.len();
+            for line in &section.lines {
+                chars += line.len();
+            }
         }
         let estimated_tokens = chars / 4;
         (estimated_tokens, self.context_budget)
     }
 
-    fn push_progress_line(&mut self, line: String) {
+    pub fn processing_step(&self, interval_ms: u128) -> usize {
+        if !self.is_processing {
+            return 0;
+        }
+
+        let elapsed_ms = self
+            .processing_started_at
+            .map(|started| started.elapsed().as_millis())
+            .unwrap_or_default();
+        let interval = interval_ms.max(1);
+        (elapsed_ms / interval) as usize
+    }
+
+    pub fn push_progress_line(&mut self, line: String) {
         if line.trim().is_empty() {
             return;
         }
-        self.progress_log.push(line);
-        if self.progress_log.len() > 200 {
-            self.progress_log.drain(0..(self.progress_log.len() - 200));
+        let section = self.active_progress_section_mut();
+        section.lines.push(line);
+        if section.lines.len() > MAX_PROGRESS_LINES_PER_PROMPT {
+            section
+                .lines
+                .drain(0..(section.lines.len() - MAX_PROGRESS_LINES_PER_PROMPT));
         }
+    }
+
+    fn append_thinking_delta(&mut self, delta: &str) {
+        if delta.is_empty() {
+            return;
+        }
+
+        let chunk = delta.replace('\n', " ");
+        let section = self.active_progress_section_mut();
+
+        if let Some(last) = section.lines.last_mut()
+            && let Some(existing) = last.strip_prefix("thinking: ")
+        {
+            let mut merged = String::with_capacity(last.len() + chunk.len());
+            merged.push_str("thinking: ");
+            merged.push_str(existing);
+            merged.push_str(&chunk);
+            *last = merged;
+            return;
+        }
+
+        section.lines.push(format!("thinking: {}", chunk));
+    }
+
+    fn active_progress_section_mut(&mut self) -> &mut PromptProgress {
+        if self.progress_sections.is_empty() {
+            self.progress_sections.push(PromptProgress {
+                prompt: "(no prompt)".to_string(),
+                lines: Vec::new(),
+            });
+            self.selected_progress_section = 0;
+        }
+
+        let idx = self
+            .selected_progress_section
+            .min(self.progress_sections.len() - 1);
+        &mut self.progress_sections[idx]
+    }
+
+    pub fn set_processing(&mut self, processing: bool) {
+        self.is_processing = processing;
+        self.processing_started_at = if processing {
+            Some(Instant::now())
+        } else {
+            None
+        };
     }
 }
 

@@ -378,7 +378,9 @@ pub async fn run_chat_debug_with_prompt(
 
     // Submit the prompt
     app.messages.push(tui::ChatMessage::User(prompt.clone()));
-    app.is_processing = true;
+    app.begin_prompt_progress(prompt.clone());
+    app.push_progress_line("user: submitted prompt".to_string());
+    app.set_processing(true);
 
     // Render initial state with prompt
     renderer.render(&app)?;

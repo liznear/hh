@@ -4,23 +4,28 @@ use ratatui::{
     prelude::Stylize,
     style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 use super::app::{ChatApp, ChatMessage};
 
 const MAX_TOOL_OUTPUT_LEN: usize = 200;
 const SIDEBAR_WIDTH: u16 = 38;
-const PROGRESS_LINES_EXPANDED: usize = 10;
+const PROGRESS_LINES_COLLAPSED: usize = 10;
+const PROGRESS_MODAL_MARGIN_PERCENT: u16 = 5;
 
 const PAGE_BG: Color = Color::Rgb(246, 247, 251);
 const PANEL_BG: Color = Color::Rgb(255, 255, 255);
 const SUBTLE_PANEL_BG: Color = Color::Rgb(242, 244, 248);
+const INPUT_PANEL_BG: Color = Color::Rgb(229, 233, 241);
 const TEXT_PRIMARY: Color = Color::Rgb(37, 45, 58);
 const TEXT_SECONDARY: Color = Color::Rgb(98, 108, 124);
 const TEXT_MUTED: Color = Color::Rgb(125, 133, 147);
 const ACCENT: Color = Color::Rgb(55, 114, 255);
 const INPUT_ACCENT: Color = Color::Rgb(19, 164, 151);
+const PROGRESS_TRACK: Color = Color::Rgb(203, 182, 248);
+const PROGRESS_TRAIL: Color = Color::Rgb(162, 120, 238);
+const PROGRESS_HEAD: Color = Color::Rgb(124, 72, 227);
 
 pub fn render_app(f: &mut Frame, app: &ChatApp) {
     let columns = Layout::default()
@@ -42,6 +47,7 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
             Constraint::Length(app.progress_panel_height()),
             Constraint::Length(1), // Status bar
             Constraint::Length(3), // Input area
+            Constraint::Length(1), // Global processing indicator
         ])
         .split(main_area);
 
@@ -49,9 +55,14 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
     render_progress(f, app, main_chunks[1]);
     render_status(f, app, main_chunks[2]);
     render_input(f, app, main_chunks[3]);
+    render_processing_indicator(f, app, main_chunks[4]);
 
     if let Some(area) = sidebar_area {
         render_sidebar(f, app, area);
+    }
+
+    if app.is_progress_modal_open() {
+        render_progress_modal(f, app);
     }
 }
 
@@ -161,16 +172,37 @@ fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
 }
 
 fn render_progress(f: &mut Frame, app: &ChatApp, area: Rect) {
-    let visible = if app.progress_expanded {
-        PROGRESS_LINES_EXPANDED
-    } else {
-        1
+    let Some(section) = app.selected_progress() else {
+        let panel = Paragraph::new("Waiting for activity...")
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Progress ")
+                    .style(Style::default().bg(SUBTLE_PANEL_BG).fg(TEXT_SECONDARY)),
+            )
+            .style(Style::default().bg(SUBTLE_PANEL_BG).fg(TEXT_MUTED));
+        f.render_widget(panel, area);
+        return;
     };
 
-    let total = app.progress_log.len();
-    let start = total.saturating_sub(visible);
+    let total_sections = app.progress_sections.len();
+    let section_idx = app.selected_progress_section.saturating_add(1);
+    let total = section.lines.len();
+    let start = total.saturating_sub(PROGRESS_LINES_COLLAPSED);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled("Prompt: ", Style::default().fg(TEXT_MUTED)),
+        Span::styled(
+            format!("{}/{} ", section_idx, total_sections),
+            Style::default().fg(TEXT_MUTED),
+        ),
+        Span::styled(
+            truncate_for_panel(&section.prompt, area.width.saturating_sub(12) as usize),
+            Style::default().fg(TEXT_PRIMARY).bold(),
+        ),
+    ]));
+
     if start > 0 {
         lines.push(Line::from(Span::styled(
             format!("...{} earlier events", start),
@@ -184,7 +216,7 @@ fn render_progress(f: &mut Frame, app: &ChatApp, area: Rect) {
             Style::default().fg(TEXT_MUTED),
         )));
     } else {
-        for item in app.progress_log.iter().skip(start) {
+        for item in section.lines.iter().skip(start) {
             lines.push(Line::from(Span::styled(
                 item.clone(),
                 Style::default().fg(TEXT_SECONDARY),
@@ -192,11 +224,7 @@ fn render_progress(f: &mut Frame, app: &ChatApp, area: Rect) {
         }
     }
 
-    let title = if app.progress_expanded {
-        " Progress (Ctrl+T to collapse) "
-    } else {
-        " Progress (Ctrl+T to expand) "
-    };
+    let title = " Progress (Ctrl+T opens modal) ";
 
     let panel = Paragraph::new(Text::from(lines))
         .block(
@@ -207,6 +235,64 @@ fn render_progress(f: &mut Frame, app: &ChatApp, area: Rect) {
         )
         .style(Style::default().bg(SUBTLE_PANEL_BG).fg(TEXT_SECONDARY))
         .wrap(Wrap { trim: true });
+
+    f.render_widget(panel, area);
+}
+
+fn render_progress_modal(f: &mut Frame, app: &ChatApp) {
+    if app.progress_sections.is_empty() {
+        return;
+    }
+
+    let area = centered_rect(
+        PROGRESS_MODAL_MARGIN_PERCENT,
+        PROGRESS_MODAL_MARGIN_PERCENT,
+        f.area(),
+    );
+    f.render_widget(Clear, area);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    for (idx, section) in app.progress_sections.iter().enumerate() {
+        if idx > 0 {
+            lines.push(Line::from(""));
+        }
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("Prompt {}: ", idx + 1),
+                Style::default().fg(TEXT_MUTED),
+            ),
+            Span::styled(
+                section.prompt.clone(),
+                Style::default().fg(TEXT_PRIMARY).bold(),
+            ),
+        ]));
+
+        if section.lines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Waiting for activity...",
+                Style::default().fg(TEXT_MUTED),
+            )));
+            continue;
+        }
+
+        for item in &section.lines {
+            lines.push(Line::from(Span::styled(
+                item.clone(),
+                Style::default().fg(TEXT_SECONDARY),
+            )));
+        }
+    }
+
+    let panel = Paragraph::new(Text::from(lines))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Progress Details (Ctrl+T to close) ")
+                .style(Style::default().bg(PANEL_BG).fg(TEXT_PRIMARY)),
+        )
+        .style(Style::default().bg(PANEL_BG).fg(TEXT_PRIMARY))
+        .wrap(Wrap { trim: false });
 
     f.render_widget(panel, area);
 }
@@ -250,11 +336,7 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                 }
             }
             ChatMessage::Thinking(text) => {
-                let label = if app.progress_expanded {
-                    "thinking: "
-                } else {
-                    "thinking… "
-                };
+                let label = "thinking: ";
                 lines.push(Line::from(vec![
                     Span::styled(label, Style::default().fg(Color::Yellow).italic()),
                     Span::styled(text.clone(), Style::default().fg(Color::Yellow)),
@@ -484,10 +566,10 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 }
 
 fn render_status(f: &mut Frame, app: &ChatApp, area: Rect) {
-    let progress_mode = if app.progress_expanded {
-        "Progress expanded"
+    let progress_mode = if app.is_progress_modal_open() {
+        "Progress modal open"
     } else {
-        "Progress collapsed"
+        "Progress modal closed"
     };
     let processing_text = if app.is_processing {
         " | processing"
@@ -504,33 +586,120 @@ fn render_status(f: &mut Frame, app: &ChatApp, area: Rect) {
 }
 
 fn render_input(f: &mut Frame, app: &ChatApp, area: Rect) {
-    let prefix = if app.is_processing { "* " } else { "> " };
-    let input_text = if app.input.is_empty() {
-        format!("{}Tell me more about this project...", prefix)
-    } else {
-        format!("{}{}", prefix, app.input)
-    };
+    f.render_widget(
+        Block::default().style(Style::default().bg(INPUT_PANEL_BG)),
+        area,
+    );
 
-    let paragraph =
-        Paragraph::new(input_text).style(Style::default().fg(TEXT_PRIMARY).bg(PANEL_BG));
-
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .style(Style::default().fg(INPUT_ACCENT).bg(PANEL_BG));
-    f.render_widget(block, area);
-    let inner = Rect {
+    let left_accent = Rect {
         x: area.x,
-        y: area.y + 1,
-        width: area.width,
-        height: area.height.saturating_sub(1),
+        y: area.y,
+        width: 1,
+        height: area.height,
     };
-    f.render_widget(paragraph, inner);
+    f.render_widget(
+        Paragraph::new(" ").style(Style::default().bg(PROGRESS_HEAD)),
+        left_accent,
+    );
 
-    // Always show cursor at end of input
-    let cursor_x = (prefix.len() + app.input.len()) as u16;
-    if cursor_x < inner.width {
-        f.set_cursor_position((inner.x + cursor_x, inner.y));
+    let input_value = if app.input.is_empty() {
+        "Tell me more about this project...".to_string()
+    } else {
+        app.input.clone()
+    };
+
+    let content_y = area
+        .y
+        .saturating_add(1)
+        .min(area.bottom().saturating_sub(1));
+    let content_area = Rect {
+        x: area.x.saturating_add(2),
+        y: content_y,
+        width: area.width.saturating_sub(3),
+        height: 1,
+    };
+
+    f.render_widget(
+        Paragraph::new(input_value).style(Style::default().fg(TEXT_PRIMARY).bg(INPUT_PANEL_BG)),
+        content_area,
+    );
+
+    let cursor_x = app.input.chars().count() as u16;
+    if cursor_x < content_area.width {
+        f.set_cursor_position((content_area.x + cursor_x, content_area.y));
     }
+}
+
+fn render_processing_indicator(f: &mut Frame, app: &ChatApp, area: Rect) {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::raw(" "));
+
+    let bar_len = area.width.saturating_sub(20).clamp(8, 18) as usize;
+    let head = app.processing_step(85) % bar_len;
+
+    for idx in 0..bar_len {
+        let style = if app.is_processing {
+            if idx == head {
+                Style::default().fg(PROGRESS_HEAD)
+            } else if idx == (head + bar_len - 1) % bar_len || idx == (head + bar_len - 2) % bar_len
+            {
+                Style::default().fg(PROGRESS_TRAIL)
+            } else {
+                Style::default().fg(PROGRESS_TRACK)
+            }
+        } else {
+            Style::default().fg(TEXT_MUTED)
+        };
+        spans.push(Span::styled("■", style));
+    }
+
+    spans.push(Span::raw("  "));
+    spans.push(Span::styled(
+        if app.is_processing {
+            "esc interrupt"
+        } else {
+            "ready"
+        },
+        Style::default().fg(TEXT_MUTED),
+    ));
+
+    let paragraph = Paragraph::new(Line::from(spans)).style(Style::default().bg(PAGE_BG));
+    f.render_widget(paragraph, area);
+}
+
+fn centered_rect(horizontal_margin_percent: u16, vertical_margin_percent: u16, area: Rect) -> Rect {
+    let width = area
+        .width
+        .saturating_sub(area.width.saturating_mul(horizontal_margin_percent) / 50);
+    let height = area
+        .height
+        .saturating_sub(area.height.saturating_mul(vertical_margin_percent) / 50);
+
+    Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    }
+}
+
+fn truncate_for_panel(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+
+    let char_count = text.chars().count();
+    if char_count <= max_chars {
+        return text.to_string();
+    }
+
+    if max_chars <= 1 {
+        return "...".to_string();
+    }
+
+    let keep = max_chars.saturating_sub(3);
+    let prefix: String = text.chars().take(keep).collect();
+    format!("{}...", prefix)
 }
 
 fn abbreviate_path(path: &str, max_chars: usize) -> String {
