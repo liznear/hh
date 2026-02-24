@@ -1,10 +1,10 @@
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Stylize,
     style::{Color, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
+    Frame,
 };
 
 use super::app::{ChatApp, ChatMessage, ProgressEntry};
@@ -276,6 +276,14 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                         )]));
                     }
                 }
+            }
+            ChatMessage::Error(text) => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Error:", Style::default().fg(Color::Red).bold()),
+                    Span::raw(" "),
+                    Span::styled(text.clone(), Style::default().fg(Color::Red)),
+                ]));
             }
         }
     }

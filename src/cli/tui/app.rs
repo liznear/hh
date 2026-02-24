@@ -42,6 +42,7 @@ pub enum ChatMessage {
         is_error: bool,
         output: String,
     },
+    Error(String),
 }
 
 pub struct ChatApp {
@@ -117,6 +118,11 @@ impl ChatApp {
             }
             TuiEvent::AssistantDone => {
                 self.set_processing(false);
+            }
+            TuiEvent::Error(msg) => {
+                self.messages.push(ChatMessage::Error(msg.clone()));
+                self.set_processing(false);
+                *self.needs_rebuild.borrow_mut() = true;
             }
             TuiEvent::Tick => {}
             TuiEvent::Key(_) => {}
@@ -205,6 +211,7 @@ impl ChatApp {
                 | ChatMessage::Thinking(text) => text.len(),
                 ChatMessage::ToolStart { name, args } => name.len() + args.len(),
                 ChatMessage::ToolEnd { name, output, .. } => name.len() + output.len(),
+                ChatMessage::Error(text) => text.len(),
             };
         }
         for section in &self.progress_sections {

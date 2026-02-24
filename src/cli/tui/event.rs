@@ -19,6 +19,7 @@ pub enum TuiEvent {
     },
     AssistantDelta(String),
     AssistantDone,
+    Error(String),
     Key(crossterm::event::KeyEvent),
     Tick,
 }

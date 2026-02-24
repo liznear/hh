@@ -115,22 +115,28 @@ pub async fn run_prompt_with_debug(
     let sender_clone = event_sender.clone();
     let prompt_clone = prompt.clone();
 
-    let mut agent_handle = tokio::spawn(async move {
-        let _ = run_agent(settings_clone, &cwd_clone, prompt_clone, sender_clone).await;
+    let agent_handle = tokio::spawn(async move {
+        let result = run_agent(settings_clone, &cwd_clone, prompt_clone, sender_clone.clone()).await;
+        if let Err(ref e) = result {
+            sender_clone.send(TuiEvent::Error(e.to_string()));
+        }
+        result
     });
+    drop(event_sender); // Close the channel from this side
 
     // Main loop - process events and render
     loop {
         tokio::select! {
             event = event_rx.recv() => {
                 if let Some(event) = event {
+                    let is_done_or_error = matches!(event, TuiEvent::AssistantDone | TuiEvent::Error(_));
                     app.handle_event(&event);
 
                     // Render after each event
                     renderer.render(&app)?;
 
                     // Check if processing is done
-                    if matches!(event, TuiEvent::AssistantDone) {
+                    if is_done_or_error {
                         // Render final state
                         renderer.render(&app)?;
                         break;
@@ -140,15 +146,12 @@ pub async fn run_prompt_with_debug(
                     break;
                 }
             }
-
-            result = &mut agent_handle => {
-                // Agent task finished - just log, don't exit
-                // Continue processing events until AssistantDone or channel closes
-                if let Err(e) = result {
-                    eprintln!("Agent task error: {}", e);
-                }
-            }
         }
+    }
+
+    if let Err(e) = agent_handle.await? {
+        eprintln!("Agent task error: {}", e);
+        return Err(e);
     }
 
     println!(
@@ -266,7 +269,9 @@ fn spawn_agent_task(settings: &Settings, cwd: &Path, input: String, event_sender
     let cwd = cwd.to_path_buf();
     let sender = event_sender.clone();
     tokio::spawn(async move {
-        let _ = run_agent(settings, &cwd, input, sender).await;
+        if let Err(e) = run_agent(settings, &cwd, input, sender.clone()).await {
+            sender.send(TuiEvent::Error(e.to_string()));
+        }
     });
 }
 

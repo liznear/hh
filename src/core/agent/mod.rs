@@ -99,6 +99,9 @@ where
                     role: Role::Assistant,
                     content: assistant.content.clone(),
                     tool_call_id: None,
+                    // Note: thinking content is not part of the message content in most providers' history,
+                    // but we might want to store it in session if needed.
+                    // For now, SessionEvent::Thinking handles it.
                 },
             })?;
             if !thinking_content.is_empty() {
@@ -150,7 +153,7 @@ where
             state.step += 1;
         }
 
-        Ok("Reached max steps without final answer".to_string())
+        anyhow::bail!("Reached max steps without final answer")
     }
 
     async fn execute_tool_call(
