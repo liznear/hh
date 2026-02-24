@@ -238,12 +238,12 @@ impl ChatApp {
                 output: out,
                 ..
             } = message
+                && tool_name == name
+                && status.is_none()
             {
-                if tool_name == name && status.is_none() {
-                    *status = Some(is_error);
-                    *out = Some(output.to_string());
-                    return;
-                }
+                *status = Some(is_error);
+                *out = Some(output.to_string());
+                return;
             }
         }
         // If not found, ignore? or create new? ignoring is safer for now.

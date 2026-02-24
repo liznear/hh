@@ -64,10 +64,10 @@ impl SessionStore {
         };
 
         // If creating new session (file doesn't exist) and title is provided
-        if !store.file.exists() && title.is_some() {
+        if !store.file.exists() && let Some(title) = title {
             store.write_metadata(SessionMetadata {
                 id: session_id,
-                title: title.unwrap(),
+                title,
                 created_at: now(),
                 last_updated_at: now(),
             })?;
@@ -89,13 +89,13 @@ impl SessionStore {
             let path = entry.path();
             if path
                 .file_name()
-                .map_or(false, |n| n.to_string_lossy().ends_with(".meta.json"))
+                .is_some_and(|n| n.to_string_lossy().ends_with(".meta.json"))
             {
                 // Read metadata
-                if let Ok(file) = fs::File::open(&path) {
-                    if let Ok(metadata) = serde_json::from_reader::<_, SessionMetadata>(file) {
-                        sessions.push(metadata);
-                    }
+                if let Ok(file) = fs::File::open(&path)
+                    && let Ok(metadata) = serde_json::from_reader::<_, SessionMetadata>(file)
+                {
+                    sessions.push(metadata);
                 }
             }
         }

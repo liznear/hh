@@ -587,13 +587,14 @@ fn handle_session_selection(
             }
             SessionEvent::ToolResult { id: _, is_error, output } => {
                 for msg in app.messages.iter_mut().rev() {
-                    if let tui::ChatMessage::ToolCall { output: out, is_error: err, .. } = msg {
-                        if out.is_none() {
-                            *out = Some(output.clone());
-                            *err = Some(is_error);
-                            break;
-                        }
+                    if let tui::ChatMessage::ToolCall { output: out, is_error: err, .. } = msg 
+                        && out.is_none() 
+                    {
+                        *out = Some(output.clone());
+                        *err = Some(is_error);
+                        break;
                     }
+
                 }
             }
             SessionEvent::Thinking { content, .. } => {

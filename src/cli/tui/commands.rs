@@ -1,4 +1,3 @@
-use crate::cli::tui::ChatApp;
 #[derive(Clone)]
 pub struct SlashCommand {
     pub name: String,
