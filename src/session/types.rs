@@ -28,3 +28,11 @@ pub enum SessionEvent {
         content: String,
     },
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionMetadata {
+    pub id: String,
+    pub title: String,
+    pub created_at: u64,      // Unix timestamp
+    pub last_updated_at: u64, // Unix timestamp
+}

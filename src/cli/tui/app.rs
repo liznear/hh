@@ -5,45 +5,24 @@ use std::time::Instant;
 use ratatui::text::Line;
 
 use super::event::TuiEvent;
-use super::tool_presentation::render_tool_start;
-use crate::cli::render::truncate_text;
 
 const SIDEBAR_WIDTH: u16 = 38;
-const MAX_PROGRESS_LINES_PER_PROMPT: usize = 200;
-
-#[derive(Debug, Clone, Default)]
-pub struct PromptProgress {
-    pub prompt: String,
-    pub entries: Vec<ProgressEntry>,
-}
-
-#[derive(Debug, Clone)]
-pub enum ProgressEntry {
-    Thinking(String),
-    ToolCall {
-        name: String,
-        label: String,
-        is_error: Option<bool>,
-    },
-    Note(String),
-}
 
 #[derive(Debug, Clone)]
 pub enum ChatMessage {
     User(String),
     Assistant(String),
     Thinking(String),
-    ToolStart {
+    ToolCall {
         name: String,
         args: String,
-    },
-    ToolEnd {
-        name: String,
-        is_error: bool,
-        output: String,
+        output: Option<String>,
+        is_error: Option<bool>,
     },
     Error(String),
 }
+
+use crate::session::SessionMetadata;
 
 pub struct ChatApp {
     pub messages: Vec<ChatMessage>,
@@ -52,17 +31,18 @@ pub struct ChatApp {
     pub should_quit: bool,
     pub is_processing: bool,
     pub auto_scroll: bool, // When true, follow new content
+    pub session_id: Option<String>,
     pub session_name: String,
     pub working_directory: String,
     pub context_budget: usize,
-    pub progress_sections: Vec<PromptProgress>,
-    pub selected_progress_section: usize,
     processing_started_at: Option<Instant>,
     pub todo_items: Vec<String>,
     // Cached rendered lines (rebuilt only when messages change)
-    cached_lines: RefCell<Vec<Line<'static>>>,
-    cached_width: RefCell<usize>,
-    needs_rebuild: RefCell<bool>,
+    pub cached_lines: RefCell<Vec<Line<'static>>>,
+    pub cached_width: RefCell<usize>,
+    pub needs_rebuild: RefCell<bool>,
+    pub available_sessions: Vec<SessionMetadata>,
+    pub is_picking_session: bool,
 }
 
 impl ChatApp {
@@ -74,16 +54,17 @@ impl ChatApp {
             should_quit: false,
             is_processing: false,
             auto_scroll: true,
+            session_id: None,
             session_name,
             working_directory: cwd.display().to_string(),
             context_budget,
-            progress_sections: Vec::new(),
-            selected_progress_section: 0,
             processing_started_at: None,
             todo_items: Vec::new(),
             cached_lines: RefCell::new(Vec::new()),
             cached_width: RefCell::new(0),
             needs_rebuild: RefCell::new(true),
+            available_sessions: Vec::new(),
+            is_picking_session: false,
         }
     }
 
@@ -91,14 +72,16 @@ impl ChatApp {
         match event {
             TuiEvent::Thinking(text) => {
                 self.append_thinking_delta(text);
+                *self.needs_rebuild.borrow_mut() = true;
             }
             TuiEvent::ToolStart { name, args } => {
-                let tool_view = render_tool_start(name, args);
-                self.push_progress_entry(ProgressEntry::ToolCall {
+                self.messages.push(ChatMessage::ToolCall {
                     name: name.clone(),
-                    label: tool_view.line,
+                    args: args.to_string(),
+                    output: None,
                     is_error: None,
                 });
+                *self.needs_rebuild.borrow_mut() = true;
             }
             TuiEvent::ToolEnd {
                 name,
@@ -106,6 +89,7 @@ impl ChatApp {
                 output,
             } => {
                 self.complete_tool_call(name, *is_error, output);
+                *self.needs_rebuild.borrow_mut() = true;
             }
             TuiEvent::AssistantDelta(delta) => {
                 if let Some(ChatMessage::Assistant(existing)) = self.messages.last_mut() {
@@ -137,20 +121,11 @@ impl ChatApp {
                 self.todo_items = extracted_todos;
             }
             self.messages.push(ChatMessage::User(input.clone()));
-            self.begin_prompt_progress(input.clone());
             self.set_processing(true);
             self.auto_scroll = true; // Follow the new response
             *self.needs_rebuild.borrow_mut() = true;
         }
         input
-    }
-
-    pub fn begin_prompt_progress(&mut self, prompt: String) {
-        self.progress_sections.push(PromptProgress {
-            prompt,
-            entries: Vec::new(),
-        });
-        self.selected_progress_section = self.progress_sections.len().saturating_sub(1);
     }
 
     /// Get or rebuild cached lines for the given width (interior mutability)
@@ -209,19 +184,11 @@ impl ChatApp {
                 ChatMessage::User(text)
                 | ChatMessage::Assistant(text)
                 | ChatMessage::Thinking(text) => text.len(),
-                ChatMessage::ToolStart { name, args } => name.len() + args.len(),
-                ChatMessage::ToolEnd { name, output, .. } => name.len() + output.len(),
+                ChatMessage::ToolCall {
+                    name, args, output, ..
+                } => name.len() + args.len() + output.as_ref().map(|s| s.len()).unwrap_or(0),
                 ChatMessage::Error(text) => text.len(),
             };
-        }
-        for section in &self.progress_sections {
-            chars += section.prompt.len();
-            for entry in &section.entries {
-                chars += match entry {
-                    ProgressEntry::Thinking(text) | ProgressEntry::Note(text) => text.len(),
-                    ProgressEntry::ToolCall { name, label, .. } => name.len() + label.len(),
-                };
-            }
         }
         let estimated_tokens = chars / 4;
         (estimated_tokens, self.context_budget)
@@ -240,75 +207,38 @@ impl ChatApp {
         (elapsed_ms / interval) as usize
     }
 
-    pub fn push_progress_entry(&mut self, entry: ProgressEntry) {
-        let is_empty = match &entry {
-            ProgressEntry::Thinking(text) | ProgressEntry::Note(text) => text.trim().is_empty(),
-            ProgressEntry::ToolCall { label, .. } => label.trim().is_empty(),
-        };
-        if is_empty {
-            return;
-        }
-        let section = self.active_progress_section_mut();
-        section.entries.push(entry);
-        if section.entries.len() > MAX_PROGRESS_LINES_PER_PROMPT {
-            section
-                .entries
-                .drain(0..(section.entries.len() - MAX_PROGRESS_LINES_PER_PROMPT));
-        }
-    }
-
     fn append_thinking_delta(&mut self, delta: &str) {
         if delta.is_empty() {
             return;
         }
 
         let chunk = delta.replace('\n', " ");
-        let section = self.active_progress_section_mut();
-
-        if let Some(ProgressEntry::Thinking(existing)) = section.entries.last_mut() {
+        if let Some(ChatMessage::Thinking(existing)) = self.messages.last_mut() {
             existing.push_str(&chunk);
             return;
         }
 
-        section.entries.push(ProgressEntry::Thinking(chunk));
+        self.messages.push(ChatMessage::Thinking(chunk));
     }
 
     fn complete_tool_call(&mut self, name: &str, is_error: bool, output: &str) {
-        let section = self.active_progress_section_mut();
-        for entry in section.entries.iter_mut().rev() {
-            if let ProgressEntry::ToolCall {
+        // Find the matching ToolCall
+        for message in self.messages.iter_mut().rev() {
+            if let ChatMessage::ToolCall {
                 name: tool_name,
                 is_error: status,
+                output: out,
                 ..
-            } = entry
-                && tool_name == name
-                && status.is_none()
+            } = message
             {
-                *status = Some(is_error);
-                return;
+                if tool_name == name && status.is_none() {
+                    *status = Some(is_error);
+                    *out = Some(output.to_string());
+                    return;
+                }
             }
         }
-
-        section.entries.push(ProgressEntry::ToolCall {
-            name: name.to_string(),
-            label: format!("{} {}", name, truncate_text(output, 80)),
-            is_error: Some(is_error),
-        });
-    }
-
-    fn active_progress_section_mut(&mut self) -> &mut PromptProgress {
-        if self.progress_sections.is_empty() {
-            self.progress_sections.push(PromptProgress {
-                prompt: "(no prompt)".to_string(),
-                entries: Vec::new(),
-            });
-            self.selected_progress_section = 0;
-        }
-
-        let idx = self
-            .selected_progress_section
-            .min(self.progress_sections.len() - 1);
-        &mut self.progress_sections[idx]
+        // If not found, ignore? or create new? ignoring is safer for now.
     }
 
     pub fn set_processing(&mut self, processing: bool) {

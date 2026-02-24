@@ -6,8 +6,10 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
+use serde_json::Value;
 
-use super::app::{ChatApp, ChatMessage, ProgressEntry};
+use super::app::{ChatApp, ChatMessage};
+use super::tool_presentation::render_tool_start;
 
 const MAX_TOOL_OUTPUT_LEN: usize = 200;
 const SIDEBAR_WIDTH: u16 = 38;
@@ -51,6 +53,13 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
             Constraint::Length(1), // Global processing indicator
         ])
         .split(main_area);
+
+    // Issue 1: Fix background color mismatch
+    // Render the page background over the entire main column area to cover padding
+    f.render_widget(
+        Block::default().style(Style::default().bg(PAGE_BG)),
+        columns[0],
+    );
 
     render_messages(f, app, main_chunks[0]);
     render_status(f, app, main_chunks[1]);
@@ -183,7 +192,6 @@ pub fn build_message_lines(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
 
 fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let mut user_prompt_idx = 0usize;
 
     for msg in &app.messages {
         match msg {
@@ -204,104 +212,104 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                         ),
                     ]));
                 }
-
-                if let Some(section) = app.progress_sections.get(user_prompt_idx) {
-                    append_inlined_progress_lines(&mut lines, section.entries.as_slice(), width);
-                }
-                user_prompt_idx = user_prompt_idx.saturating_add(1);
             }
             ChatMessage::Assistant(text) => {
                 lines.push(Line::from(""));
-                lines.push(Line::from(vec![Span::styled(
-                    "Assistant",
-                    Style::default().fg(TEXT_SECONDARY).bold(),
-                )]));
+                lines.push(Line::from(vec![
+                    Span::raw("  "), // Issue 2: Match left padding
+                    Span::styled("Assistant", Style::default().fg(TEXT_SECONDARY).bold()),
+                ]));
                 for line in parse_markdown_lines(text, width) {
                     lines.push(line);
                 }
             }
             ChatMessage::Thinking(text) => {
-                let label = "thinking: ";
-                lines.push(Line::from(vec![
-                    Span::styled(label, Style::default().fg(Color::Yellow).italic()),
-                    Span::styled(text.clone(), Style::default().fg(Color::Yellow)),
-                ]));
-            }
-            ChatMessage::ToolStart { name, args } => {
-                let prefix_len = 5 + name.len() + 7; // "tool:" + name + "> start"
-
-                if !args.is_empty() && !args.contains('\n') && prefix_len + 1 + args.len() <= width
-                {
-                    lines.push(Line::from(vec![
-                        Span::styled("tool:", Style::default().fg(Color::Magenta)),
-                        Span::styled(name.clone(), Style::default().fg(Color::Magenta).bold()),
-                        Span::raw("> start "),
-                        Span::styled(args.clone(), Style::default().fg(Color::DarkGray)),
-                    ]));
-                } else {
-                    // Header line with name
-                    lines.push(Line::from(vec![
-                        Span::styled("tool:", Style::default().fg(Color::Magenta)),
-                        Span::styled(name.clone(), Style::default().fg(Color::Magenta).bold()),
-                        Span::raw("> start"),
-                    ]));
-                    // Wrapped args on following lines with indentation
-                    if !args.is_empty() {
-                        let wrapped = wrap_text(args, width.saturating_sub(4));
-                        for line in wrapped {
-                            lines.push(Line::from(vec![Span::styled(
-                                format!("    {}", line),
-                                Style::default().fg(Color::DarkGray),
-                            )]));
-                        }
+                let available_width = width.saturating_sub(4).max(1);
+                let wrapped = wrap_text(text, available_width);
+                for (i, line) in wrapped.iter().enumerate() {
+                    if i == 0 {
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                "  Thinking: ",
+                                Style::default().fg(THINKING_LABEL).italic(),
+                            ),
+                            Span::styled(line.clone(), Style::default().fg(THINKING_LABEL).bold()),
+                        ]));
+                    } else {
+                        lines.push(Line::from(vec![
+                            Span::raw("            "), // "  Thinking: " is 12 chars
+                            Span::styled(line.clone(), Style::default().fg(THINKING_LABEL).bold()),
+                        ]));
                     }
                 }
             }
-            ChatMessage::ToolEnd {
+            ChatMessage::ToolCall {
                 name,
-                is_error,
+                args,
                 output,
+                is_error,
             } => {
-                let status_color = if *is_error { Color::Red } else { Color::Green };
-                let status = if *is_error { "error" } else { "ok" };
+                let available_width = width.saturating_sub(4).max(1);
 
-                let prefix_len = 5 + name.len() + 2 + status.len(); // "tool:" + name + "> " + status
+                // Parse args to Value for rendering
+                let args_value: Value = serde_json::from_str(args).unwrap_or(Value::Null);
+                let tool_view = render_tool_start(name, &args_value);
+                let label = tool_view.line;
 
-                if !output.is_empty()
-                    && !output.contains('\n')
-                    && prefix_len + 1 + output.len() <= width
-                {
-                    lines.push(Line::from(vec![
-                        Span::styled("tool:", Style::default().fg(Color::Magenta)),
-                        Span::styled(name.clone(), Style::default().fg(Color::Magenta).bold()),
-                        Span::raw("> "),
-                        Span::styled(status, Style::default().fg(status_color).bold()),
-                        Span::raw(" "),
-                        Span::styled(output.clone(), Style::default().fg(Color::DarkGray)),
-                    ]));
-                } else {
-                    // Header line with name and status
-                    lines.push(Line::from(vec![
-                        Span::styled("tool:", Style::default().fg(Color::Magenta)),
-                        Span::styled(name.clone(), Style::default().fg(Color::Magenta).bold()),
-                        Span::raw("> "),
-                        Span::styled(status, Style::default().fg(status_color).bold()),
-                    ]));
-                    // Wrapped output on following lines with indentation
-                    if !output.is_empty() {
-                        let wrapped = wrap_text(output, width.saturating_sub(4));
-                        let display_lines: Vec<_> = wrapped.into_iter().take(15).collect();
-                        for line in display_lines {
-                            lines.push(Line::from(vec![Span::styled(
-                                format!("    {}", line),
-                                Style::default().fg(Color::DarkGray),
-                            )]));
+                if let Some(error) = is_error {
+                    // Tool completed
+                    let symbol = if *error { "x" } else { "✓" };
+                    let color = if *error { Color::Red } else { INPUT_ACCENT };
+
+                    // Format label: "Name output_snippet"
+                    // Wait, render_tool_start already formats "Read path" etc.
+                    // We just want to append the output snippet if possible, or just show the label.
+                    // The original ProgressEntry logic:
+                    // label: format!("{} {}", name, truncate_text(output, 80))
+                    // But that lost the "Read path" args info!
+                    // If we want to keep args info, we should use the label from render_tool_start.
+                    // But if it's done, maybe we want to show result?
+                    // "✓ Read ./src/main.rs" is better than "✓ read src code..."
+
+                    let display_label = if let Some(_out) = output {
+                        // If we want to show output, we can append it?
+                        // But compact view usually implies "Action completed".
+                        // Let's stick to the Action Label (e.g. "Read ./src/main.rs")
+                        label.clone()
+                    } else {
+                        label.clone()
+                    };
+
+                    let wrapped = wrap_text(&display_label, available_width);
+                    for (i, line) in wrapped.iter().enumerate() {
+                        if i == 0 {
+                            lines.push(Line::from(vec![
+                                Span::raw("  "),
+                                Span::styled(symbol, Style::default().fg(color).bold()),
+                                Span::raw(" "),
+                                Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
+                            ]));
+                        } else {
+                            lines.push(Line::from(vec![
+                                Span::raw("    "), // Indent 4
+                                Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
+                            ]));
                         }
-                        if output.len() > MAX_TOOL_OUTPUT_LEN {
-                            lines.push(Line::from(vec![Span::styled(
-                                "    [... truncated ...]",
-                                Style::default().fg(Color::DarkGray).italic(),
-                            )]));
+                    }
+                } else {
+                    // Tool running
+                    let wrapped = wrap_text(&label, available_width.saturating_sub(1)); // "->" is 2 chars + spaces
+                    for (i, line) in wrapped.iter().enumerate() {
+                        if i == 0 {
+                            lines.push(Line::from(vec![
+                                Span::styled("  -> ", Style::default().fg(TEXT_MUTED)),
+                                Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
+                            ]));
+                        } else {
+                            lines.push(Line::from(vec![
+                                Span::raw("     "), // "  -> " is 5 chars
+                                Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
+                            ]));
                         }
                     }
                 }
@@ -327,9 +335,19 @@ fn parse_markdown_lines(text: &str, width: usize) -> Vec<Line<'static>> {
     for line in text.lines() {
         let spans = parse_markdown_spans(line);
         // Wrap the spans to fit width
-        let wrapped = wrap_spans(&spans, width);
+        // Issue 2: Assistant content needs indentation too?
+        // If we indent header "  Assistant", we should indent content?
+        // User message content " ▌ message".
+        // Let's verify what the user wants. "The left padding ... should be the same."
+        // If "Assistant" is at 2 spaces.
+        // Content should probably be at 2 spaces too.
+        // So we should indent wrapped lines by 2 spaces.
+
+        let wrapped = wrap_spans(&spans, width.saturating_sub(2));
         for wrapped_line in wrapped {
-            lines.push(Line::from(wrapped_line));
+            let mut indented = vec![Span::raw("  ")];
+            indented.extend(wrapped_line);
+            lines.push(Line::from(indented));
         }
     }
 
@@ -397,108 +415,6 @@ fn parse_markdown_spans(text: &str) -> Vec<Span<'static>> {
     }
 
     spans
-}
-
-fn append_inlined_progress_lines(
-    lines: &mut Vec<Line<'static>>,
-    entries: &[ProgressEntry],
-    width: usize,
-) {
-    if entries.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  waiting for activity...",
-            Style::default().fg(TEXT_MUTED).italic(),
-        )));
-        return;
-    }
-
-    for entry in entries {
-        append_progress_entry(lines, entry, false, width);
-    }
-}
-
-fn append_progress_entry(
-    lines: &mut Vec<Line<'static>>,
-    entry: &ProgressEntry,
-    _for_modal: bool,
-    width: usize,
-) {
-    let available_width = width.saturating_sub(4).max(1);
-
-    match entry {
-        ProgressEntry::Thinking(text) => {
-            let wrapped = wrap_text(text, available_width);
-            for (i, line) in wrapped.iter().enumerate() {
-                if i == 0 {
-                    lines.push(Line::from(vec![
-                        Span::styled("  Thinking: ", Style::default().fg(THINKING_LABEL).italic()),
-                        Span::styled(line.clone(), Style::default().fg(THINKING_LABEL).bold()),
-                    ]));
-                } else {
-                    lines.push(Line::from(vec![
-                        Span::raw("            "), // "  Thinking: " is 12 chars
-                        Span::styled(line.clone(), Style::default().fg(THINKING_LABEL).bold()),
-                    ]));
-                }
-            }
-        }
-        ProgressEntry::ToolCall {
-            label, is_error, ..
-        } => {
-            if let Some(is_error) = is_error {
-                let symbol = if *is_error { "x" } else { "✓" };
-                let color = if *is_error { Color::Red } else { INPUT_ACCENT };
-                let wrapped = wrap_text(label, available_width);
-
-                for (i, line) in wrapped.iter().enumerate() {
-                    if i == 0 {
-                        lines.push(Line::from(vec![
-                            Span::raw("  "),
-                            Span::styled(symbol, Style::default().fg(color).bold()),
-                            Span::raw(" "),
-                            Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
-                        ]));
-                    } else {
-                        lines.push(Line::from(vec![
-                            Span::raw("    "), // Indent 4
-                            Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
-                        ]));
-                    }
-                }
-            } else {
-                let wrapped = wrap_text(label, available_width.saturating_sub(1)); // "->" is 2 chars + spaces
-                for (i, line) in wrapped.iter().enumerate() {
-                    if i == 0 {
-                        lines.push(Line::from(vec![
-                            Span::styled("  -> ", Style::default().fg(TEXT_MUTED)),
-                            Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
-                        ]));
-                    } else {
-                        lines.push(Line::from(vec![
-                            Span::raw("     "), // "  -> " is 5 chars
-                            Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
-                        ]));
-                    }
-                }
-            }
-        }
-        ProgressEntry::Note(text) => {
-            let wrapped = wrap_text(text, available_width);
-            for (i, line) in wrapped.iter().enumerate() {
-                if i == 0 {
-                    lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(line.clone(), Style::default().fg(TEXT_MUTED)),
-                    ]));
-                } else {
-                    lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(line.clone(), Style::default().fg(TEXT_MUTED)),
-                    ]));
-                }
-            }
-        }
-    }
 }
 
 /// Wrap spans to fit within a given width

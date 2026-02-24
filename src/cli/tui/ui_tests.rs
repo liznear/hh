@@ -4,9 +4,11 @@ use super::ui::build_message_lines;
 #[test]
 fn test_tool_start_rendering() {
     let mut app = ChatApp::default();
-    app.messages.push(ChatMessage::ToolStart {
+    app.messages.push(ChatMessage::ToolCall {
         name: "test_tool".to_string(),
-        args: "arg1".to_string(),
+        args: "\"arg1\"".to_string(),
+        output: None,
+        is_error: None,
     });
 
     let lines = build_message_lines(&app, 100);
@@ -15,18 +17,20 @@ fn test_tool_start_rendering() {
 
     // Verify content of first line
     let spans = &lines[0].spans;
-    // Expected: tool: (magenta), test_tool (magenta bold), > start (raw), arg1 (dark gray)
-    assert!(spans.iter().any(|s| s.content.contains("test_tool")));
+    // Expected: -> (muted), Test Tool "arg1" (secondary)
+    assert!(spans.iter().any(|s| s.content.contains("Test Tool")));
     assert!(spans.iter().any(|s| s.content.contains("arg1")));
 }
 
 #[test]
 fn test_tool_end_rendering() {
     let mut app = ChatApp::default();
-    app.messages.push(ChatMessage::ToolEnd {
+    // Compact rendering shows the original action label, not the output
+    app.messages.push(ChatMessage::ToolCall {
         name: "test_tool".to_string(),
-        is_error: false,
-        output: "success".to_string(),
+        args: "\"arg1\"".to_string(),
+        output: Some("success".to_string()),
+        is_error: Some(false),
     });
 
     let lines = build_message_lines(&app, 100);
@@ -34,35 +38,25 @@ fn test_tool_end_rendering() {
     assert_eq!(lines.len(), 1, "Expected single line for short output");
 
     let spans = &lines[0].spans;
-    assert!(spans.iter().any(|s| s.content.contains("test_tool")));
-    assert!(spans.iter().any(|s| s.content.contains("success")));
+    // Expected: ✓ (accent), Test Tool "arg1" (secondary)
+    assert!(spans.iter().any(|s| s.content.contains("Test Tool")));
+    assert!(spans.iter().any(|s| s.content.contains("arg1")));
+    // We do NOT show output in compact mode
 }
 
 #[test]
 fn test_tool_start_wrapping() {
     let mut app = ChatApp::default();
-    let long_args = "a".repeat(200);
-    app.messages.push(ChatMessage::ToolStart {
+    // Create a long JSON string for args to force wrapping
+    let long_args = format!("\"{}\"", "a".repeat(200));
+    app.messages.push(ChatMessage::ToolCall {
         name: "test_tool".to_string(),
-        args: long_args.clone(),
+        args: long_args,
+        output: None,
+        is_error: None,
     });
 
     let lines = build_message_lines(&app, 50);
     // Should wrap
     assert!(lines.len() > 1, "Expected multiple lines for long args");
-}
-
-#[test]
-fn test_tool_end_wrapping() {
-    let mut app = ChatApp::default();
-    let long_output = "a".repeat(200);
-    app.messages.push(ChatMessage::ToolEnd {
-        name: "test_tool".to_string(),
-        is_error: false,
-        output: long_output.clone(),
-    });
-
-    let lines = build_message_lines(&app, 50);
-    // Should wrap
-    assert!(lines.len() > 1, "Expected multiple lines for long output");
 }

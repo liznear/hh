@@ -10,8 +10,9 @@ use crate::config::Settings;
 use crate::core::agent::{AgentEvents, AgentLoop, NoopEvents};
 use crate::permission::PermissionMatcher;
 use crate::provider::openai_compatible::OpenAiCompatibleProvider;
-use crate::session::SessionStore;
+use crate::session::{SessionStore, SessionEvent};
 use crate::tool::registry::ToolRegistry;
+use uuid::Uuid;
 
 pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Result<()> {
     // Setup terminal
@@ -98,7 +99,6 @@ pub async fn run_prompt_with_debug(
 
     // Submit the prompt
     app.messages.push(tui::ChatMessage::User(prompt.clone()));
-    app.begin_prompt_progress(prompt.clone());
     app.set_processing(true);
 
     // Render initial state with prompt
@@ -115,8 +115,11 @@ pub async fn run_prompt_with_debug(
     let sender_clone = event_sender.clone();
     let prompt_clone = prompt.clone();
 
+    let title = prompt.chars().take(50).collect::<String>();
+    let title_clone = title.clone();
+
     let agent_handle = tokio::spawn(async move {
-        let result = run_agent(settings_clone, &cwd_clone, prompt_clone, sender_clone.clone()).await;
+        let result = run_agent(settings_clone, &cwd_clone, prompt_clone, sender_clone.clone(), None, Some(title_clone)).await;
         if let Err(ref e) = result {
             sender_clone.send(TuiEvent::Error(e.to_string()));
         }
@@ -211,10 +214,116 @@ where
             let input = app.submit_input();
             if input == ":quit" {
                 app.should_quit = true;
+            } else if input == "/resume" {
+                let sessions = SessionStore::list(&settings.session.root, cwd).unwrap_or_default();
+                if sessions.is_empty() {
+                    app.messages.push(tui::ChatMessage::Assistant("No previous sessions found.".to_string()));
+                    *app.needs_rebuild.borrow_mut() = true;
+                } else {
+                    app.available_sessions = sessions;
+                    app.is_picking_session = true;
+                    
+                    let mut msg = String::from("Available sessions:\n");
+                    for (i, s) in app.available_sessions.iter().enumerate() {
+                        msg.push_str(&format!("[{}] {}\n", i + 1, s.title));
+                    }
+                    msg.push_str("\nEnter number to resume:");
+                    app.messages.push(tui::ChatMessage::Assistant(msg));
+                    *app.needs_rebuild.borrow_mut() = true;
+                }
+            } else if app.is_picking_session {
+                if let Ok(idx) = input.trim().parse::<usize>() {
+                    if idx > 0 && idx <= app.available_sessions.len() {
+                        let session = &app.available_sessions[idx - 1];
+                        app.session_id = Some(session.id.clone());
+                        app.session_name = session.title.clone();
+                        app.is_picking_session = false;
+                        
+                        match SessionStore::new(&settings.session.root, cwd, Some(&session.id), None) {
+                            Ok(store) => {
+                                match store.replay_events() {
+                                    Ok(events) => {
+                                        app.messages.clear();
+                                        for event in events {
+                                            match event {
+                                                SessionEvent::Message { message, .. } => {
+                                                    let chat_msg = match message.role {
+                                                        crate::core::Role::User => tui::ChatMessage::User(message.content),
+                                                        crate::core::Role::Assistant => tui::ChatMessage::Assistant(message.content),
+                                                        _ => continue,
+                                                    };
+                                                    app.messages.push(chat_msg);
+                                                }
+                                                SessionEvent::ToolCall { call } => {
+                                                    app.messages.push(tui::ChatMessage::ToolCall {
+                                                        name: call.name,
+                                                        args: call.arguments.to_string(),
+                                                        output: None,
+                                                        is_error: None,
+                                                    });
+                                                }
+                                                SessionEvent::ToolResult { id: _, is_error, output } => {
+                                                    // Complete the last tool call
+                                                    // In a perfect replay, the last message should be the corresponding ToolCall
+                                                    // But we should search backwards to be safe, similar to complete_tool_call
+                                                    // Since we don't have ID in ChatMessage, we just take the last incomplete one.
+                                                    for msg in app.messages.iter_mut().rev() {
+                                                        if let tui::ChatMessage::ToolCall { output: out, is_error: err, .. } = msg {
+                                                            if out.is_none() {
+                                                                *out = Some(output.clone());
+                                                                *err = Some(is_error);
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                SessionEvent::Thinking { content, .. } => {
+                                                    app.messages.push(tui::ChatMessage::Thinking(content));
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        app.messages.push(tui::ChatMessage::Assistant(format!("Resumed session: {}", session.title)));
+                                        *app.needs_rebuild.borrow_mut() = true;
+                                    }
+                                    Err(e) => {
+                                        app.messages.push(tui::ChatMessage::Error(format!("Failed to replay session: {}", e)));
+                                        *app.needs_rebuild.borrow_mut() = true;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                app.messages.push(tui::ChatMessage::Error(format!("Failed to load session store: {}", e)));
+                                *app.needs_rebuild.borrow_mut() = true;
+                            }
+                        }
+                    } else {
+                         app.messages.push(tui::ChatMessage::Assistant("Invalid session index.".to_string()));
+                         *app.needs_rebuild.borrow_mut() = true;
+                    }
+                } else {
+                    app.messages.push(tui::ChatMessage::Assistant("Invalid number.".to_string()));
+                    *app.needs_rebuild.borrow_mut() = true;
+                }
             } else if input == ":thinking" {
                 // Placeholder command for parity with non-TUI mode.
             } else if !input.is_empty() {
-                spawn_agent_task(settings, cwd, input, event_sender);
+                let session_id = app.session_id.clone();
+                let session_title = if session_id.is_none() {
+                    Some(input.chars().take(30).collect::<String>())
+                } else {
+                    None
+                };
+                
+                let current_session_id = session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+                if app.session_id.is_none() {
+                    app.session_id = Some(current_session_id.clone());
+                    if let Some(t) = &session_title {
+                        app.session_name = t.clone();
+                    }
+                }
+
+                spawn_agent_task(settings, cwd, input, event_sender, Some(current_session_id), session_title);
             }
         }
         KeyCode::Esc => {
@@ -264,12 +373,19 @@ fn scroll_bounds(app: &ChatApp, width: u16, height: u16) -> (usize, usize) {
     (total_lines, visible_height)
 }
 
-fn spawn_agent_task(settings: &Settings, cwd: &Path, input: String, event_sender: &TuiEventSender) {
+fn spawn_agent_task(
+    settings: &Settings,
+    cwd: &Path,
+    input: String,
+    event_sender: &TuiEventSender,
+    session_id: Option<String>,
+    session_title: Option<String>,
+) {
     let settings = settings.clone();
     let cwd = cwd.to_path_buf();
     let sender = event_sender.clone();
     tokio::spawn(async move {
-        if let Err(e) = run_agent(settings, &cwd, input, sender.clone()).await {
+        if let Err(e) = run_agent(settings, &cwd, input, sender.clone(), session_id, session_title).await {
             sender.send(TuiEvent::Error(e.to_string()));
         }
     });
@@ -364,8 +480,10 @@ async fn run_agent(
     cwd: &std::path::Path,
     prompt: String,
     events: impl AgentEvents + 'static,
+    session_id: Option<String>,
+    session_title: Option<String>,
 ) -> anyhow::Result<()> {
-    let loop_runner = create_agent_loop(settings, cwd, events)?;
+    let loop_runner = create_agent_loop(settings, cwd, events, session_id, session_title)?;
 
     loop_runner
         .run(prompt, |_tool_name| {
@@ -394,7 +512,10 @@ pub async fn run_single_prompt_with_events<E>(
 where
     E: AgentEvents,
 {
-    let loop_runner = create_agent_loop(settings, cwd, events)?;
+    // For single prompt, we create a new session (or we could make it ephemeral if we wanted)
+    // Using prompt as title
+    let title = prompt.chars().take(50).collect::<String>();
+    let loop_runner = create_agent_loop(settings, cwd, events, None, Some(title))?;
 
     loop_runner
         .run(prompt, |tool_name| {
@@ -410,6 +531,8 @@ fn create_agent_loop<E>(
     settings: Settings,
     cwd: &std::path::Path,
     events: E,
+    session_id: Option<String>,
+    session_title: Option<String>,
 ) -> anyhow::Result<AgentLoop<OpenAiCompatibleProvider, E>>
 where
     E: AgentEvents,
@@ -422,7 +545,8 @@ where
 
     let tool_registry = ToolRegistry::new(&settings, cwd);
     let permissions = PermissionMatcher::new(settings.clone());
-    let session = SessionStore::for_workspace(&settings.session.root, cwd)?;
+    // Use the new session store constructor
+    let session = SessionStore::new(&settings.session.root, cwd, session_id.as_deref(), session_title)?;
 
     Ok(AgentLoop {
         provider,
