@@ -3,7 +3,7 @@ use ratatui::{
     prelude::Stylize,
     style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 use serde_json::Value;
@@ -64,11 +64,64 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
     render_messages(f, app, main_chunks[0]);
     render_status(f, app, main_chunks[1]);
     render_input(f, app, main_chunks[2]);
+
+    if !app.filtered_commands.is_empty() {
+        let item_count = app.filtered_commands.len().min(5) as u16;
+        let popup_height = item_count + 2;
+        let popup_area = Rect {
+            x: main_chunks[2].x + 1,
+            y: main_chunks[2].y.saturating_sub(popup_height),
+            width: 60,
+            height: popup_height,
+        };
+        render_command_palette(f, app, popup_area);
+    }
+
     render_processing_indicator(f, app, main_chunks[3]);
 
     if let Some(area) = sidebar_area {
         render_sidebar(f, app, area);
     }
+}
+
+fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect) {
+    f.render_widget(Clear, area);
+
+    let items: Vec<ListItem> = app
+        .filtered_commands
+        .iter()
+        .take(5)
+        .enumerate()
+        .map(|(i, cmd)| {
+            let style = if i == app.selected_command_index {
+                Style::default().fg(Color::White).bg(ACCENT)
+            } else {
+                Style::default().fg(TEXT_PRIMARY).bg(PANEL_BG)
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:<12}", cmd.name), Style::default().bold()),
+                Span::raw(" "),
+                Span::styled(
+                    cmd.description.clone(),
+                    if i == app.selected_command_index {
+                        Style::default().fg(Color::White)
+                    } else {
+                        Style::default().fg(TEXT_SECONDARY)
+                    },
+                ),
+            ]))
+            .style(style)
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default().bg(PANEL_BG)),
+    );
+
+    f.render_widget(list, area);
 }
 
 fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {

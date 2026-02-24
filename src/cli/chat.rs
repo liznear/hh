@@ -206,23 +206,60 @@ where
     match key_event.code {
         KeyCode::Char(c) => {
             app.input.push(c);
+            app.update_command_filtering();
         }
         KeyCode::Backspace => {
             app.input.pop();
+            app.update_command_filtering();
         }
         KeyCode::Enter => {
-            let input = app.submit_input();
-            handle_submitted_input(input, app, settings, cwd, event_sender);
+            let selected_name = if !app.filtered_commands.is_empty() {
+                Some(app.filtered_commands[app.selected_command_index].name.clone())
+            } else {
+                None
+            };
+
+            if let Some(name) = selected_name {
+                if app.input == name {
+                    let input = app.submit_input();
+                    app.update_command_filtering();
+                    handle_submitted_input(input, app, settings, cwd, event_sender);
+                } else {
+                    app.input = name;
+                    app.update_command_filtering();
+                }
+            } else {
+                let input = app.submit_input();
+                app.update_command_filtering();
+                handle_submitted_input(input, app, settings, cwd, event_sender);
+            }
         }
         KeyCode::Esc => {
             app.input.clear();
+            app.update_command_filtering();
         }
         KeyCode::Up => {
-            app.scroll_up();
+            if !app.filtered_commands.is_empty() {
+                if app.selected_command_index > 0 {
+                    app.selected_command_index -= 1;
+                } else {
+                    app.selected_command_index = app.filtered_commands.len().saturating_sub(1);
+                }
+            } else {
+                app.scroll_up();
+            }
         }
         KeyCode::Down => {
-            let (width, height) = terminal_size()?;
-            scroll_down_once(app, width, height);
+            if !app.filtered_commands.is_empty() {
+                 if app.selected_command_index < app.filtered_commands.len().saturating_sub(1) {
+                     app.selected_command_index += 1;
+                 } else {
+                     app.selected_command_index = 0;
+                 }
+            } else {
+                let (width, height) = terminal_size()?;
+                scroll_down_once(app, width, height);
+            }
         }
         KeyCode::PageUp => {
             let (_, height) = terminal_size()?;
@@ -447,6 +484,8 @@ where
     })
 }
 
+use anyhow::Context;
+
 fn handle_submitted_input(
     input: String,
     app: &mut ChatApp,
@@ -454,102 +493,129 @@ fn handle_submitted_input(
     cwd: &Path,
     event_sender: &TuiEventSender,
 ) {
-    if input == ":quit" {
-        app.should_quit = true;
-    } else if input == "/resume" {
-        let sessions = SessionStore::list(&settings.session.root, cwd).unwrap_or_default();
-        if sessions.is_empty() {
-            app.messages.push(tui::ChatMessage::Assistant("No previous sessions found.".to_string()));
-            *app.needs_rebuild.borrow_mut() = true;
-            app.set_processing(false);
-        } else {
-            app.available_sessions = sessions;
-            app.is_picking_session = true;
-            
-            let mut msg = String::from("Available sessions:\n");
-            for (i, s) in app.available_sessions.iter().enumerate() {
-                msg.push_str(&format!("[{}] {}\n", i + 1, s.title));
+    if input.starts_with('/') {
+        handle_slash_command(input, app, settings, cwd);
+    } else if app.is_picking_session {
+        if let Err(e) = handle_session_selection(input, app, settings, cwd) {
+             app.messages.push(tui::ChatMessage::Assistant(e.to_string()));
+             *app.needs_rebuild.borrow_mut() = true;
+        }
+        app.set_processing(false);
+    } else {
+        handle_chat_message(input, app, settings, cwd, event_sender);
+    }
+}
+
+fn handle_slash_command(
+    input: String,
+    app: &mut ChatApp,
+    settings: &Settings,
+    cwd: &Path,
+) {
+    match input.as_str() {
+        "/quit" => {
+            app.should_quit = true;
+        }
+        "/resume" => {
+            let sessions = SessionStore::list(&settings.session.root, cwd).unwrap_or_default();
+            if sessions.is_empty() {
+                app.messages.push(tui::ChatMessage::Assistant("No previous sessions found.".to_string()));
+                *app.needs_rebuild.borrow_mut() = true;
+                app.set_processing(false);
+            } else {
+                app.available_sessions = sessions;
+                app.is_picking_session = true;
+                
+                let mut msg = String::from("Available sessions:\n");
+                for (i, s) in app.available_sessions.iter().enumerate() {
+                    msg.push_str(&format!("[{}] {}\n", i + 1, s.title));
+                }
+                msg.push_str("\nEnter number to resume:");
+                app.messages.push(tui::ChatMessage::Assistant(msg));
+                *app.needs_rebuild.borrow_mut() = true;
+                app.set_processing(false);
             }
-            msg.push_str("\nEnter number to resume:");
-            app.messages.push(tui::ChatMessage::Assistant(msg));
+        }
+        _ => {
+            app.messages.push(tui::ChatMessage::Assistant(format!("Unknown command: {}", input)));
             *app.needs_rebuild.borrow_mut() = true;
             app.set_processing(false);
         }
-    } else if app.is_picking_session {
-        if let Ok(idx) = input.trim().parse::<usize>() {
-            if idx > 0 && idx <= app.available_sessions.len() {
-                let session = &app.available_sessions[idx - 1];
-                app.session_id = Some(session.id.clone());
-                app.session_name = session.title.clone();
-                app.is_picking_session = false;
-                
-                match SessionStore::new(&settings.session.root, cwd, Some(&session.id), None) {
-                    Ok(store) => {
-                        match store.replay_events() {
-                            Ok(events) => {
-                                app.messages.clear();
-                                for event in events {
-                                    match event {
-                                        SessionEvent::Message { message, .. } => {
-                                            let chat_msg = match message.role {
-                                                crate::core::Role::User => tui::ChatMessage::User(message.content),
-                                                crate::core::Role::Assistant => tui::ChatMessage::Assistant(message.content),
-                                                _ => continue,
-                                            };
-                                            app.messages.push(chat_msg);
-                                        }
-                                        SessionEvent::ToolCall { call } => {
-                                            app.messages.push(tui::ChatMessage::ToolCall {
-                                                name: call.name,
-                                                args: call.arguments.to_string(),
-                                                output: None,
-                                                is_error: None,
-                                            });
-                                        }
-                                        SessionEvent::ToolResult { id: _, is_error, output } => {
-                                            for msg in app.messages.iter_mut().rev() {
-                                                if let tui::ChatMessage::ToolCall { output: out, is_error: err, .. } = msg {
-                                                    if out.is_none() {
-                                                        *out = Some(output.clone());
-                                                        *err = Some(is_error);
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        SessionEvent::Thinking { content, .. } => {
-                                            app.messages.push(tui::ChatMessage::Thinking(content));
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                app.messages.push(tui::ChatMessage::Assistant(format!("Resumed session: {}", session.title)));
-                                *app.needs_rebuild.borrow_mut() = true;
-                            }
-                            Err(e) => {
-                                app.messages.push(tui::ChatMessage::Error(format!("Failed to replay session: {}", e)));
-                                *app.needs_rebuild.borrow_mut() = true;
-                            }
+    }
+}
+
+fn handle_session_selection(
+    input: String,
+    app: &mut ChatApp,
+    settings: &Settings,
+    cwd: &Path,
+) -> anyhow::Result<()> {
+    let idx = input.trim().parse::<usize>().context("Invalid number.")?;
+    
+    if idx == 0 || idx > app.available_sessions.len() {
+        anyhow::bail!("Invalid session index.");
+    }
+
+    let session = &app.available_sessions[idx - 1];
+    app.session_id = Some(session.id.clone());
+    app.session_name = session.title.clone();
+    app.is_picking_session = false;
+    
+    let store = SessionStore::new(&settings.session.root, cwd, Some(&session.id), None)
+        .context("Failed to load session store")?;
+
+    let events = store.replay_events().context("Failed to replay session")?;
+
+    app.messages.clear();
+    for event in events {
+        match event {
+            SessionEvent::Message { message, .. } => {
+                let chat_msg = match message.role {
+                    crate::core::Role::User => tui::ChatMessage::User(message.content),
+                    crate::core::Role::Assistant => tui::ChatMessage::Assistant(message.content),
+                    _ => continue,
+                };
+                app.messages.push(chat_msg);
+            }
+            SessionEvent::ToolCall { call } => {
+                app.messages.push(tui::ChatMessage::ToolCall {
+                    name: call.name,
+                    args: call.arguments.to_string(),
+                    output: None,
+                    is_error: None,
+                });
+            }
+            SessionEvent::ToolResult { id: _, is_error, output } => {
+                for msg in app.messages.iter_mut().rev() {
+                    if let tui::ChatMessage::ToolCall { output: out, is_error: err, .. } = msg {
+                        if out.is_none() {
+                            *out = Some(output.clone());
+                            *err = Some(is_error);
+                            break;
                         }
                     }
-                    Err(e) => {
-                        app.messages.push(tui::ChatMessage::Error(format!("Failed to load session store: {}", e)));
-                        *app.needs_rebuild.borrow_mut() = true;
-                    }
                 }
-            } else {
-                 app.messages.push(tui::ChatMessage::Assistant("Invalid session index.".to_string()));
-                 *app.needs_rebuild.borrow_mut() = true;
             }
-        } else {
-            app.messages.push(tui::ChatMessage::Assistant("Invalid number.".to_string()));
-            *app.needs_rebuild.borrow_mut() = true;
+            SessionEvent::Thinking { content, .. } => {
+                app.messages.push(tui::ChatMessage::Thinking(content));
+            }
+            _ => {}
         }
-        app.set_processing(false);
-    } else if input == ":thinking" {
-        // Placeholder command for parity with non-TUI mode.
-        app.set_processing(false);
-    } else if !input.is_empty() {
+    }
+    app.messages.push(tui::ChatMessage::Assistant(format!("Resumed session: {}", session.title)));
+    *app.needs_rebuild.borrow_mut() = true;
+
+    Ok(())
+}
+
+fn handle_chat_message(
+    input: String,
+    app: &mut ChatApp,
+    settings: &Settings,
+    cwd: &Path,
+    event_sender: &TuiEventSender,
+) {
+    if !input.is_empty() {
         let session_id = app.session_id.clone();
         let session_title = if session_id.is_none() {
             Some(input.chars().take(30).collect::<String>())

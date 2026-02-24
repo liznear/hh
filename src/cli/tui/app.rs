@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use ratatui::text::Line;
 
+use super::commands::{get_default_commands, SlashCommand};
 use super::event::TuiEvent;
 
 const SIDEBAR_WIDTH: u16 = 38;
@@ -43,10 +44,14 @@ pub struct ChatApp {
     pub needs_rebuild: RefCell<bool>,
     pub available_sessions: Vec<SessionMetadata>,
     pub is_picking_session: bool,
+    pub commands: Vec<SlashCommand>,
+    pub filtered_commands: Vec<SlashCommand>,
+    pub selected_command_index: usize,
 }
 
 impl ChatApp {
     pub fn new(session_name: String, cwd: &Path, context_budget: usize) -> Self {
+        let commands = get_default_commands();
         Self {
             messages: Vec::new(),
             input: String::new(),
@@ -65,6 +70,9 @@ impl ChatApp {
             needs_rebuild: RefCell::new(true),
             available_sessions: Vec::new(),
             is_picking_session: false,
+            commands,
+            filtered_commands: Vec::new(),
+            selected_command_index: 0,
         }
     }
 
@@ -248,6 +256,25 @@ impl ChatApp {
         } else {
             None
         };
+    }
+
+    pub fn update_command_filtering(&mut self) {
+        if self.input.starts_with('/') {
+            let query = self.input.trim();
+            self.filtered_commands = self
+                .commands
+                .iter()
+                .filter(|cmd| cmd.name.starts_with(query))
+                .cloned()
+                .collect();
+            // Reset selection if out of bounds or just reset to 0
+            if self.selected_command_index >= self.filtered_commands.len() {
+                self.selected_command_index = 0;
+            }
+        } else {
+            self.filtered_commands.clear();
+            self.selected_command_index = 0;
+        }
     }
 }
 
