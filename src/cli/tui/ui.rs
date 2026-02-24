@@ -197,7 +197,7 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                 for line in wrapped {
                     lines.push(Line::from(vec![
                         Span::raw("  "),
-                        Span::styled("▍", Style::default().fg(ACCENT).bg(INPUT_PANEL_BG)),
+                        Span::styled("▌", Style::default().fg(ACCENT).bg(INPUT_PANEL_BG)),
                         Span::styled(
                             format!(" {}", line),
                             Style::default().fg(TEXT_PRIMARY).bg(INPUT_PANEL_BG),
@@ -206,7 +206,7 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                 }
 
                 if let Some(section) = app.progress_sections.get(user_prompt_idx) {
-                    append_inlined_progress_lines(&mut lines, section.entries.as_slice());
+                    append_inlined_progress_lines(&mut lines, section.entries.as_slice(), width);
                 }
                 user_prompt_idx = user_prompt_idx.saturating_add(1);
             }
@@ -228,20 +228,32 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                 ]));
             }
             ChatMessage::ToolStart { name, args } => {
-                // Header line with name
-                lines.push(Line::from(vec![
-                    Span::styled("tool:", Style::default().fg(Color::Magenta)),
-                    Span::styled(name.clone(), Style::default().fg(Color::Magenta).bold()),
-                    Span::raw("> start"),
-                ]));
-                // Wrapped args on following lines with indentation
-                if !args.is_empty() {
-                    let wrapped = wrap_text(args, width.saturating_sub(4));
-                    for line in wrapped {
-                        lines.push(Line::from(vec![Span::styled(
-                            format!("    {}", line),
-                            Style::default().fg(Color::DarkGray),
-                        )]));
+                let prefix_len = 5 + name.len() + 7; // "tool:" + name + "> start"
+
+                if !args.is_empty() && !args.contains('\n') && prefix_len + 1 + args.len() <= width
+                {
+                    lines.push(Line::from(vec![
+                        Span::styled("tool:", Style::default().fg(Color::Magenta)),
+                        Span::styled(name.clone(), Style::default().fg(Color::Magenta).bold()),
+                        Span::raw("> start "),
+                        Span::styled(args.clone(), Style::default().fg(Color::DarkGray)),
+                    ]));
+                } else {
+                    // Header line with name
+                    lines.push(Line::from(vec![
+                        Span::styled("tool:", Style::default().fg(Color::Magenta)),
+                        Span::styled(name.clone(), Style::default().fg(Color::Magenta).bold()),
+                        Span::raw("> start"),
+                    ]));
+                    // Wrapped args on following lines with indentation
+                    if !args.is_empty() {
+                        let wrapped = wrap_text(args, width.saturating_sub(4));
+                        for line in wrapped {
+                            lines.push(Line::from(vec![Span::styled(
+                                format!("    {}", line),
+                                Style::default().fg(Color::DarkGray),
+                            )]));
+                        }
                     }
                 }
             }
@@ -252,28 +264,45 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
             } => {
                 let status_color = if *is_error { Color::Red } else { Color::Green };
                 let status = if *is_error { "error" } else { "ok" };
-                // Header line with name and status
-                lines.push(Line::from(vec![
-                    Span::styled("tool:", Style::default().fg(Color::Magenta)),
-                    Span::styled(name.clone(), Style::default().fg(Color::Magenta).bold()),
-                    Span::raw("> "),
-                    Span::styled(status, Style::default().fg(status_color).bold()),
-                ]));
-                // Wrapped output on following lines with indentation
-                if !output.is_empty() {
-                    let wrapped = wrap_text(output, width.saturating_sub(4));
-                    let display_lines: Vec<_> = wrapped.into_iter().take(15).collect();
-                    for line in display_lines {
-                        lines.push(Line::from(vec![Span::styled(
-                            format!("    {}", line),
-                            Style::default().fg(Color::DarkGray),
-                        )]));
-                    }
-                    if output.len() > MAX_TOOL_OUTPUT_LEN {
-                        lines.push(Line::from(vec![Span::styled(
-                            "    [... truncated ...]",
-                            Style::default().fg(Color::DarkGray).italic(),
-                        )]));
+
+                let prefix_len = 5 + name.len() + 2 + status.len(); // "tool:" + name + "> " + status
+
+                if !output.is_empty()
+                    && !output.contains('\n')
+                    && prefix_len + 1 + output.len() <= width
+                {
+                    lines.push(Line::from(vec![
+                        Span::styled("tool:", Style::default().fg(Color::Magenta)),
+                        Span::styled(name.clone(), Style::default().fg(Color::Magenta).bold()),
+                        Span::raw("> "),
+                        Span::styled(status, Style::default().fg(status_color).bold()),
+                        Span::raw(" "),
+                        Span::styled(output.clone(), Style::default().fg(Color::DarkGray)),
+                    ]));
+                } else {
+                    // Header line with name and status
+                    lines.push(Line::from(vec![
+                        Span::styled("tool:", Style::default().fg(Color::Magenta)),
+                        Span::styled(name.clone(), Style::default().fg(Color::Magenta).bold()),
+                        Span::raw("> "),
+                        Span::styled(status, Style::default().fg(status_color).bold()),
+                    ]));
+                    // Wrapped output on following lines with indentation
+                    if !output.is_empty() {
+                        let wrapped = wrap_text(output, width.saturating_sub(4));
+                        let display_lines: Vec<_> = wrapped.into_iter().take(15).collect();
+                        for line in display_lines {
+                            lines.push(Line::from(vec![Span::styled(
+                                format!("    {}", line),
+                                Style::default().fg(Color::DarkGray),
+                            )]));
+                        }
+                        if output.len() > MAX_TOOL_OUTPUT_LEN {
+                            lines.push(Line::from(vec![Span::styled(
+                                "    [... truncated ...]",
+                                Style::default().fg(Color::DarkGray).italic(),
+                            )]));
+                        }
                     }
                 }
             }
@@ -370,7 +399,11 @@ fn parse_markdown_spans(text: &str) -> Vec<Span<'static>> {
     spans
 }
 
-fn append_inlined_progress_lines(lines: &mut Vec<Line<'static>>, entries: &[ProgressEntry]) {
+fn append_inlined_progress_lines(
+    lines: &mut Vec<Line<'static>>,
+    entries: &[ProgressEntry],
+    width: usize,
+) {
     if entries.is_empty() {
         lines.push(Line::from(Span::styled(
             "  waiting for activity...",
@@ -380,17 +413,34 @@ fn append_inlined_progress_lines(lines: &mut Vec<Line<'static>>, entries: &[Prog
     }
 
     for entry in entries {
-        append_progress_entry(lines, entry, false);
+        append_progress_entry(lines, entry, false, width);
     }
 }
 
-fn append_progress_entry(lines: &mut Vec<Line<'static>>, entry: &ProgressEntry, _for_modal: bool) {
+fn append_progress_entry(
+    lines: &mut Vec<Line<'static>>,
+    entry: &ProgressEntry,
+    _for_modal: bool,
+    width: usize,
+) {
+    let available_width = width.saturating_sub(4).max(1);
+
     match entry {
         ProgressEntry::Thinking(text) => {
-            lines.push(Line::from(vec![
-                Span::styled("  Thinking: ", Style::default().fg(THINKING_LABEL).italic()),
-                Span::styled(text.clone(), Style::default().fg(THINKING_LABEL).bold()),
-            ]));
+            let wrapped = wrap_text(text, available_width);
+            for (i, line) in wrapped.iter().enumerate() {
+                if i == 0 {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Thinking: ", Style::default().fg(THINKING_LABEL).italic()),
+                        Span::styled(line.clone(), Style::default().fg(THINKING_LABEL).bold()),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::raw("            "), // "  Thinking: " is 12 chars
+                        Span::styled(line.clone(), Style::default().fg(THINKING_LABEL).bold()),
+                    ]));
+                }
+            }
         }
         ProgressEntry::ToolCall {
             label, is_error, ..
@@ -398,24 +448,55 @@ fn append_progress_entry(lines: &mut Vec<Line<'static>>, entry: &ProgressEntry, 
             if let Some(is_error) = is_error {
                 let symbol = if *is_error { "x" } else { "✓" };
                 let color = if *is_error { Color::Red } else { INPUT_ACCENT };
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(symbol, Style::default().fg(color).bold()),
-                    Span::raw(" "),
-                    Span::styled(label.clone(), Style::default().fg(TEXT_SECONDARY)),
-                ]));
+                let wrapped = wrap_text(label, available_width);
+
+                for (i, line) in wrapped.iter().enumerate() {
+                    if i == 0 {
+                        lines.push(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(symbol, Style::default().fg(color).bold()),
+                            Span::raw(" "),
+                            Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
+                        ]));
+                    } else {
+                        lines.push(Line::from(vec![
+                            Span::raw("    "), // Indent 4
+                            Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
+                        ]));
+                    }
+                }
             } else {
-                lines.push(Line::from(vec![
-                    Span::styled("  -> ", Style::default().fg(TEXT_MUTED)),
-                    Span::styled(label.clone(), Style::default().fg(TEXT_SECONDARY)),
-                ]));
+                let wrapped = wrap_text(label, available_width.saturating_sub(1)); // "->" is 2 chars + spaces
+                for (i, line) in wrapped.iter().enumerate() {
+                    if i == 0 {
+                        lines.push(Line::from(vec![
+                            Span::styled("  -> ", Style::default().fg(TEXT_MUTED)),
+                            Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
+                        ]));
+                    } else {
+                        lines.push(Line::from(vec![
+                            Span::raw("     "), // "  -> " is 5 chars
+                            Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
+                        ]));
+                    }
+                }
             }
         }
         ProgressEntry::Note(text) => {
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(text.clone(), Style::default().fg(TEXT_MUTED)),
-            ]));
+            let wrapped = wrap_text(text, available_width);
+            for (i, line) in wrapped.iter().enumerate() {
+                if i == 0 {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(line.clone(), Style::default().fg(TEXT_MUTED)),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(line.clone(), Style::default().fg(TEXT_MUTED)),
+                    ]));
+                }
+            }
         }
     }
 }
@@ -585,7 +666,7 @@ fn render_processing_indicator(f: &mut Frame, app: &ChatApp, area: Rect) {
         } else {
             Style::default().fg(TEXT_MUTED)
         };
-        spans.push(Span::styled("■", style));
+        spans.push(Span::styled("█", style));
     }
 
     spans.push(Span::raw("  "));
