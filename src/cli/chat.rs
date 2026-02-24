@@ -505,6 +505,7 @@ where
         permissions,
         max_steps: settings.agent.max_steps,
         model: settings.provider.model,
+        system_prompt: settings.agent.resolved_system_prompt(),
         session,
         events,
     })
@@ -693,6 +694,7 @@ mod tests {
             agent: AgentSettings {
                 max_steps: 10,
                 token_budget: 1000,
+                system_prompt: None,
             },
             provider: ProviderSettings {
                 base_url: "http://localhost:1234".to_string(),

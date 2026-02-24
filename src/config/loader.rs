@@ -20,6 +20,7 @@ pub fn load_settings(cwd: &std::path::Path) -> anyhow::Result<Settings> {
     override_from_env(&mut settings.provider.model, "HH_MODEL");
     override_from_env(&mut settings.provider.base_url, "HH_BASE_URL");
     override_from_env(&mut settings.provider.api_key_env, "HH_API_KEY_ENV");
+    override_optional_from_env(&mut settings.agent.system_prompt, "HH_SYSTEM_PROMPT");
 
     Ok(settings)
 }
@@ -49,6 +50,12 @@ fn merge_settings_file(settings: &mut Settings, path: &std::path::Path) -> anyho
 fn override_from_env(target: &mut String, key: &str) {
     if let Ok(value) = env::var(key) {
         *target = value;
+    }
+}
+
+fn override_optional_from_env(target: &mut Option<String>, key: &str) {
+    if let Ok(value) = env::var(key) {
+        *target = Some(value);
     }
 }
 

@@ -19,6 +19,7 @@ where
     pub permissions: PermissionMatcher,
     pub max_steps: usize,
     pub model: String,
+    pub system_prompt: String,
     pub session: SessionStore,
     pub events: E,
 }
@@ -36,6 +37,24 @@ where
             messages: self.session.replay_messages()?,
             step: 0,
         };
+
+        if state
+            .messages
+            .iter()
+            .all(|message| message.role != Role::System)
+            && !self.system_prompt.trim().is_empty()
+        {
+            let system_message = Message {
+                role: Role::System,
+                content: self.system_prompt.clone(),
+                tool_call_id: None,
+            };
+            state.push(system_message.clone());
+            self.session.append(&SessionEvent::Message {
+                id: event_id(),
+                message: system_message,
+            })?;
+        }
 
         let user_message = Message {
             role: Role::User,

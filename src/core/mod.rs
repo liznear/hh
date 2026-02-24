@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod system_prompt;
 pub mod traits;
 pub mod types;
 

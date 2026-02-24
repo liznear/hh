@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::core::system_prompt::default_system_prompt;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     pub provider: ProviderSettings,
@@ -31,6 +33,8 @@ impl Default for ProviderSettings {
 pub struct AgentSettings {
     pub max_steps: usize,
     pub token_budget: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
 }
 
 impl Default for AgentSettings {
@@ -38,7 +42,17 @@ impl Default for AgentSettings {
         Self {
             max_steps: 12,
             token_budget: 32_000,
+            system_prompt: None,
         }
+    }
+}
+
+impl AgentSettings {
+    pub fn resolved_system_prompt(&self) -> String {
+        self.system_prompt
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(default_system_prompt)
     }
 }
 
