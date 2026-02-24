@@ -19,6 +19,8 @@ crossterm = "0.28"
 toml = "0.8"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 scraper = "0.22"
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+syntect-tui = "3.0"
 urlencoding = "2.1"
 
 [dev-dependencies]

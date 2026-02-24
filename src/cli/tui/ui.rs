@@ -9,6 +9,7 @@ use ratatui::{
 use serde_json::Value;
 
 use super::app::{ChatApp, ChatMessage};
+use super::markdown::markdown_to_lines;
 use super::tool_presentation::render_tool_start;
 
 const MAX_TOOL_OUTPUT_LEN: usize = 200;
@@ -359,129 +360,7 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
 
 /// Parse markdown text into styled lines with wrapping
 fn parse_markdown_lines(text: &str, width: usize) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-
-    for line in text.lines() {
-        let spans = parse_markdown_spans(line);
-        let wrapped = wrap_spans(&spans, width.saturating_sub(2));
-        for wrapped_line in wrapped {
-            let mut indented = vec![Span::raw("  ")];
-            indented.extend(wrapped_line);
-            lines.push(Line::from(indented));
-        }
-    }
-
-    lines
-}
-
-/// Parse inline markdown (bold, code) into spans
-fn parse_markdown_spans(text: &str) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut chars = text.chars().peekable();
-    let mut current = String::new();
-
-    while let Some(ch) = chars.next() {
-        if ch == '*' && chars.peek() == Some(&'*') {
-            // Bold text **...**
-            chars.next(); // consume second *
-            if !current.is_empty() {
-                spans.push(Span::raw(std::mem::take(&mut current)));
-            }
-            // Find closing **
-            let mut bold_text = String::new();
-            loop {
-                match chars.next() {
-                    Some('*') if chars.peek() == Some(&'*') => {
-                        chars.next(); // consume second *
-                        break;
-                    }
-                    Some(c) => bold_text.push(c),
-                    None => {
-                        // Unclosed bold, treat as literal
-                        bold_text.insert(0, '*');
-                        bold_text.insert(0, '*');
-                        spans.push(Span::raw(bold_text));
-                        return spans;
-                    }
-                }
-            }
-            spans.push(Span::styled(bold_text, Style::default().bold()));
-        } else if ch == '`' {
-            // Inline code `...`
-            if !current.is_empty() {
-                spans.push(Span::raw(std::mem::take(&mut current)));
-            }
-            let mut code_text = String::new();
-            loop {
-                match chars.next() {
-                    Some('`') => break,
-                    Some(c) => code_text.push(c),
-                    None => {
-                        // Unclosed code, treat as literal
-                        code_text.insert(0, '`');
-                        spans.push(Span::raw(code_text));
-                        return spans;
-                    }
-                }
-            }
-            spans.push(Span::styled(code_text, Style::default().fg(Color::Yellow)));
-        } else {
-            current.push(ch);
-        }
-    }
-
-    if !current.is_empty() {
-        spans.push(Span::raw(current));
-    }
-
-    spans
-}
-
-/// Wrap spans to fit within a given width
-fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
-    if width == 0 {
-        return vec![spans.to_vec()];
-    }
-
-    let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
-    let mut current_line: Vec<Span<'static>> = Vec::new();
-    let mut current_line_len = 0;
-
-    for span in spans {
-        let span_style = span.style;
-        let span_text = span.content.as_ref();
-
-        for word in span_text.split_whitespace() {
-            let word_len = word.chars().count();
-
-            // Check if we need to start a new line
-            let space_needed = if current_line_len > 0 { 1 } else { 0 };
-
-            if current_line_len + space_needed + word_len > width && !current_line.is_empty() {
-                lines.push(std::mem::take(&mut current_line));
-                current_line_len = 0;
-            }
-
-            // Add space before word if not first word in line
-            if current_line_len > 0 {
-                current_line.push(Span::raw(" "));
-                current_line_len += 1;
-            }
-
-            current_line.push(Span::styled(word.to_string(), span_style));
-            current_line_len += word_len;
-        }
-    }
-
-    if !current_line.is_empty() {
-        lines.push(current_line);
-    }
-
-    if lines.is_empty() {
-        lines.push(vec![]);
-    }
-
-    lines
+    markdown_to_lines(text, width)
 }
 
 /// Wrap text to a given width, returning a vector of lines.

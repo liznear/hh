@@ -2,6 +2,7 @@ mod app;
 mod commands;
 mod debug;
 mod event;
+mod markdown;
 mod terminal;
 mod tool_presentation;
 mod ui;
