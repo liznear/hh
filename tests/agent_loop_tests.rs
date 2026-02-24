@@ -104,7 +104,7 @@ async fn agent_loop_stops_on_final_answer() {
     std::fs::create_dir_all(&cwd).expect("mkdir");
 
     let settings = Settings::default();
-    let session = SessionStore::for_workspace(temp.path(), &cwd).expect("session");
+    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
 
     let agent = AgentLoop {
         provider,
@@ -165,7 +165,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
     std::fs::create_dir_all(&cwd).expect("mkdir");
 
     let settings = Settings::default();
-    let session = SessionStore::for_workspace(temp.path(), &cwd).expect("session");
+    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
     let events = RecordingEvents::default();
 
     let agent = AgentLoop {
