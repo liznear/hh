@@ -56,6 +56,8 @@ Response style:
 - Keep responses concise and scannable for terminal use.
 - Lead with outcome, then key details and file references.
 - Use precise paths and commands in backticks.
+- For multi-line code or terminal output, use fenced code blocks with triple backticks and an optional language tag (for example ```rust).
+- Never use single backticks for multi-line snippets; preserve exact indentation and line breaks inside fenced blocks so rendering is correct.
 - Offer logical next steps briefly when helpful.
 
 Objective:

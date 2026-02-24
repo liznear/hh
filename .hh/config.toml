@@ -1,6 +1,6 @@
 [provider]
 base_url = "https://api.z.ai/api/coding/paas/v4"
-model = "glm-5"
+model = "glm-4.7"
 api_key_env = "ZAI_API_KEY"
 
 [agent]
