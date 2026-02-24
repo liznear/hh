@@ -1,10 +1,10 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Stylize,
     style::{Color, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
-    Frame,
 };
 use serde_json::Value;
 
@@ -54,8 +54,6 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
         ])
         .split(main_area);
 
-    // Issue 1: Fix background color mismatch
-    // Render the page background over the entire main column area to cover padding
     f.render_widget(
         Block::default().style(Style::default().bg(PAGE_BG)),
         columns[0],
@@ -269,7 +267,7 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
             ChatMessage::Assistant(text) => {
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::raw("  "), // Issue 2: Match left padding
+                    Span::raw("  "),
                     Span::styled("Assistant", Style::default().fg(TEXT_SECONDARY).bold()),
                 ]));
                 for line in parse_markdown_lines(text, width) {
@@ -299,7 +297,7 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
             ChatMessage::ToolCall {
                 name,
                 args,
-                output,
+                output: _,
                 is_error,
             } => {
                 let available_width = width.saturating_sub(4).max(1);
@@ -310,30 +308,9 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                 let label = tool_view.line;
 
                 if let Some(error) = is_error {
-                    // Tool completed
                     let symbol = if *error { "x" } else { "✓" };
                     let color = if *error { Color::Red } else { INPUT_ACCENT };
-
-                    // Format label: "Name output_snippet"
-                    // Wait, render_tool_start already formats "Read path" etc.
-                    // We just want to append the output snippet if possible, or just show the label.
-                    // The original ProgressEntry logic:
-                    // label: format!("{} {}", name, truncate_text(output, 80))
-                    // But that lost the "Read path" args info!
-                    // If we want to keep args info, we should use the label from render_tool_start.
-                    // But if it's done, maybe we want to show result?
-                    // "✓ Read ./src/main.rs" is better than "✓ read src code..."
-
-                    let display_label = if let Some(_out) = output {
-                        // If we want to show output, we can append it?
-                        // But compact view usually implies "Action completed".
-                        // Let's stick to the Action Label (e.g. "Read ./src/main.rs")
-                        label.clone()
-                    } else {
-                        label.clone()
-                    };
-
-                    let wrapped = wrap_text(&display_label, available_width);
+                    let wrapped = wrap_text(&label, available_width);
                     for (i, line) in wrapped.iter().enumerate() {
                         if i == 0 {
                             lines.push(Line::from(vec![
@@ -350,7 +327,6 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                         }
                     }
                 } else {
-                    // Tool running
                     let wrapped = wrap_text(&label, available_width.saturating_sub(1)); // "->" is 2 chars + spaces
                     for (i, line) in wrapped.iter().enumerate() {
                         if i == 0 {
@@ -387,15 +363,6 @@ fn parse_markdown_lines(text: &str, width: usize) -> Vec<Line<'static>> {
 
     for line in text.lines() {
         let spans = parse_markdown_spans(line);
-        // Wrap the spans to fit width
-        // Issue 2: Assistant content needs indentation too?
-        // If we indent header "  Assistant", we should indent content?
-        // User message content " ▌ message".
-        // Let's verify what the user wants. "The left padding ... should be the same."
-        // If "Assistant" is at 2 spaces.
-        // Content should probably be at 2 spaces too.
-        // So we should indent wrapped lines by 2 spaces.
-
         let wrapped = wrap_spans(&spans, width.saturating_sub(2));
         for wrapped_line in wrapped {
             let mut indented = vec![Span::raw("  ")];

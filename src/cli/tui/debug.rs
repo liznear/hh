@@ -2,7 +2,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
 
-use ratatui::{backend::TestBackend, Terminal};
+use ratatui::{Terminal, backend::TestBackend};
 
 use super::app::ChatApp;
 use super::ui;

@@ -29,23 +29,19 @@ impl SessionStore {
         let dir = root.join(&workspace_id);
         fs::create_dir_all(&dir)?;
 
-        // Migration: check if old session file exists at root level (parent of dir)
-        // Wait, old path was root.join(format!("{}.jsonl", session_id)); where session_id IS workspace_key.
-        // So old file is root/<workspace_id>.jsonl
         let old_file = root.join(format!("{}.jsonl", workspace_id));
         if old_file.exists() {
-            // Migrate old session to new format
             let migration_id = Uuid::new_v4().to_string();
             let new_file = dir.join(format!("{}.jsonl", migration_id));
             fs::rename(&old_file, &new_file)?;
 
-            // Create metadata for migrated session
+            let timestamp = now();
             let meta_file = dir.join(format!("{}.meta.json", migration_id));
             let metadata = SessionMetadata {
                 id: migration_id.clone(),
                 title: "Migrated Session".to_string(),
-                created_at: now(),
-                last_updated_at: now(),
+                created_at: timestamp,
+                last_updated_at: timestamp,
             };
             let f = fs::File::create(&meta_file)?;
             serde_json::to_writer(f, &metadata)?;
@@ -63,13 +59,15 @@ impl SessionStore {
             id: session_id.clone(),
         };
 
-        // If creating new session (file doesn't exist) and title is provided
-        if !store.file.exists() && let Some(title) = title {
+        if !store.file.exists()
+            && let Some(title) = title
+        {
+            let timestamp = now();
             store.write_metadata(SessionMetadata {
                 id: session_id,
                 title,
-                created_at: now(),
-                last_updated_at: now(),
+                created_at: timestamp,
+                last_updated_at: timestamp,
             })?;
         }
 
@@ -90,16 +88,12 @@ impl SessionStore {
             if path
                 .file_name()
                 .is_some_and(|n| n.to_string_lossy().ends_with(".meta.json"))
+                && let Ok(file) = fs::File::open(&path)
+                && let Ok(metadata) = serde_json::from_reader::<_, SessionMetadata>(file)
             {
-                // Read metadata
-                if let Ok(file) = fs::File::open(&path)
-                    && let Ok(metadata) = serde_json::from_reader::<_, SessionMetadata>(file)
-                {
-                    sessions.push(metadata);
-                }
+                sessions.push(metadata);
             }
         }
-        // Sort by last_updated_at desc
         sessions.sort_by(|a, b| b.last_updated_at.cmp(&a.last_updated_at));
         Ok(sessions)
     }
@@ -133,11 +127,6 @@ impl SessionStore {
         let line = serde_json::to_string(event)?;
         writeln!(file, "{}", line)?;
 
-        // Update timestamp on every append? Or maybe just occasionally?
-        // For now, every append ensures accuracy.
-        // We ignore errors on metadata update to not break the chat flow if possible,
-        // but here we return Result so we should probably handle it.
-        // However, if metadata file doesn't exist (e.g. legacy or error), we might skip.
         if self.metadata_file.exists() {
             let _ = self.update_timestamp();
         }
@@ -183,7 +172,6 @@ impl SessionStore {
                 Ok(event) => events.push(event),
                 Err(e) => {
                     eprintln!("Failed to parse session line: {}", e);
-                    continue;
                 }
             }
         }

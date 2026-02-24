@@ -37,18 +37,15 @@ where
             step: 0,
         };
 
-        state.push(Message {
+        let user_message = Message {
             role: Role::User,
-            content: prompt.clone(),
+            content: prompt,
             tool_call_id: None,
-        });
+        };
+        state.push(user_message.clone());
         self.session.append(&SessionEvent::Message {
             id: event_id(),
-            message: Message {
-                role: Role::User,
-                content: prompt,
-                tool_call_id: None,
-            },
+            message: user_message,
         })?;
 
         while state.step < self.max_steps {
@@ -95,14 +92,7 @@ where
 
             self.session.append(&SessionEvent::Message {
                 id: event_id(),
-                message: Message {
-                    role: Role::Assistant,
-                    content: assistant.content.clone(),
-                    tool_call_id: None,
-                    // Note: thinking content is not part of the message content in most providers' history,
-                    // but we might want to store it in session if needed.
-                    // For now, SessionEvent::Thinking handles it.
-                },
+                message: assistant.clone(),
             })?;
             if !thinking_content.is_empty() {
                 self.session.append(&SessionEvent::Thinking {
@@ -125,6 +115,7 @@ where
                     Decision::Deny => {
                         let output = format!("tool denied: {}", call.name);
                         self.record_tool_error(&call, output, &mut state)?;
+                        continue;
                     }
                     Decision::Ask => {
                         self.events.on_tool_start(&call.name, &call.arguments);
@@ -141,13 +132,11 @@ where
                             self.record_tool_result(call.id.clone(), true, output, &mut state)?;
                             continue;
                         }
-
-                        self.execute_tool_call(&call, &mut state).await?;
                     }
-                    Decision::Allow => {
-                        self.execute_tool_call(&call, &mut state).await?;
-                    }
+                    Decision::Allow => {}
                 }
+
+                self.execute_tool_call(&call, &mut state).await?;
             }
 
             state.step += 1;

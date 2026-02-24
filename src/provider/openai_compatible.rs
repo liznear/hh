@@ -8,6 +8,8 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 use std::env;
 
+const THINKING_FIELDS: [&str; 3] = ["reasoning", "thinking", "reasoning_content"];
+
 pub struct OpenAiCompatibleProvider {
     base_url: String,
     model: String,
@@ -120,6 +122,30 @@ impl OpenAiCompatibleProvider {
         })
     }
 
+    async fn send_request(
+        &self,
+        req: &ProviderRequest,
+        stream: bool,
+        error_context: &str,
+    ) -> anyhow::Result<reqwest::Response> {
+        let response = self
+            .client
+            .post(self.endpoint())
+            .headers(self.auth_headers()?)
+            .json(&self.request_body(req, stream))
+            .send()
+            .await
+            .with_context(|| error_context.to_string())?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("provider error {}: {}", status, body);
+        }
+
+        Ok(response)
+    }
+
     async fn complete_stream_inner<F>(
         &self,
         req: ProviderRequest,
@@ -129,19 +155,8 @@ impl OpenAiCompatibleProvider {
         F: FnMut(ProviderStreamEvent) + Send,
     {
         let response = self
-            .client
-            .post(self.endpoint())
-            .headers(self.auth_headers()?)
-            .json(&self.request_body(&req, true))
-            .send()
-            .await
-            .context("provider stream request failed")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            bail!("provider error {}: {}", status, body);
-        }
+            .send_request(&req, true, "provider stream request failed")
+            .await?;
 
         let mut assistant = String::new();
         let mut thinking = String::new();
@@ -226,19 +241,8 @@ impl OpenAiCompatibleProvider {
 impl Provider for OpenAiCompatibleProvider {
     async fn complete(&self, req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
         let response = self
-            .client
-            .post(self.endpoint())
-            .headers(self.auth_headers()?)
-            .json(&self.request_body(&req, false))
-            .send()
-            .await
-            .context("provider request failed")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            bail!("provider error {}: {}", status, body);
-        }
+            .send_request(&req, false, "provider request failed")
+            .await?;
 
         let value: Value = response.json().await.context("invalid provider JSON")?;
         Self::parse_chat_response(&value)
@@ -305,15 +309,13 @@ fn parse_tool_calls(message: &serde_json::Map<String, Value>) -> anyhow::Result<
 }
 
 fn extract_thinking(message: &serde_json::Map<String, Value>) -> Option<String> {
-    ["reasoning", "thinking", "reasoning_content"]
-        .iter()
-        .find_map(|k| {
-            message
-                .get(*k)
-                .and_then(|v| v.as_str())
-                .filter(|v| !v.is_empty())
-                .map(ToString::to_string)
-        })
+    THINKING_FIELDS.iter().find_map(|k| {
+        message
+            .get(*k)
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .map(ToString::to_string)
+    })
 }
 
 fn apply_stream_chunk<F>(
@@ -342,7 +344,7 @@ fn apply_stream_chunk<F>(
         on_event(ProviderStreamEvent::AssistantDelta(content.to_string()));
     }
 
-    for key in ["reasoning", "thinking", "reasoning_content"] {
+    for key in THINKING_FIELDS {
         if let Some(text) = delta.get(key).and_then(|v| v.as_str()) {
             thinking.push_str(text);
             on_event(ProviderStreamEvent::ThinkingDelta(text.to_string()));

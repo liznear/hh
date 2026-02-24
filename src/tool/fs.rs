@@ -31,14 +31,8 @@ impl Tool for FsRead {
             .and_then(|v| v.as_str())
             .unwrap_or_default();
         match std::fs::read_to_string(path) {
-            Ok(content) => ToolResult {
-                is_error: false,
-                output: content,
-            },
-            Err(err) => ToolResult {
-                is_error: true,
-                output: err.to_string(),
-            },
+            Ok(content) => tool_ok(content),
+            Err(err) => tool_err(err),
         }
     }
 }
@@ -49,12 +43,7 @@ impl FsWrite {
     }
 
     fn within_workspace(&self, path: &Path) -> bool {
-        let path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.workspace_root.join(path)
-        };
-        path.starts_with(&self.workspace_root)
+        to_workspace_target(&self.workspace_root, path).starts_with(&self.workspace_root)
     }
 }
 
@@ -87,36 +76,20 @@ impl Tool for FsWrite {
             .unwrap_or_default();
 
         if !self.within_workspace(&path) {
-            return ToolResult {
-                is_error: true,
-                output: "write path is outside workspace".to_string(),
-            };
+            return tool_err("write path is outside workspace");
         }
 
-        let target = if path.is_absolute() {
-            path
-        } else {
-            self.workspace_root.join(path)
-        };
+        let target = to_workspace_target(&self.workspace_root, &path);
 
         if let Some(parent) = target.parent()
             && let Err(err) = std::fs::create_dir_all(parent)
         {
-            return ToolResult {
-                is_error: true,
-                output: err.to_string(),
-            };
+            return tool_err(err);
         }
 
         match std::fs::write(target, content) {
-            Ok(_) => ToolResult {
-                is_error: false,
-                output: "ok".to_string(),
-            },
-            Err(err) => ToolResult {
-                is_error: true,
-                output: err.to_string(),
-            },
+            Ok(_) => tool_ok("ok"),
+            Err(err) => tool_err(err),
         }
     }
 }
@@ -143,15 +116,9 @@ impl Tool for FsList {
                 for entry in entries.flatten() {
                     names.push(entry.path().display().to_string());
                 }
-                ToolResult {
-                    is_error: false,
-                    output: names.join("\n"),
-                }
+                tool_ok(names.join("\n"))
             }
-            Err(err) => ToolResult {
-                is_error: true,
-                output: err.to_string(),
-            },
+            Err(err) => tool_err(err),
         }
     }
 }
@@ -181,15 +148,9 @@ impl Tool for FsGlob {
                 for p in paths.flatten() {
                     out.push(p.display().to_string());
                 }
-                ToolResult {
-                    is_error: false,
-                    output: out.join("\n"),
-                }
+                tool_ok(out.join("\n"))
             }
-            Err(err) => ToolResult {
-                is_error: true,
-                output: err.to_string(),
-            },
+            Err(err) => tool_err(err),
         }
     }
 }
@@ -219,26 +180,37 @@ impl Tool for FsGrep {
             .unwrap_or_default();
         let re = match regex::Regex::new(pattern) {
             Ok(re) => re,
-            Err(err) => {
-                return ToolResult {
-                    is_error: true,
-                    output: err.to_string(),
-                };
-            }
+            Err(err) => return tool_err(err),
         };
 
         let mut results = Vec::new();
         if let Err(err) = walk_and_grep(&root, &re, &mut results) {
-            return ToolResult {
-                is_error: true,
-                output: err.to_string(),
-            };
+            return tool_err(err);
         }
 
-        ToolResult {
-            is_error: false,
-            output: results.join("\n"),
-        }
+        tool_ok(results.join("\n"))
+    }
+}
+
+fn to_workspace_target(workspace_root: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace_root.join(path)
+    }
+}
+
+fn tool_ok(output: impl Into<String>) -> ToolResult {
+    ToolResult {
+        is_error: false,
+        output: output.into(),
+    }
+}
+
+fn tool_err(err: impl ToString) -> ToolResult {
+    ToolResult {
+        is_error: true,
+        output: err.to_string(),
     }
 }
 

@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use ratatui::text::Line;
 
-use super::commands::{get_default_commands, SlashCommand};
+use super::commands::{SlashCommand, get_default_commands};
 use super::event::TuiEvent;
 
 const SIDEBAR_WIDTH: u16 = 38;
@@ -80,7 +80,7 @@ impl ChatApp {
         match event {
             TuiEvent::Thinking(text) => {
                 self.append_thinking_delta(text);
-                *self.needs_rebuild.borrow_mut() = true;
+                self.mark_dirty();
             }
             TuiEvent::ToolStart { name, args } => {
                 self.messages.push(ChatMessage::ToolCall {
@@ -89,7 +89,7 @@ impl ChatApp {
                     output: None,
                     is_error: None,
                 });
-                *self.needs_rebuild.borrow_mut() = true;
+                self.mark_dirty();
             }
             TuiEvent::ToolEnd {
                 name,
@@ -97,16 +97,16 @@ impl ChatApp {
                 output,
             } => {
                 self.complete_tool_call(name, *is_error, output);
-                *self.needs_rebuild.borrow_mut() = true;
+                self.mark_dirty();
             }
             TuiEvent::AssistantDelta(delta) => {
                 if let Some(ChatMessage::Assistant(existing)) = self.messages.last_mut() {
                     existing.push_str(delta);
-                    *self.needs_rebuild.borrow_mut() = true;
+                    self.mark_dirty();
                     return;
                 }
                 self.messages.push(ChatMessage::Assistant(delta.clone()));
-                *self.needs_rebuild.borrow_mut() = true;
+                self.mark_dirty();
             }
             TuiEvent::AssistantDone => {
                 self.set_processing(false);
@@ -114,7 +114,7 @@ impl ChatApp {
             TuiEvent::Error(msg) => {
                 self.messages.push(ChatMessage::Error(msg.clone()));
                 self.set_processing(false);
-                *self.needs_rebuild.borrow_mut() = true;
+                self.mark_dirty();
             }
             TuiEvent::Tick => {}
             TuiEvent::Key(_) => {}
@@ -131,7 +131,7 @@ impl ChatApp {
             self.messages.push(ChatMessage::User(input.clone()));
             self.set_processing(true);
             self.auto_scroll = true; // Follow the new response
-            *self.needs_rebuild.borrow_mut() = true;
+            self.mark_dirty();
         }
         input
     }
@@ -246,7 +246,6 @@ impl ChatApp {
                 return;
             }
         }
-        // If not found, ignore? or create new? ignoring is safer for now.
     }
 
     pub fn set_processing(&mut self, processing: bool) {
@@ -273,8 +272,15 @@ impl ChatApp {
             }
         } else {
             self.filtered_commands.clear();
+        }
+
+        if self.selected_command_index >= self.filtered_commands.len() {
             self.selected_command_index = 0;
         }
+    }
+
+    pub fn mark_dirty(&self) {
+        *self.needs_rebuild.borrow_mut() = true;
     }
 }
 
@@ -292,13 +298,10 @@ fn extract_todos(input: &str) -> Vec<String> {
             continue;
         }
 
-        let item = if let Some(rest) = trimmed.strip_prefix("- ") {
-            Some(rest)
-        } else if let Some(rest) = trimmed.strip_prefix("* ") {
-            Some(rest)
-        } else {
-            split_numbered_list(trimmed)
-        };
+        let item = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .or_else(|| split_numbered_list(trimmed));
 
         if let Some(todo) = item {
             let normalized = todo.trim();

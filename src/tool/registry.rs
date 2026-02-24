@@ -16,23 +16,24 @@ impl ToolRegistry {
         let mut tools: HashMap<String, Arc<dyn Tool>> = HashMap::new();
 
         if settings.tools.fs {
-            tools.insert("read".to_string(), Arc::new(FsRead));
-            tools.insert(
-                "write".to_string(),
-                Arc::new(FsWrite::new(workspace_root.to_path_buf())),
+            register(&mut tools, "read", FsRead);
+            register(
+                &mut tools,
+                "write",
+                FsWrite::new(workspace_root.to_path_buf()),
             );
-            tools.insert("list".to_string(), Arc::new(FsList));
-            tools.insert("glob".to_string(), Arc::new(FsGlob));
-            tools.insert("grep".to_string(), Arc::new(FsGrep));
+            register(&mut tools, "list", FsList);
+            register(&mut tools, "glob", FsGlob);
+            register(&mut tools, "grep", FsGrep);
         }
 
         if settings.tools.bash {
-            tools.insert("bash".to_string(), Arc::new(BashTool::new()));
+            register(&mut tools, "bash", BashTool::new());
         }
 
         if settings.tools.web {
-            tools.insert("web_fetch".to_string(), Arc::new(WebFetchTool::new()));
-            tools.insert("web_search".to_string(), Arc::new(WebSearchTool::new()));
+            register(&mut tools, "web_fetch", WebFetchTool::new());
+            register(&mut tools, "web_search", WebSearchTool::new());
         }
 
         Self { tools }
@@ -57,4 +58,8 @@ impl ToolRegistry {
         names.sort();
         names
     }
+}
+
+fn register<T: Tool + 'static>(tools: &mut HashMap<String, Arc<dyn Tool>>, name: &str, tool: T) {
+    tools.insert(name.to_string(), Arc::new(tool));
 }

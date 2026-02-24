@@ -10,7 +10,7 @@ use crate::config::Settings;
 use crate::core::agent::{AgentEvents, AgentLoop, NoopEvents};
 use crate::permission::PermissionMatcher;
 use crate::provider::openai_compatible::OpenAiCompatibleProvider;
-use crate::session::{SessionStore, SessionEvent};
+use crate::session::{SessionEvent, SessionStore};
 use crate::tool::registry::ToolRegistry;
 use uuid::Uuid;
 
@@ -119,7 +119,15 @@ pub async fn run_prompt_with_debug(
     let title_clone = title.clone();
 
     let agent_handle = tokio::spawn(async move {
-        let result = run_agent(settings_clone, &cwd_clone, prompt_clone, sender_clone.clone(), None, Some(title_clone)).await;
+        let result = run_agent(
+            settings_clone,
+            &cwd_clone,
+            prompt_clone,
+            sender_clone.clone(),
+            None,
+            Some(title_clone),
+        )
+        .await;
         if let Err(ref e) = result {
             sender_clone.send(TuiEvent::Error(e.to_string()));
         }
@@ -214,7 +222,11 @@ where
         }
         KeyCode::Enter => {
             let selected_name = if !app.filtered_commands.is_empty() {
-                Some(app.filtered_commands[app.selected_command_index].name.clone())
+                Some(
+                    app.filtered_commands[app.selected_command_index]
+                        .name
+                        .clone(),
+                )
             } else {
                 None
             };
@@ -251,11 +263,11 @@ where
         }
         KeyCode::Down => {
             if !app.filtered_commands.is_empty() {
-                 if app.selected_command_index < app.filtered_commands.len().saturating_sub(1) {
-                     app.selected_command_index += 1;
-                 } else {
-                     app.selected_command_index = 0;
-                 }
+                if app.selected_command_index < app.filtered_commands.len().saturating_sub(1) {
+                    app.selected_command_index += 1;
+                } else {
+                    app.selected_command_index = 0;
+                }
             } else {
                 let (width, height) = terminal_size()?;
                 scroll_down_once(app, width, height);
@@ -310,7 +322,16 @@ fn spawn_agent_task(
     let cwd = cwd.to_path_buf();
     let sender = event_sender.clone();
     tokio::spawn(async move {
-        if let Err(e) = run_agent(settings, &cwd, input, sender.clone(), session_id, session_title).await {
+        if let Err(e) = run_agent(
+            settings,
+            &cwd,
+            input,
+            sender.clone(),
+            session_id,
+            session_title,
+        )
+        .await
+        {
             sender.send(TuiEvent::Error(e.to_string()));
         }
     });
@@ -471,7 +492,12 @@ where
     let tool_registry = ToolRegistry::new(&settings, cwd);
     let permissions = PermissionMatcher::new(settings.clone());
     // Use the new session store constructor
-    let session = SessionStore::new(&settings.session.root, cwd, session_id.as_deref(), session_title)?;
+    let session = SessionStore::new(
+        &settings.session.root,
+        cwd,
+        session_id.as_deref(),
+        session_title,
+    )?;
 
     Ok(AgentLoop {
         provider,
@@ -497,8 +523,9 @@ fn handle_submitted_input(
         handle_slash_command(input, app, settings, cwd);
     } else if app.is_picking_session {
         if let Err(e) = handle_session_selection(input, app, settings, cwd) {
-             app.messages.push(tui::ChatMessage::Assistant(e.to_string()));
-             *app.needs_rebuild.borrow_mut() = true;
+            app.messages
+                .push(tui::ChatMessage::Assistant(e.to_string()));
+            app.mark_dirty();
         }
         app.set_processing(false);
     } else {
@@ -506,12 +533,7 @@ fn handle_submitted_input(
     }
 }
 
-fn handle_slash_command(
-    input: String,
-    app: &mut ChatApp,
-    settings: &Settings,
-    cwd: &Path,
-) {
+fn handle_slash_command(input: String, app: &mut ChatApp, settings: &Settings, cwd: &Path) {
     match input.as_str() {
         "/quit" => {
             app.should_quit = true;
@@ -519,26 +541,31 @@ fn handle_slash_command(
         "/resume" => {
             let sessions = SessionStore::list(&settings.session.root, cwd).unwrap_or_default();
             if sessions.is_empty() {
-                app.messages.push(tui::ChatMessage::Assistant("No previous sessions found.".to_string()));
-                *app.needs_rebuild.borrow_mut() = true;
+                app.messages.push(tui::ChatMessage::Assistant(
+                    "No previous sessions found.".to_string(),
+                ));
+                app.mark_dirty();
                 app.set_processing(false);
             } else {
                 app.available_sessions = sessions;
                 app.is_picking_session = true;
-                
+
                 let mut msg = String::from("Available sessions:\n");
                 for (i, s) in app.available_sessions.iter().enumerate() {
                     msg.push_str(&format!("[{}] {}\n", i + 1, s.title));
                 }
                 msg.push_str("\nEnter number to resume:");
                 app.messages.push(tui::ChatMessage::Assistant(msg));
-                *app.needs_rebuild.borrow_mut() = true;
+                app.mark_dirty();
                 app.set_processing(false);
             }
         }
         _ => {
-            app.messages.push(tui::ChatMessage::Assistant(format!("Unknown command: {}", input)));
-            *app.needs_rebuild.borrow_mut() = true;
+            app.messages.push(tui::ChatMessage::Assistant(format!(
+                "Unknown command: {}",
+                input
+            )));
+            app.mark_dirty();
             app.set_processing(false);
         }
     }
@@ -551,7 +578,7 @@ fn handle_session_selection(
     cwd: &Path,
 ) -> anyhow::Result<()> {
     let idx = input.trim().parse::<usize>().context("Invalid number.")?;
-    
+
     if idx == 0 || idx > app.available_sessions.len() {
         anyhow::bail!("Invalid session index.");
     }
@@ -560,7 +587,7 @@ fn handle_session_selection(
     app.session_id = Some(session.id.clone());
     app.session_name = session.title.clone();
     app.is_picking_session = false;
-    
+
     let store = SessionStore::new(&settings.session.root, cwd, Some(&session.id), None)
         .context("Failed to load session store")?;
 
@@ -585,16 +612,23 @@ fn handle_session_selection(
                     is_error: None,
                 });
             }
-            SessionEvent::ToolResult { id: _, is_error, output } => {
+            SessionEvent::ToolResult {
+                id: _,
+                is_error,
+                output,
+            } => {
                 for msg in app.messages.iter_mut().rev() {
-                    if let tui::ChatMessage::ToolCall { output: out, is_error: err, .. } = msg 
-                        && out.is_none() 
+                    if let tui::ChatMessage::ToolCall {
+                        output: out,
+                        is_error: err,
+                        ..
+                    } = msg
+                        && out.is_none()
                     {
                         *out = Some(output.clone());
                         *err = Some(is_error);
                         break;
                     }
-
                 }
             }
             SessionEvent::Thinking { content, .. } => {
@@ -603,8 +637,11 @@ fn handle_session_selection(
             _ => {}
         }
     }
-    app.messages.push(tui::ChatMessage::Assistant(format!("Resumed session: {}", session.title)));
-    *app.needs_rebuild.borrow_mut() = true;
+    app.messages.push(tui::ChatMessage::Assistant(format!(
+        "Resumed session: {}",
+        session.title
+    )));
+    app.mark_dirty();
 
     Ok(())
 }
@@ -623,7 +660,7 @@ fn handle_chat_message(
         } else {
             None
         };
-        
+
         let current_session_id = session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         if app.session_id.is_none() {
             app.session_id = Some(current_session_id.clone());
@@ -632,7 +669,14 @@ fn handle_chat_message(
             }
         }
 
-        spawn_agent_task(settings, cwd, input, event_sender, Some(current_session_id), session_title);
+        spawn_agent_task(
+            settings,
+            cwd,
+            input,
+            event_sender,
+            Some(current_session_id),
+            session_title,
+        );
     } else {
         app.set_processing(false);
     }
@@ -641,8 +685,8 @@ fn handle_chat_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use crate::config::settings::{AgentSettings, ProviderSettings, SessionSettings};
+    use tempfile::tempdir;
 
     fn create_dummy_settings(root: &Path) -> Settings {
         Settings {
@@ -675,9 +719,10 @@ mod tests {
             &settings.session.root,
             cwd,
             Some(session_id),
-            Some("Test Session".to_string())
-        ).unwrap();
-        
+            Some("Test Session".to_string()),
+        )
+        .unwrap();
+
         // Setup ChatApp
         let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -690,9 +735,12 @@ mod tests {
         assert!(app.is_processing);
 
         handle_submitted_input(input, &mut app, &settings, cwd, &event_sender);
-        
+
         // processing should be false after listing sessions
-        assert!(!app.is_processing, "Processing should be cleared after /resume lists sessions");
+        assert!(
+            !app.is_processing,
+            "Processing should be cleared after /resume lists sessions"
+        );
         assert!(app.is_picking_session);
 
         // Simulate picking session "1"
@@ -703,7 +751,10 @@ mod tests {
         handle_submitted_input(input, &mut app, &settings, cwd, &event_sender);
 
         // processing should be false after picking session
-        assert!(!app.is_processing, "Processing should be cleared after picking session");
+        assert!(
+            !app.is_processing,
+            "Processing should be cleared after picking session"
+        );
         assert!(!app.is_picking_session);
         // The session ID might not match if listing logic uses UUIDs or if index logic is tricky.
         // But we provided title "Test Session", so it should be listed.

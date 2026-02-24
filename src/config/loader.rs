@@ -14,33 +14,12 @@ pub fn project_config_path(cwd: &std::path::Path) -> PathBuf {
 pub fn load_settings(cwd: &std::path::Path) -> anyhow::Result<Settings> {
     let mut settings = Settings::default();
 
-    let global_path = global_config_path();
-    if global_path.exists() {
-        let content = fs::read_to_string(&global_path)
-            .with_context(|| format!("failed reading {}", global_path.display()))?;
-        let value: Settings = toml::from_str(&content)
-            .with_context(|| format!("failed parsing {}", global_path.display()))?;
-        merge_settings(&mut settings, value);
-    }
+    merge_settings_file(&mut settings, &global_config_path())?;
+    merge_settings_file(&mut settings, &project_config_path(cwd))?;
 
-    let project_path = project_config_path(cwd);
-    if project_path.exists() {
-        let content = fs::read_to_string(&project_path)
-            .with_context(|| format!("failed reading {}", project_path.display()))?;
-        let value: Settings = toml::from_str(&content)
-            .with_context(|| format!("failed parsing {}", project_path.display()))?;
-        merge_settings(&mut settings, value);
-    }
-
-    if let Ok(model) = env::var("HH_MODEL") {
-        settings.provider.model = model;
-    }
-    if let Ok(base_url) = env::var("HH_BASE_URL") {
-        settings.provider.base_url = base_url;
-    }
-    if let Ok(api_key_env) = env::var("HH_API_KEY_ENV") {
-        settings.provider.api_key_env = api_key_env;
-    }
+    override_from_env(&mut settings.provider.model, "HH_MODEL");
+    override_from_env(&mut settings.provider.base_url, "HH_BASE_URL");
+    override_from_env(&mut settings.provider.api_key_env, "HH_API_KEY_ENV");
 
     Ok(settings)
 }
@@ -51,6 +30,26 @@ fn merge_settings(base: &mut Settings, override_with: Settings) {
     base.tools = override_with.tools;
     base.permission = override_with.permission;
     base.session.root = expand_path(&override_with.session.root);
+}
+
+fn merge_settings_file(settings: &mut Settings, path: &std::path::Path) -> anyhow::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed reading {}", path.display()))?;
+    let value: Settings =
+        toml::from_str(&content).with_context(|| format!("failed parsing {}", path.display()))?;
+    merge_settings(settings, value);
+
+    Ok(())
+}
+
+fn override_from_env(target: &mut String, key: &str) {
+    if let Ok(value) = env::var(key) {
+        *target = value;
+    }
 }
 
 fn expand_path(path: &std::path::Path) -> PathBuf {
