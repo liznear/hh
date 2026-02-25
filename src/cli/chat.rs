@@ -215,7 +215,12 @@ where
     }
 
     if key_event.code == KeyCode::Char('c') && key_event.modifiers.contains(KeyModifiers::CONTROL) {
-        app.should_quit = true;
+        if app.input.is_empty() {
+            app.should_quit = true;
+        } else {
+            app.clear_input();
+            app.update_command_filtering();
+        }
         return Ok(());
     }
 
@@ -863,6 +868,53 @@ mod tests {
         assert_eq!(app.input, "hello\n");
         assert!(app.messages.is_empty());
         assert!(!app.is_processing);
+    }
+
+    #[test]
+    fn test_ctrl_c_clears_non_empty_input() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        app.set_input("hello".to_string());
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+
+        assert!(app.input.is_empty());
+        assert_eq!(app.cursor, 0);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn test_ctrl_c_quits_when_input_is_empty() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+
+        assert!(app.should_quit);
     }
 
     #[test]
