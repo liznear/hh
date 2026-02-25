@@ -45,6 +45,8 @@ impl Tool for EditTool {
         ToolSchema {
             name: "edit".to_string(),
             description: "Edit a file by replacing an exact string".to_string(),
+            capability: Some("edit".to_string()),
+            mutating: Some(true),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -132,23 +134,13 @@ impl Tool for EditTool {
     }
 }
 
-fn tool_ok(output: impl Into<String>) -> ToolResult {
-    ToolResult {
-        is_error: false,
-        output: output.into(),
-    }
-}
-
 fn tool_ok_json(output: &impl Serialize) -> ToolResult {
-    match serde_json::to_string(output) {
-        Ok(serialized) => tool_ok(serialized),
+    match serde_json::to_value(output) {
+        Ok(value) => ToolResult::ok_json("ok", value),
         Err(err) => tool_err(format!("failed to serialize output: {err}")),
     }
 }
 
 fn tool_err(err: impl ToString) -> ToolResult {
-    ToolResult {
-        is_error: true,
-        output: err.to_string(),
-    }
+    ToolResult::err_text("error", err.to_string())
 }

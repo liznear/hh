@@ -485,7 +485,9 @@ fn create_agent_loop<E>(
     events: E,
     session_id: Option<String>,
     session_title: Option<String>,
-) -> anyhow::Result<AgentLoop<OpenAiCompatibleProvider, E>>
+) -> anyhow::Result<
+    AgentLoop<OpenAiCompatibleProvider, E, ToolRegistry, PermissionMatcher, SessionStore>,
+>
 where
     E: AgentEvents,
 {
@@ -496,7 +498,8 @@ where
     );
 
     let tool_registry = ToolRegistry::new(&settings, cwd);
-    let permissions = PermissionMatcher::new(settings.clone());
+    let tool_schemas = tool_registry.schemas();
+    let permissions = PermissionMatcher::new(settings.clone(), &tool_schemas);
     // Use the new session store constructor
     let session = SessionStore::new(
         &settings.session.root,
@@ -507,8 +510,8 @@ where
 
     Ok(AgentLoop {
         provider,
-        tool_registry,
-        permissions,
+        tools: tool_registry,
+        approvals: permissions,
         max_steps: settings.agent.max_steps,
         model: settings.provider.model,
         system_prompt: settings.agent.resolved_system_prompt(),
@@ -623,7 +626,9 @@ fn handle_session_selection(
                 id: _,
                 is_error,
                 output,
+                result,
             } => {
+                let rendered_output = result.map(|value| value.output).unwrap_or(output);
                 for msg in app.messages.iter_mut().rev() {
                     if let tui::ChatMessage::ToolCall {
                         output: out,
@@ -632,7 +637,7 @@ fn handle_session_selection(
                     } = msg
                         && out.is_none()
                     {
-                        *out = Some(output.clone());
+                        *out = Some(rendered_output.clone());
                         *err = Some(is_error);
                         break;
                     }
@@ -700,6 +705,7 @@ mod tests {
             agent: AgentSettings {
                 max_steps: 10,
                 token_budget: 1000,
+                sub_agent_max_depth: 2,
                 system_prompt: None,
             },
             provider: ProviderSettings {

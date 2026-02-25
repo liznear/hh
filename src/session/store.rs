@@ -1,4 +1,5 @@
 use crate::core::{Message, Role};
+use crate::core::{SessionReader, SessionSink};
 use crate::session::types::{SessionEvent, SessionMetadata};
 use anyhow::Context;
 use std::fs::{self, OpenOptions};
@@ -141,10 +142,13 @@ impl SessionStore {
         for event in events {
             match event {
                 SessionEvent::Message { message, .. } => messages.push(message),
-                SessionEvent::ToolResult { id, output, .. } => {
+                SessionEvent::ToolResult {
+                    id, output, result, ..
+                } => {
+                    let content = result.map(|value| value.output).unwrap_or(output);
                     messages.push(Message {
                         role: Role::Tool,
-                        content: output,
+                        content,
                         tool_call_id: Some(id),
                     });
                 }
@@ -181,6 +185,18 @@ impl SessionStore {
 
     pub fn file(&self) -> &Path {
         &self.file
+    }
+}
+
+impl SessionSink for SessionStore {
+    fn append(&self, event: &SessionEvent) -> anyhow::Result<()> {
+        self.append(event)
+    }
+}
+
+impl SessionReader for SessionStore {
+    fn replay_messages(&self) -> anyhow::Result<Vec<Message>> {
+        self.replay_messages()
     }
 }
 

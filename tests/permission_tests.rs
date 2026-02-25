@@ -1,10 +1,16 @@
 use hh::config::settings::{PermissionSettings, Settings};
 use hh::permission::{Decision, PermissionMatcher};
+use hh::tool::registry::ToolRegistry;
 
 #[test]
 fn default_permission_matrix_matches_policy() {
     let settings = Settings::default();
-    let matcher = PermissionMatcher::new(settings);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("workspace");
+    std::fs::create_dir_all(&cwd).expect("create workspace");
+    let registry = ToolRegistry::new(&settings, &cwd);
+    let schemas = registry.schemas();
+    let matcher = PermissionMatcher::new(settings, &schemas);
 
     assert_eq!(matcher.decision_for_tool("read"), Decision::Allow);
     assert_eq!(matcher.decision_for_tool("list"), Decision::Allow);
@@ -36,4 +42,24 @@ web = "ask"
 
     assert_eq!(parsed.edit, "ask");
     assert_eq!(parsed.todo_write, "allow");
+    assert!(parsed.capabilities.is_empty());
+}
+
+#[test]
+fn capability_override_applies_to_all_matching_tools() {
+    let mut settings = Settings::default();
+    settings
+        .permission
+        .capabilities
+        .insert("web".to_string(), "allow".to_string());
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("workspace");
+    std::fs::create_dir_all(&cwd).expect("create workspace");
+    let registry = ToolRegistry::new(&settings, &cwd);
+    let schemas = registry.schemas();
+    let matcher = PermissionMatcher::new(settings, &schemas);
+
+    assert_eq!(matcher.decision_for_tool("web_fetch"), Decision::Allow);
+    assert_eq!(matcher.decision_for_tool("web_search"), Decision::Allow);
 }

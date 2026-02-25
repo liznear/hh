@@ -45,3 +45,20 @@ pub enum ProviderStreamEvent {
     AssistantDelta(String),
     ThinkingDelta(String),
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentCall {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    pub prompt: String,
+    pub depth: usize,
+    pub max_steps: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentResult {
+    pub id: String,
+    pub is_error: bool,
+    pub output: String,
+}

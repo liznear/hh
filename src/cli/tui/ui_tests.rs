@@ -86,9 +86,7 @@ fn test_duplicate_pending_tool_start_is_deduped() {
     });
     app.handle_event(&TuiEvent::ToolEnd {
         name: "bash".to_string(),
-        is_error: false,
-        output_preview: String::new(),
-        output_full: String::new(),
+        result: crate::tool::ToolResult::ok_text("ok", ""),
     });
 
     let lines = build_message_lines(&app, 100);
@@ -305,9 +303,11 @@ fn todo_write_tool_end_updates_todo_state_from_full_output() {
 
     app.handle_event(&TuiEvent::ToolEnd {
         name: "todo_write".to_string(),
-        is_error: false,
-        output_preview: "preview".to_string(),
-        output_full: output,
+        result: crate::tool::ToolResult::ok_json_typed(
+            "todo list updated",
+            "application/vnd.hh.todo+json",
+            serde_json::from_str(&output).expect("todo output json"),
+        ),
     });
 
     assert_eq!(app.todo_items.len(), 2);

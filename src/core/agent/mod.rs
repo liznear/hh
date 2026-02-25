@@ -2,32 +2,40 @@ pub mod state;
 
 pub use super::{AgentEvents, NoopEvents};
 
-use crate::core::{Message, Provider, ProviderRequest, ProviderStreamEvent, Role, ToolCall};
-use crate::permission::{Decision, PermissionMatcher};
+use crate::core::{
+    ApprovalDecision, ApprovalPolicy, Message, Provider, ProviderRequest, ProviderStreamEvent,
+    Role, SessionReader, SessionSink, ToolCall, ToolExecutor,
+};
 use crate::safety::sanitize_tool_output;
-use crate::session::{SessionEvent, SessionStore, event_id};
-use crate::tool::registry::ToolRegistry;
+use crate::session::{SessionEvent, event_id};
+use crate::tool::ToolResult;
 use state::AgentState;
 
-pub struct AgentLoop<P, E>
+pub struct AgentLoop<P, E, T, A, S>
 where
     P: Provider,
     E: AgentEvents,
+    T: ToolExecutor,
+    A: ApprovalPolicy,
+    S: SessionSink + SessionReader,
 {
     pub provider: P,
-    pub tool_registry: ToolRegistry,
-    pub permissions: PermissionMatcher,
+    pub tools: T,
+    pub approvals: A,
     pub max_steps: usize,
     pub model: String,
     pub system_prompt: String,
-    pub session: SessionStore,
+    pub session: S,
     pub events: E,
 }
 
-impl<P, E> AgentLoop<P, E>
+impl<P, E, T, A, S> AgentLoop<P, E, T, A, S>
 where
     P: Provider,
     E: AgentEvents,
+    T: ToolExecutor,
+    A: ApprovalPolicy,
+    S: SessionSink + SessionReader,
 {
     pub async fn run<F>(&self, prompt: String, mut approve: F) -> anyhow::Result<String>
     where
@@ -67,7 +75,7 @@ where
             let req = ProviderRequest {
                 model: self.model.clone(),
                 messages: state.messages.clone(),
-                tools: self.tool_registry.schemas(),
+                tools: self.tools.schemas(),
             };
 
             let mut assistant_content = String::new();
@@ -122,13 +130,13 @@ where
                 self.session
                     .append(&SessionEvent::ToolCall { call: call.clone() })?;
 
-                match self.permissions.decision_for_tool(&call.name) {
-                    Decision::Deny => {
+                match self.approvals.decision_for_tool(&call.name) {
+                    ApprovalDecision::Deny => {
                         let output = format!("tool denied: {}", call.name);
                         self.record_tool_error(&call, output, &mut state)?;
                         continue;
                     }
-                    Decision::Ask => {
+                    ApprovalDecision::Ask => {
                         self.events.on_tool_start(&call.name, &call.arguments);
                         let approved = approve(&call.name)?;
                         self.session.append(&SessionEvent::Approval {
@@ -145,7 +153,7 @@ where
                             continue;
                         }
                     }
-                    Decision::Allow => {}
+                    ApprovalDecision::Allow => {}
                 }
 
                 self.execute_tool_call(&call, &mut state).await?;
@@ -163,14 +171,10 @@ where
         state: &mut AgentState,
     ) -> anyhow::Result<()> {
         self.events.on_tool_start(&call.name, &call.arguments);
-        let result = self
-            .tool_registry
-            .execute(&call.name, call.arguments.clone())
-            .await;
-        let output = sanitize_tool_output(&result.output);
-        self.events
-            .on_tool_end(&call.name, result.is_error, &preview(&output), &output);
-        self.record_tool_result(call.id.clone(), result.is_error, output, state)
+        let mut result = self.tools.execute(&call.name, call.arguments.clone()).await;
+        result.output = sanitize_tool_output(&result.output);
+        self.events.on_tool_end(&call.name, &result);
+        self.record_tool_result(call.id.clone(), result, state)
     }
 
     fn record_tool_error(
@@ -180,28 +184,27 @@ where
         state: &mut AgentState,
     ) -> anyhow::Result<()> {
         self.events.on_tool_start(&call.name, &call.arguments);
-        let output = sanitize_tool_output(&output);
-        self.events
-            .on_tool_end(&call.name, true, &preview(&output), &output);
-        self.record_tool_result(call.id.clone(), true, output, state)
+        let result = ToolResult::err_text("denied", sanitize_tool_output(&output));
+        self.events.on_tool_end(&call.name, &result);
+        self.record_tool_result(call.id.clone(), result, state)
     }
 
     fn record_tool_result(
         &self,
         call_id: String,
-        is_error: bool,
-        output: String,
+        result: ToolResult,
         state: &mut AgentState,
     ) -> anyhow::Result<()> {
         state.push(Message {
             role: Role::Tool,
-            content: output.clone(),
+            content: result.output.clone(),
             tool_call_id: Some(call_id.clone()),
         });
         self.session.append(&SessionEvent::ToolResult {
             id: call_id,
-            is_error,
-            output,
+            is_error: result.is_error,
+            output: result.output.clone(),
+            result: Some(result),
         })?;
         Ok(())
     }
@@ -212,16 +215,5 @@ where
             id: event_id(),
             message,
         })
-    }
-}
-
-fn preview(text: &str) -> String {
-    let max_chars = 160;
-    let mut chars = text.chars();
-    let preview: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() {
-        format!("{}…", preview)
-    } else {
-        preview
     }
 }

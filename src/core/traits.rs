@@ -1,12 +1,18 @@
-use crate::core::types::{ProviderRequest, ProviderResponse, ProviderStreamEvent};
+use crate::core::types::{Message, ProviderRequest, ProviderResponse, ProviderStreamEvent};
 use async_trait::async_trait;
 use serde_json::Value;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    Allow,
+    Ask,
+    Deny,
+}
 
 pub trait AgentEvents: Send + Sync {
     fn on_thinking(&self, _text: &str) {}
     fn on_tool_start(&self, _name: &str, _args: &Value) {}
-    fn on_tool_end(&self, _name: &str, _is_error: bool, _output_preview: &str, _output_full: &str) {
-    }
+    fn on_tool_end(&self, _name: &str, _result: &crate::tool::ToolResult) {}
     fn on_assistant_delta(&self, _delta: &str) {}
     fn on_assistant_done(&self) {}
 }
@@ -39,4 +45,22 @@ pub trait Provider: Send + Sync {
         }
         Ok(response)
     }
+}
+
+#[async_trait]
+pub trait ToolExecutor: Send + Sync {
+    fn schemas(&self) -> Vec<crate::tool::schema::ToolSchema>;
+    async fn execute(&self, name: &str, args: Value) -> crate::tool::ToolResult;
+}
+
+pub trait ApprovalPolicy: Send + Sync {
+    fn decision_for_tool(&self, tool_name: &str) -> ApprovalDecision;
+}
+
+pub trait SessionSink: Send + Sync {
+    fn append(&self, event: &crate::session::SessionEvent) -> anyhow::Result<()>;
+}
+
+pub trait SessionReader: Send + Sync {
+    fn replay_messages(&self) -> anyhow::Result<Vec<Message>>;
 }

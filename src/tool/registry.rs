@@ -1,10 +1,12 @@
 use crate::config::Settings;
+use crate::core::ToolExecutor;
 use crate::tool::bash::BashTool;
 use crate::tool::edit::EditTool;
 use crate::tool::fs::{FsGlob, FsGrep, FsList, FsRead, FsWrite};
 use crate::tool::todo::TodoWriteTool;
 use crate::tool::web::{WebFetchTool, WebSearchTool};
 use crate::tool::{Tool, ToolSchema};
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -54,10 +56,9 @@ impl ToolRegistry {
     pub async fn execute(&self, name: &str, args: serde_json::Value) -> crate::tool::ToolResult {
         match self.tools.get(name) {
             Some(tool) => tool.execute(args).await,
-            None => crate::tool::ToolResult {
-                is_error: true,
-                output: format!("unknown tool: {}", name),
-            },
+            None => {
+                crate::tool::ToolResult::err_text("unknown_tool", format!("unknown tool: {}", name))
+            }
         }
     }
 
@@ -65,6 +66,17 @@ impl ToolRegistry {
         let mut names = self.tools.keys().cloned().collect::<Vec<_>>();
         names.sort();
         names
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for ToolRegistry {
+    fn schemas(&self) -> Vec<ToolSchema> {
+        self.schemas()
+    }
+
+    async fn execute(&self, name: &str, args: serde_json::Value) -> crate::tool::ToolResult {
+        self.execute(name, args).await
     }
 }
 

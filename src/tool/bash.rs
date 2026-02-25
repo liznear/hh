@@ -4,11 +4,6 @@ use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
-fn to_json_string(value: Value) -> String {
-    serde_json::to_string(&value)
-        .unwrap_or_else(|err| format!("{{\"status\":\"serialization_error\",\"error\":\"{err}\"}}"))
-}
-
 pub struct BashTool {
     denylist: Vec<String>,
 }
@@ -42,6 +37,8 @@ impl Tool for BashTool {
         ToolSchema {
             name: "bash".to_string(),
             description: "Run a shell command".to_string(),
+            capability: Some("bash".to_string()),
+            mutating: Some(true),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -64,42 +61,42 @@ impl Tool for BashTool {
             .unwrap_or(60_000);
 
         if self.denied(command) {
-            return ToolResult {
-                is_error: true,
-                output: to_json_string(json!({
+            return ToolResult::err_json(
+                "blocked",
+                json!({
                     "status": "blocked",
                     "ok": false,
                     "command": command,
                     "error": "command blocked by denylist"
-                })),
-            };
+                }),
+            );
         }
 
         let fut = Command::new("sh").arg("-lc").arg(command).output();
         let output = match timeout(Duration::from_millis(timeout_ms), fut).await {
             Ok(Ok(out)) => out,
             Ok(Err(err)) => {
-                return ToolResult {
-                    is_error: true,
-                    output: to_json_string(json!({
+                return ToolResult::err_json(
+                    "spawn_error",
+                    json!({
                         "status": "spawn_error",
                         "ok": false,
                         "command": command,
                         "error": err.to_string()
-                    })),
-                };
+                    }),
+                );
             }
             Err(_) => {
-                return ToolResult {
-                    is_error: true,
-                    output: to_json_string(json!({
+                return ToolResult::err_json(
+                    "timeout",
+                    json!({
                         "status": "timeout",
                         "ok": false,
                         "command": command,
                         "timeout_ms": timeout_ms,
                         "error": format!("command timed out after {} ms", timeout_ms)
-                    })),
-                };
+                    }),
+                );
             }
         };
 
@@ -117,17 +114,20 @@ impl Tool for BashTool {
         let status_text = if is_error { "error" } else { "success" };
         let exit_code = output.status.code();
 
-        ToolResult {
-            is_error,
-            output: to_json_string(json!({
-                "status": status_text,
-                "ok": !is_error,
-                "command": command,
-                "exit_code": exit_code,
-                "stdout": stdout,
-                "stderr": stderr,
-                "output": combined
-            })),
+        let payload = json!({
+            "status": status_text,
+            "ok": !is_error,
+            "command": command,
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "output": combined
+        });
+
+        if is_error {
+            ToolResult::err_json("command_failed", payload)
+        } else {
+            ToolResult::ok_json("command_succeeded", payload)
         }
     }
 }

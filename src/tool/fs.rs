@@ -63,6 +63,8 @@ impl Tool for FsRead {
         ToolSchema {
             name: "read".to_string(),
             description: "Read a UTF-8 text file".to_string(),
+            capability: Some("read".to_string()),
+            mutating: Some(false),
             parameters: json!({
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -103,6 +105,8 @@ impl Tool for FsWrite {
         ToolSchema {
             name: "write".to_string(),
             description: "Write UTF-8 text to file".to_string(),
+            capability: Some("write".to_string()),
+            mutating: Some(true),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -189,6 +193,8 @@ impl Tool for FsList {
         ToolSchema {
             name: "list".to_string(),
             description: "List directory entries".to_string(),
+            capability: Some("list".to_string()),
+            mutating: Some(false),
             parameters: json!({
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -223,6 +229,8 @@ impl Tool for FsGlob {
         ToolSchema {
             name: "glob".to_string(),
             description: "Glob files".to_string(),
+            capability: Some("glob".to_string()),
+            mutating: Some(false),
             parameters: json!({
                 "type": "object",
                 "properties": {"pattern": {"type": "string"}},
@@ -260,6 +268,8 @@ impl Tool for FsGrep {
         ToolSchema {
             name: "grep".to_string(),
             description: "Search regex in files recursively".to_string(),
+            capability: Some("grep".to_string()),
+            mutating: Some(false),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -343,25 +353,15 @@ pub(crate) fn resolve_workspace_target(
     Ok(target)
 }
 
-fn tool_ok(output: impl Into<String>) -> ToolResult {
-    ToolResult {
-        is_error: false,
-        output: output.into(),
-    }
-}
-
 fn tool_ok_json(output: &impl Serialize) -> ToolResult {
-    match serde_json::to_string(output) {
-        Ok(serialized) => tool_ok(serialized),
+    match serde_json::to_value(output) {
+        Ok(value) => ToolResult::ok_json("ok", value),
         Err(err) => tool_err(format!("failed to serialize output: {err}")),
     }
 }
 
 fn tool_err(err: impl ToString) -> ToolResult {
-    ToolResult {
-        is_error: true,
-        output: err.to_string(),
-    }
+    ToolResult::err_text("error", err.to_string())
 }
 
 fn walk_and_grep(root: &Path, re: &regex::Regex, results: &mut Vec<String>) -> std::io::Result<()> {

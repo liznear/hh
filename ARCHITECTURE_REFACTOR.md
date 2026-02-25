@@ -7,6 +7,14 @@ This document summarizes the current architecture assessment and proposes an inc
 3. Extensibility for skills/sub-agents
 4. Tool interface evolution (typed IO + per-tool rendering)
 
+## Execution Status
+
+- Completed: Phase 1 (Boundary extraction)
+- Completed: Phase 2 (Tool metadata + policy cleanup)
+- Completed: Phase 3 (Typed tool output)
+- Completed: Phase 4 (Renderer registry)
+- Completed: Phase 5 (Skills/sub-agent protocol scaffolding)
+
 ## Current State (What Is Good)
 
 - Core LLM domain types are provider-agnostic and centralized (`Role`, `Message`, `ToolCall`, provider request/response types).

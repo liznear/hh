@@ -38,6 +38,8 @@ impl Tool for TodoWriteTool {
         ToolSchema {
             name: "todo_write".to_string(),
             description: "Set canonical todo list state".to_string(),
+            capability: Some("todo_write".to_string()),
+            mutating: Some(true),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -112,23 +114,15 @@ impl Tool for TodoWriteTool {
     }
 }
 
-fn tool_ok(output: impl Into<String>) -> ToolResult {
-    ToolResult {
-        is_error: false,
-        output: output.into(),
-    }
-}
-
 fn tool_ok_json(output: &impl Serialize) -> ToolResult {
-    match serde_json::to_string(output) {
-        Ok(serialized) => tool_ok(serialized),
+    match serde_json::to_value(output) {
+        Ok(value) => {
+            ToolResult::ok_json_typed("todo list updated", "application/vnd.hh.todo+json", value)
+        }
         Err(err) => tool_err(format!("failed to serialize output: {err}")),
     }
 }
 
 fn tool_err(err: impl ToString) -> ToolResult {
-    ToolResult {
-        is_error: true,
-        output: err.to_string(),
-    }
+    ToolResult::err_text("error", err.to_string())
 }

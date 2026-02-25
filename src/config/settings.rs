@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::core::system_prompt::default_system_prompt;
@@ -33,6 +34,8 @@ impl Default for ProviderSettings {
 pub struct AgentSettings {
     pub max_steps: usize,
     pub token_budget: usize,
+    #[serde(default = "default_sub_agent_max_depth")]
+    pub sub_agent_max_depth: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
 }
@@ -42,9 +45,14 @@ impl Default for AgentSettings {
         Self {
             max_steps: 12,
             token_budget: 32_000,
+            sub_agent_max_depth: default_sub_agent_max_depth(),
             system_prompt: None,
         }
     }
+}
+
+fn default_sub_agent_max_depth() -> usize {
+    2
 }
 
 impl AgentSettings {
@@ -86,6 +94,8 @@ pub struct PermissionSettings {
     pub todo_write: String,
     pub bash: String,
     pub web: String,
+    #[serde(default)]
+    pub capabilities: BTreeMap<String, String>,
 }
 
 impl Default for PermissionSettings {
@@ -100,6 +110,7 @@ impl Default for PermissionSettings {
             todo_write: default_todo_write_permission(),
             bash: "ask".to_string(),
             web: "ask".to_string(),
+            capabilities: BTreeMap::new(),
         }
     }
 }

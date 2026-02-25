@@ -35,15 +35,12 @@ struct WebSearchOutput {
 }
 
 fn tool_ok_json(output: &impl Serialize) -> ToolResult {
-    match serde_json::to_string(output) {
-        Ok(serialized) => ToolResult {
-            is_error: false,
-            output: serialized,
-        },
-        Err(err) => ToolResult {
-            is_error: true,
-            output: format!("failed to serialize output: {err}"),
-        },
+    match serde_json::to_value(output) {
+        Ok(value) => ToolResult::ok_json("ok", value),
+        Err(err) => ToolResult::err_text(
+            "serialization_error",
+            format!("failed to serialize output: {err}"),
+        ),
     }
 }
 
@@ -67,6 +64,8 @@ impl Tool for WebFetchTool {
         ToolSchema {
             name: "web_fetch".to_string(),
             description: "Fetch content from a URL".to_string(),
+            capability: Some("web".to_string()),
+            mutating: Some(false),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -94,23 +93,15 @@ impl Tool for WebFetchTool {
                         if status.is_success() {
                             tool_ok_json(&output)
                         } else {
-                            ToolResult {
-                                is_error: true,
-                                output: serde_json::to_string(&output)
-                                    .unwrap_or_else(|_| format!("status={}", status.as_u16())),
-                            }
+                            let payload = serde_json::to_value(&output)
+                                .unwrap_or_else(|_| json!({"status_code": status.as_u16()}));
+                            ToolResult::err_json("request_failed", payload)
                         }
                     }
-                    Err(err) => ToolResult {
-                        is_error: true,
-                        output: err.to_string(),
-                    },
+                    Err(err) => ToolResult::err_text("read_body_error", err.to_string()),
                 }
             }
-            Err(err) => ToolResult {
-                is_error: true,
-                output: err.to_string(),
-            },
+            Err(err) => ToolResult::err_text("request_error", err.to_string()),
         }
     }
 }
@@ -138,6 +129,8 @@ impl Tool for WebSearchTool {
         ToolSchema {
             name: "web_search".to_string(),
             description: "Search the web for information. Returns search results with titles, snippets, and URLs.".to_string(),
+            capability: Some("web".to_string()),
+            mutating: Some(false),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -158,10 +151,7 @@ impl Tool for WebSearchTool {
             .unwrap_or_default();
 
         if query.is_empty() {
-            return ToolResult {
-                is_error: true,
-                output: "query is required".to_string(),
-            };
+            return ToolResult::err_text("invalid_input", "query is required");
         }
 
         let url = format!(
@@ -174,10 +164,10 @@ impl Tool for WebSearchTool {
         match response {
             Ok(resp) => {
                 if !resp.status().is_success() {
-                    return ToolResult {
-                        is_error: true,
-                        output: format!("search failed: status={}", resp.status()),
-                    };
+                    return ToolResult::err_text(
+                        "search_failed",
+                        format!("search failed: status={}", resp.status()),
+                    );
                 }
 
                 match resp.text().await {
@@ -190,16 +180,15 @@ impl Tool for WebSearchTool {
                         };
                         tool_ok_json(&output)
                     }
-                    Err(err) => ToolResult {
-                        is_error: true,
-                        output: format!("failed to read response: {}", err),
-                    },
+                    Err(err) => ToolResult::err_text(
+                        "read_body_error",
+                        format!("failed to read response: {}", err),
+                    ),
                 }
             }
-            Err(err) => ToolResult {
-                is_error: true,
-                output: format!("search request failed: {}", err),
-            },
+            Err(err) => {
+                ToolResult::err_text("request_error", format!("search request failed: {}", err))
+            }
         }
     }
 }

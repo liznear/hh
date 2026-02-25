@@ -67,11 +67,11 @@ impl AgentEvents for RecordingEvents {
             .push(format!("tool_start:{name}"));
     }
 
-    fn on_tool_end(&self, name: &str, is_error: bool, _output_preview: &str, _output_full: &str) {
+    fn on_tool_end(&self, name: &str, result: &hh::tool::ToolResult) {
         self.log
             .lock()
             .expect("log")
-            .push(format!("tool_end:{name}:{is_error}"));
+            .push(format!("tool_end:{name}:{}", result.is_error));
     }
 
     fn on_assistant_delta(&self, delta: &str) {
@@ -105,11 +105,13 @@ async fn agent_loop_stops_on_final_answer() {
 
     let settings = Settings::default();
     let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
+    let tools = ToolRegistry::new(&settings, &cwd);
+    let schemas = tools.schemas();
 
     let agent = AgentLoop {
         provider,
-        tool_registry: ToolRegistry::new(&settings, &cwd),
-        permissions: PermissionMatcher::new(settings.clone()),
+        tools,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas),
         max_steps: 3,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.provider.model,
@@ -168,11 +170,13 @@ async fn agent_loop_emits_stream_and_tool_events() {
     let settings = Settings::default();
     let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
     let events = RecordingEvents::default();
+    let tools = ToolRegistry::new(&settings, &cwd);
+    let schemas = tools.schemas();
 
     let agent = AgentLoop {
         provider,
-        tool_registry: ToolRegistry::new(&settings, &cwd),
-        permissions: PermissionMatcher::new(settings.clone()),
+        tools,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas),
         max_steps: 4,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.provider.model,

@@ -17,6 +17,8 @@ pub enum SessionEvent {
         id: String,
         is_error: bool,
         output: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result: Option<crate::tool::ToolResult>,
     },
     Approval {
         id: String,
@@ -26,6 +28,22 @@ pub enum SessionEvent {
     Thinking {
         id: String,
         content: String,
+    },
+    SubAgentStart {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_id: Option<String>,
+        prompt: String,
+        depth: usize,
+    },
+    SubAgentProgress {
+        id: String,
+        content: String,
+    },
+    SubAgentResult {
+        id: String,
+        is_error: bool,
+        output: String,
     },
 }
 

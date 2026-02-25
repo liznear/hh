@@ -112,7 +112,7 @@ impl AgentEvents for LiveRender {
         println!("tool:{}> start {}", name, format_args_preview(args, 220));
     }
 
-    fn on_tool_end(&self, name: &str, is_error: bool, output_preview: &str, _output_full: &str) {
+    fn on_tool_end(&self, name: &str, result: &crate::tool::ToolResult) {
         let Ok(mut state) = self.inner.lock() else {
             return;
         };
@@ -121,12 +121,12 @@ impl AgentEvents for LiveRender {
             state.assistant_line_open = false;
             state.thinking_line_open = false;
         }
-        let status = if is_error { "error" } else { "ok" };
+        let status = if result.is_error { "error" } else { "ok" };
         println!(
             "tool:{}> {} {}",
             name,
             status,
-            truncate_text(output_preview, 220)
+            truncate_text(&result.summary, 220)
         );
     }
 

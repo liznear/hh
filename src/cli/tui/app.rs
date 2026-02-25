@@ -3,10 +3,10 @@ use std::path::Path;
 use std::time::Instant;
 
 use ratatui::text::Line;
-use serde::Deserialize;
 
 use super::commands::{SlashCommand, get_default_commands};
 use super::event::TuiEvent;
+use super::tool_render::render_tool_result;
 
 const SIDEBAR_WIDTH: u16 = 38;
 
@@ -30,18 +30,6 @@ pub enum TodoPriority {
     High,
     Medium,
     Low,
-}
-
-#[derive(Debug, Deserialize)]
-struct TodoWriteOutput {
-    todos: Vec<TodoWireItem>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TodoWireItem {
-    content: String,
-    status: String,
-    priority: String,
 }
 
 #[derive(Debug, Clone)]
@@ -128,13 +116,8 @@ impl ChatApp {
                 }
                 self.mark_dirty();
             }
-            TuiEvent::ToolEnd {
-                name,
-                is_error,
-                output_preview: _,
-                output_full,
-            } => {
-                self.complete_tool_call(name, *is_error, output_full);
+            TuiEvent::ToolEnd { name, result } => {
+                self.complete_tool_call(name, result);
                 self.mark_dirty();
             }
             TuiEvent::AssistantDelta(delta) => {
@@ -281,9 +264,10 @@ impl ChatApp {
         is_error.is_none() && last_name == name && last_args == &args.to_string()
     }
 
-    fn complete_tool_call(&mut self, name: &str, is_error: bool, output: &str) {
-        if name == "todo_write" && !is_error {
-            self.update_todos_from_tool_output(output);
+    fn complete_tool_call(&mut self, name: &str, result: &crate::tool::ToolResult) {
+        let rendered = render_tool_result(name, result);
+        if let Some(todos) = rendered.todos {
+            self.todo_items = todos;
         }
 
         // Find the matching ToolCall
@@ -297,8 +281,8 @@ impl ChatApp {
                 && tool_name == name
                 && status.is_none()
             {
-                *status = Some(is_error);
-                *out = Some(output.to_string());
+                *status = Some(result.is_error);
+                *out = Some(rendered.text);
                 return;
             }
         }
@@ -353,38 +337,13 @@ impl TodoStatus {
 }
 
 impl TodoPriority {
-    fn from_wire(priority: &str) -> Option<Self> {
+    pub fn from_wire(priority: &str) -> Option<Self> {
         match priority {
             "high" => Some(Self::High),
             "medium" => Some(Self::Medium),
             "low" => Some(Self::Low),
             _ => None,
         }
-    }
-}
-
-impl ChatApp {
-    fn update_todos_from_tool_output(&mut self, output: &str) {
-        let parsed: TodoWriteOutput = match serde_json::from_str(output) {
-            Ok(value) => value,
-            Err(_) => return,
-        };
-
-        let mut todos = Vec::with_capacity(parsed.todos.len());
-        for item in parsed.todos {
-            let Some(status) = TodoStatus::from_wire(&item.status) else {
-                return;
-            };
-            let Some(priority) = TodoPriority::from_wire(&item.priority) else {
-                return;
-            };
-            todos.push(TodoItemView {
-                content: item.content,
-                status,
-                priority,
-            });
-        }
-        self.todo_items = todos;
     }
 }
 
