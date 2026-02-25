@@ -112,7 +112,7 @@ impl AgentEvents for LiveRender {
         println!("tool:{}> start {}", name, format_args_preview(args, 220));
     }
 
-    fn on_tool_end(&self, name: &str, is_error: bool, output_preview: &str) {
+    fn on_tool_end(&self, name: &str, is_error: bool, output_preview: &str, _output_full: &str) {
         let Ok(mut state) = self.inner.lock() else {
             return;
         };

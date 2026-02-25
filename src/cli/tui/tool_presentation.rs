@@ -64,6 +64,14 @@ const TOOL_PRESENTATIONS: &[ToolPresentation] = &[
         tool_name: "web_search",
         render_start: render_web_search_start,
     },
+    ToolPresentation {
+        tool_name: "todo_write",
+        render_start: render_todo_write_start,
+    },
+    ToolPresentation {
+        tool_name: "edit",
+        render_start: render_edit_start,
+    },
 ];
 
 fn render_read_start(args: &Value) -> ToolCallStartView {
@@ -130,6 +138,27 @@ fn render_web_search_start(args: &Value) -> ToolCallStartView {
         line: format!(
             "Search {}",
             json_str(args, "query").unwrap_or_else(|| compact_json(args))
+        ),
+    }
+}
+
+fn render_todo_write_start(args: &Value) -> ToolCallStartView {
+    let count = args
+        .as_object()
+        .and_then(|map| map.get("todos"))
+        .and_then(|value| value.as_array())
+        .map(|items| items.len())
+        .unwrap_or(0);
+    ToolCallStartView {
+        line: format!("Update TODO list ({count} items)"),
+    }
+}
+
+fn render_edit_start(args: &Value) -> ToolCallStartView {
+    ToolCallStartView {
+        line: format!(
+            "Edit {}",
+            json_str(args, "path").unwrap_or_else(|| compact_json(args))
         ),
     }
 }

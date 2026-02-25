@@ -1,7 +1,7 @@
 use crate::tool::{Tool, ToolResult, ToolSchema};
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 pub struct FsRead;
 pub struct FsWrite {
@@ -41,10 +41,6 @@ impl FsWrite {
     pub fn new(workspace_root: PathBuf) -> Self {
         Self { workspace_root }
     }
-
-    fn within_workspace(&self, path: &Path) -> bool {
-        to_workspace_target(&self.workspace_root, path).starts_with(&self.workspace_root)
-    }
 }
 
 #[async_trait]
@@ -75,11 +71,10 @@ impl Tool for FsWrite {
             .and_then(|v| v.as_str())
             .unwrap_or_default();
 
-        if !self.within_workspace(&path) {
-            return tool_err("write path is outside workspace");
-        }
-
-        let target = to_workspace_target(&self.workspace_root, &path);
+        let target = match resolve_workspace_target(&self.workspace_root, &path) {
+            Ok(path) => path,
+            Err(err) => return tool_err(err),
+        };
 
         if let Some(parent) = target.parent()
             && let Err(err) = std::fs::create_dir_all(parent)
@@ -192,12 +187,49 @@ impl Tool for FsGrep {
     }
 }
 
-fn to_workspace_target(workspace_root: &Path, path: &Path) -> PathBuf {
+pub(crate) fn to_workspace_target(workspace_root: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
     } else {
         workspace_root.join(path)
     }
+}
+
+pub(crate) fn resolve_workspace_target(
+    workspace_root: &Path,
+    path: &Path,
+) -> Result<PathBuf, String> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("path must not contain parent directory traversal".to_string());
+    }
+
+    let workspace_root = std::fs::canonicalize(workspace_root)
+        .map_err(|err| format!("failed to resolve workspace root: {err}"))?;
+    let target = to_workspace_target(&workspace_root, path);
+
+    let checked_target = if target.exists() {
+        std::fs::canonicalize(&target)
+            .map_err(|err| format!("failed to resolve target path: {err}"))?
+    } else {
+        let parent = target
+            .parent()
+            .ok_or_else(|| "target path has no parent directory".to_string())?;
+        let canonical_parent = std::fs::canonicalize(parent)
+            .map_err(|err| format!("failed to resolve target parent: {err}"))?;
+        let file_name = target
+            .file_name()
+            .ok_or_else(|| "target path has no file name".to_string())?;
+        canonical_parent.join(file_name)
+    };
+
+    if !checked_target.starts_with(&workspace_root) {
+        return Err("path is outside workspace".to_string());
+    }
+
+    Ok(target)
 }
 
 fn tool_ok(output: impl Into<String>) -> ToolResult {

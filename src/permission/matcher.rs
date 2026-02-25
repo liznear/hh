@@ -19,6 +19,8 @@ impl PermissionMatcher {
             "glob" => &p.glob,
             "grep" => &p.grep,
             "write" => &p.write,
+            "edit" => &p.edit,
+            "todo_write" => &p.todo_write,
             "bash" => &p.bash,
             "web_fetch" | "web_search" => &p.web,
             _ => "deny",

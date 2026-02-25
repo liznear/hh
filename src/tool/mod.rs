@@ -1,7 +1,9 @@
 pub mod bash;
+pub mod edit;
 pub mod fs;
 pub mod registry;
 pub mod schema;
+pub mod todo;
 pub mod web;
 
 use async_trait::async_trait;

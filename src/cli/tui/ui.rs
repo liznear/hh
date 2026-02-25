@@ -6,9 +6,10 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
+use serde::Deserialize;
 use serde_json::Value;
 
-use super::app::{ChatApp, ChatMessage};
+use super::app::{ChatApp, ChatMessage, TodoItemView, TodoStatus};
 use super::markdown::markdown_to_lines;
 use super::tool_presentation::render_tool_start;
 
@@ -31,6 +32,26 @@ const PROGRESS_TRACK: Color = Color::Rgb(203, 182, 248);
 const PROGRESS_TRAIL: Color = Color::Rgb(162, 120, 238);
 const PROGRESS_HEAD: Color = Color::Rgb(124, 72, 227);
 const THINKING_LABEL: Color = Color::Rgb(227, 152, 67);
+const DIFF_ADD_FG: Color = Color::Rgb(25, 110, 61);
+const DIFF_ADD_BG: Color = Color::Rgb(226, 244, 235);
+const DIFF_REMOVE_FG: Color = Color::Rgb(152, 45, 45);
+const DIFF_REMOVE_BG: Color = Color::Rgb(252, 235, 235);
+const DIFF_META_FG: Color = Color::Rgb(106, 114, 128);
+const MAX_RENDERED_DIFF_LINES: usize = 120;
+const MAX_RENDERED_DIFF_CHARS: usize = 8_000;
+
+#[derive(Debug, Deserialize)]
+struct EditToolOutput {
+    path: String,
+    summary: EditDiffSummary,
+    diff: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EditDiffSummary {
+    added_lines: usize,
+    removed_lines: usize,
+}
 
 pub fn render_app(f: &mut Frame, app: &ChatApp) {
     let columns = Layout::default()
@@ -187,6 +208,18 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
         )),
     ];
 
+    if !app.todo_items.is_empty() {
+        let done = app
+            .todo_items
+            .iter()
+            .filter(|item| item.status == TodoStatus::Completed)
+            .count();
+        lines.push(Line::from(Span::styled(
+            format!(" {} / {} done", done, app.todo_items.len()),
+            Style::default().fg(TEXT_MUTED),
+        )));
+    }
+
     let list_max = inner.height.saturating_sub(lines.len() as u16 + 1) as usize;
     append_sidebar_list(&mut lines, &app.todo_items, list_max);
 
@@ -298,7 +331,7 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
             ChatMessage::ToolCall {
                 name,
                 args,
-                output: _,
+                output,
                 is_error,
             } => {
                 let available_width = width.saturating_sub(4).max(1);
@@ -309,6 +342,14 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                 let label = tool_view.line;
 
                 if let Some(error) = is_error {
+                    if !*error
+                        && name == "edit"
+                        && let Some(tool_output) = output.as_deref()
+                        && render_edit_diff_block(&mut lines, tool_output, available_width)
+                    {
+                        continue;
+                    }
+
                     let symbol = if *error { "x" } else { "✓" };
                     let color = if *error { Color::Red } else { INPUT_ACCENT };
                     let wrapped = wrap_text(&label, available_width);
@@ -528,7 +569,7 @@ fn abbreviate_path(path: &str, max_chars: usize) -> String {
     format!("...{}", tail)
 }
 
-fn append_sidebar_list(lines: &mut Vec<Line<'static>>, items: &[String], max_items: usize) {
+fn append_sidebar_list(lines: &mut Vec<Line<'static>>, items: &[TodoItemView], max_items: usize) {
     if max_items == 0 {
         return;
     }
@@ -542,9 +583,17 @@ fn append_sidebar_list(lines: &mut Vec<Line<'static>>, items: &[String], max_ite
 
     let shown = items.len().min(max_items);
     for item in items.iter().take(shown) {
+        let (prefix, item_style) = match item.status {
+            TodoStatus::Pending | TodoStatus::InProgress => {
+                ("  [ ] ", Style::default().fg(TEXT_PRIMARY))
+            }
+            TodoStatus::Completed => ("  [x] ", Style::default().fg(TEXT_MUTED)),
+            TodoStatus::Cancelled => ("  [-] ", Style::default().fg(TEXT_MUTED)),
+        };
+
         lines.push(Line::from(vec![
-            Span::styled("  - ", Style::default().fg(INPUT_ACCENT)),
-            Span::styled(item.clone(), Style::default().fg(TEXT_PRIMARY)),
+            Span::styled(prefix, Style::default().fg(INPUT_ACCENT)),
+            Span::styled(item.content.clone(), item_style),
         ]));
     }
 
@@ -553,5 +602,87 @@ fn append_sidebar_list(lines: &mut Vec<Line<'static>>, items: &[String], max_ite
             "...",
             Style::default().fg(TEXT_MUTED).italic(),
         )));
+    }
+}
+
+fn render_edit_diff_block(
+    lines: &mut Vec<Line<'static>>,
+    output: &str,
+    available_width: usize,
+) -> bool {
+    let parsed: EditToolOutput = match serde_json::from_str(output) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled("✓ ", Style::default().fg(INPUT_ACCENT).bold()),
+        Span::styled(
+            format!(
+                "{}  +{} -{}",
+                parsed.path, parsed.summary.added_lines, parsed.summary.removed_lines
+            ),
+            Style::default().fg(TEXT_SECONDARY),
+        ),
+    ]));
+
+    let mut rendered_chars = 0;
+    let mut truncated = false;
+
+    for (rendered_lines, raw_line) in parsed.diff.lines().enumerate() {
+        let line_chars = raw_line.chars().count();
+        if rendered_lines >= MAX_RENDERED_DIFF_LINES
+            || rendered_chars + line_chars > MAX_RENDERED_DIFF_CHARS
+        {
+            truncated = true;
+            break;
+        }
+        rendered_chars += line_chars;
+
+        let shown = truncate_chars(raw_line, available_width);
+        let style = if raw_line.starts_with('+') && !raw_line.starts_with("+++") {
+            Style::default().fg(DIFF_ADD_FG).bg(DIFF_ADD_BG)
+        } else if raw_line.starts_with('-') && !raw_line.starts_with("---") {
+            Style::default().fg(DIFF_REMOVE_FG).bg(DIFF_REMOVE_BG)
+        } else if raw_line.starts_with("@@")
+            || raw_line.starts_with("---")
+            || raw_line.starts_with("+++")
+        {
+            Style::default().fg(DIFF_META_FG)
+        } else {
+            Style::default().fg(TEXT_MUTED)
+        };
+
+        lines.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(shown, style),
+        ]));
+    }
+
+    if truncated {
+        lines.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(
+                "... diff truncated",
+                Style::default().fg(TEXT_MUTED).italic(),
+            ),
+        ]));
+    }
+
+    true
+}
+
+fn truncate_chars(input: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+
+    let mut chars = input.chars();
+    let taken: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{}...", taken)
+    } else {
+        taken
     }
 }

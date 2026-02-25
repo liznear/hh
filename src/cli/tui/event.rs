@@ -15,7 +15,8 @@ pub enum TuiEvent {
     ToolEnd {
         name: String,
         is_error: bool,
-        output: String,
+        output_preview: String,
+        output_full: String,
     },
     AssistantDelta(String),
     AssistantDone,
@@ -52,11 +53,12 @@ impl AgentEvents for TuiEventSender {
         });
     }
 
-    fn on_tool_end(&self, name: &str, is_error: bool, output_preview: &str) {
+    fn on_tool_end(&self, name: &str, is_error: bool, output_preview: &str, output_full: &str) {
         let _ = self.tx.send(TuiEvent::ToolEnd {
             name: name.to_string(),
             is_error,
-            output: output_preview.to_string(),
+            output_preview: output_preview.to_string(),
+            output_full: output_full.to_string(),
         });
     }
 

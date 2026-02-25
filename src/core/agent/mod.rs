@@ -147,7 +147,8 @@ where
                         if !approved {
                             let output = format!("tool approval denied: {}", call.name);
                             let output = sanitize_tool_output(&output);
-                            self.events.on_tool_end(&call.name, true, &preview(&output));
+                            self.events
+                                .on_tool_end(&call.name, true, &preview(&output), &output);
                             self.record_tool_result(call.id.clone(), true, output, &mut state)?;
                             continue;
                         }
@@ -176,7 +177,7 @@ where
             .await;
         let output = sanitize_tool_output(&result.output);
         self.events
-            .on_tool_end(&call.name, result.is_error, &preview(&output));
+            .on_tool_end(&call.name, result.is_error, &preview(&output), &output);
         self.record_tool_result(call.id.clone(), result.is_error, output, state)
     }
 
@@ -188,7 +189,8 @@ where
     ) -> anyhow::Result<()> {
         self.events.on_tool_start(&call.name, &call.arguments);
         let output = sanitize_tool_output(&output);
-        self.events.on_tool_end(&call.name, true, &preview(&output));
+        self.events
+            .on_tool_end(&call.name, true, &preview(&output), &output);
         self.record_tool_result(call.id.clone(), true, output, state)
     }
 

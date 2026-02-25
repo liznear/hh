@@ -3,11 +3,46 @@ use std::path::Path;
 use std::time::Instant;
 
 use ratatui::text::Line;
+use serde::Deserialize;
 
 use super::commands::{SlashCommand, get_default_commands};
 use super::event::TuiEvent;
 
 const SIDEBAR_WIDTH: u16 = 38;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TodoItemView {
+    pub content: String,
+    pub status: TodoStatus,
+    pub priority: TodoPriority,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TodoPriority {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Deserialize)]
+struct TodoWriteOutput {
+    todos: Vec<TodoWireItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TodoWireItem {
+    content: String,
+    status: String,
+    priority: String,
+}
 
 #[derive(Debug, Clone)]
 pub enum ChatMessage {
@@ -37,7 +72,7 @@ pub struct ChatApp {
     pub working_directory: String,
     pub context_budget: usize,
     processing_started_at: Option<Instant>,
-    pub todo_items: Vec<String>,
+    pub todo_items: Vec<TodoItemView>,
     // Cached rendered lines (rebuilt only when messages change)
     pub cached_lines: RefCell<Vec<Line<'static>>>,
     pub cached_width: RefCell<usize>,
@@ -94,9 +129,10 @@ impl ChatApp {
             TuiEvent::ToolEnd {
                 name,
                 is_error,
-                output,
+                output_preview: _,
+                output_full,
             } => {
-                self.complete_tool_call(name, *is_error, output);
+                self.complete_tool_call(name, *is_error, output_full);
                 self.mark_dirty();
             }
             TuiEvent::AssistantDelta(delta) => {
@@ -125,7 +161,7 @@ impl ChatApp {
         let input = std::mem::take(&mut self.input);
         if !input.is_empty() {
             let extracted_todos = extract_todos(&input);
-            if !extracted_todos.is_empty() {
+            if self.todo_items.is_empty() && !extracted_todos.is_empty() {
                 self.todo_items = extracted_todos;
             }
             self.messages.push(ChatMessage::User(input.clone()));
@@ -230,6 +266,10 @@ impl ChatApp {
     }
 
     fn complete_tool_call(&mut self, name: &str, is_error: bool, output: &str) {
+        if name == "todo_write" && !is_error {
+            self.update_todos_from_tool_output(output);
+        }
+
         // Find the matching ToolCall
         for message in self.messages.iter_mut().rev() {
             if let ChatMessage::ToolCall {
@@ -284,13 +324,61 @@ impl ChatApp {
     }
 }
 
+impl TodoStatus {
+    pub fn from_wire(status: &str) -> Option<Self> {
+        match status {
+            "pending" => Some(Self::Pending),
+            "in_progress" => Some(Self::InProgress),
+            "completed" => Some(Self::Completed),
+            "cancelled" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+}
+
+impl TodoPriority {
+    fn from_wire(priority: &str) -> Option<Self> {
+        match priority {
+            "high" => Some(Self::High),
+            "medium" => Some(Self::Medium),
+            "low" => Some(Self::Low),
+            _ => None,
+        }
+    }
+}
+
+impl ChatApp {
+    fn update_todos_from_tool_output(&mut self, output: &str) {
+        let parsed: TodoWriteOutput = match serde_json::from_str(output) {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+
+        let mut todos = Vec::with_capacity(parsed.todos.len());
+        for item in parsed.todos {
+            let Some(status) = TodoStatus::from_wire(&item.status) else {
+                return;
+            };
+            let Some(priority) = TodoPriority::from_wire(&item.priority) else {
+                return;
+            };
+            todos.push(TodoItemView {
+                content: item.content,
+                status,
+                priority,
+            });
+        }
+        self.todo_items = todos;
+    }
+}
+
 impl Default for ChatApp {
     fn default() -> Self {
         Self::new("Session".to_string(), Path::new("."), 32_000)
     }
 }
 
-fn extract_todos(input: &str) -> Vec<String> {
+fn extract_todos(input: &str) -> Vec<TodoItemView> {
     let mut todos = Vec::new();
     for line in input.lines() {
         let trimmed = line.trim();
@@ -306,7 +394,11 @@ fn extract_todos(input: &str) -> Vec<String> {
         if let Some(todo) = item {
             let normalized = todo.trim();
             if !normalized.is_empty() {
-                todos.push(normalized.to_string());
+                todos.push(TodoItemView {
+                    content: normalized.to_string(),
+                    status: TodoStatus::Pending,
+                    priority: TodoPriority::Medium,
+                });
             }
         }
     }

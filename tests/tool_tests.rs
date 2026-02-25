@@ -1,6 +1,8 @@
 use hh::tool::Tool;
 use hh::tool::bash::BashTool;
+use hh::tool::edit::EditTool;
 use hh::tool::fs::{FsRead, FsWrite};
+use hh::tool::todo::TodoWriteTool;
 use serde_json::json;
 
 #[tokio::test]
@@ -40,4 +42,185 @@ async fn bash_tool_blocks_denylisted_command() {
     let result = bash.execute(json!({"command": "rm -rf /"})).await;
     assert!(result.is_error);
     assert!(result.output.contains("blocked"));
+}
+
+#[tokio::test]
+async fn todo_write_set_updates_list() {
+    let todo = TodoWriteTool;
+    let result = todo
+        .execute(json!({
+            "todos": [
+                {"content": "Ship feature", "status": "in_progress", "priority": "high"},
+                {"content": "Write tests", "status": "pending", "priority": "medium"}
+            ]
+        }))
+        .await;
+
+    assert!(!result.is_error);
+    let output: serde_json::Value = serde_json::from_str(&result.output).expect("json output");
+    assert_eq!(output["counts"]["total"], 2);
+    assert_eq!(output["counts"]["in_progress"], 1);
+}
+
+#[tokio::test]
+async fn todo_write_rejects_invalid_args() {
+    let todo = TodoWriteTool;
+    let result = todo
+        .execute(json!({
+            "todos": [
+                {"content": "", "status": "active", "priority": "critical"}
+            ]
+        }))
+        .await;
+
+    assert!(result.is_error);
+}
+
+#[tokio::test]
+async fn edit_applies_single_replacement() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("note.txt");
+    std::fs::write(&path, "hello world\n").expect("seed file");
+    let edit = EditTool::new(temp.path().to_path_buf());
+
+    let result = edit
+        .execute(json!({
+            "path": "note.txt",
+            "old_string": "world",
+            "new_string": "rust"
+        }))
+        .await;
+
+    assert!(!result.is_error);
+    let updated = std::fs::read_to_string(&path).expect("read updated");
+    assert_eq!(updated, "hello rust\n");
+
+    let output: serde_json::Value = serde_json::from_str(&result.output).expect("json output");
+    assert_eq!(output["applied"], true);
+    assert!(
+        output["diff"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("+hello rust")
+    );
+}
+
+#[tokio::test]
+async fn edit_replace_all() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("repeat.txt");
+    std::fs::write(&path, "a\na\n").expect("seed file");
+    let edit = EditTool::new(temp.path().to_path_buf());
+
+    let result = edit
+        .execute(json!({
+            "path": "repeat.txt",
+            "old_string": "a",
+            "new_string": "b",
+            "replace_all": true
+        }))
+        .await;
+
+    assert!(!result.is_error);
+    let updated = std::fs::read_to_string(&path).expect("read updated");
+    assert_eq!(updated, "b\nb\n");
+}
+
+#[tokio::test]
+async fn edit_errors_when_old_string_missing() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("missing.txt");
+    std::fs::write(&path, "hello\n").expect("seed file");
+    let edit = EditTool::new(temp.path().to_path_buf());
+
+    let result = edit
+        .execute(json!({
+            "path": "missing.txt",
+            "old_string": "world",
+            "new_string": "rust"
+        }))
+        .await;
+
+    assert!(result.is_error);
+    assert!(result.output.contains("not found"));
+}
+
+#[tokio::test]
+async fn edit_errors_on_non_unique_match_when_replace_all_false() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("non_unique.txt");
+    std::fs::write(&path, "x\nx\n").expect("seed file");
+    let edit = EditTool::new(temp.path().to_path_buf());
+
+    let result = edit
+        .execute(json!({
+            "path": "non_unique.txt",
+            "old_string": "x",
+            "new_string": "y"
+        }))
+        .await;
+
+    assert!(result.is_error);
+    assert!(result.output.contains("not unique"));
+}
+
+#[tokio::test]
+async fn edit_respects_workspace_boundary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::NamedTempFile::new().expect("outside file");
+    let edit = EditTool::new(temp.path().to_path_buf());
+
+    let result = edit
+        .execute(json!({
+            "path": outside.path().display().to_string(),
+            "old_string": "x",
+            "new_string": "y"
+        }))
+        .await;
+
+    assert!(result.is_error);
+    assert!(result.output.contains("outside workspace"));
+}
+
+#[tokio::test]
+async fn edit_rejects_parent_traversal() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let edit = EditTool::new(temp.path().to_path_buf());
+
+    let result = edit
+        .execute(json!({
+            "path": "../escape.txt",
+            "old_string": "x",
+            "new_string": "y"
+        }))
+        .await;
+
+    assert!(result.is_error);
+    assert!(result.output.contains("parent directory traversal"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn edit_rejects_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let outside_root = tempfile::tempdir().expect("outside tempdir");
+    let outside_file = outside_root.path().join("outside.txt");
+    std::fs::write(&outside_file, "hello\n").expect("seed outside");
+
+    let symlink_path = temp.path().join("link.txt");
+    symlink(&outside_file, &symlink_path).expect("create symlink");
+
+    let edit = EditTool::new(temp.path().to_path_buf());
+    let result = edit
+        .execute(json!({
+            "path": "link.txt",
+            "old_string": "hello",
+            "new_string": "bye"
+        }))
+        .await;
+
+    assert!(result.is_error);
+    assert!(result.output.contains("outside workspace"));
 }

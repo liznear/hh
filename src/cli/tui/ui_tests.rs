@@ -1,5 +1,8 @@
-use super::app::{ChatApp, ChatMessage};
-use super::ui::build_message_lines;
+use super::app::{ChatApp, ChatMessage, TodoItemView, TodoPriority, TodoStatus};
+use super::event::TuiEvent;
+use super::ui::{build_message_lines, render_app};
+use ratatui::{Terminal, backend::TestBackend};
+use serde_json::json;
 
 fn line_text(line: &ratatui::text::Line<'_>) -> String {
     line.spans
@@ -133,4 +136,111 @@ fn test_fenced_code_block_applies_keyword_highlighting() {
         .expect("Expected 'state' token span");
 
     assert_ne!(if_span.style.fg, state_span.style.fg);
+}
+
+#[test]
+fn sidebar_todo_rendering_shows_progress_and_status_markers() {
+    let mut app = ChatApp::default();
+    app.todo_items = vec![
+        TodoItemView {
+            content: "Ship feature".to_string(),
+            status: TodoStatus::InProgress,
+            priority: TodoPriority::High,
+        },
+        TodoItemView {
+            content: "Write tests".to_string(),
+            status: TodoStatus::Completed,
+            priority: TodoPriority::Medium,
+        },
+    ];
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let full_text = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(full_text.contains("1 / 2 done"));
+    assert!(full_text.contains("[ ] Ship feature"));
+    assert!(full_text.contains("[x] Write tests"));
+}
+
+#[test]
+fn edit_tool_success_renders_diff_header_and_lines() {
+    let mut app = ChatApp::default();
+    let output = serde_json::json!({
+        "path": "src/main.rs",
+        "applied": true,
+        "summary": {"added_lines": 1, "removed_lines": 1},
+        "diff": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-old\n+new\n"
+    })
+    .to_string();
+
+    app.messages.push(ChatMessage::ToolCall {
+        name: "edit".to_string(),
+        args: "{}".to_string(),
+        output: Some(output),
+        is_error: Some(false),
+    });
+
+    let lines = build_message_lines(&app, 120);
+    let rendered: Vec<String> = lines.iter().map(line_text).collect();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("src/main.rs  +1 -1"))
+    );
+    assert!(rendered.iter().any(|line| line.contains("+new")));
+    assert!(rendered.iter().any(|line| line.contains("-old")));
+
+    let added_span = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.as_ref().contains("+new"))
+        .expect("added diff line");
+    let removed_span = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.as_ref().contains("-old"))
+        .expect("removed diff line");
+
+    assert_ne!(added_span.style.fg, removed_span.style.fg);
+}
+
+#[test]
+fn todo_write_tool_end_updates_todo_state_from_full_output() {
+    let mut app = ChatApp::default();
+    app.handle_event(&TuiEvent::ToolStart {
+        name: "todo_write".to_string(),
+        args: json!({"todos": []}),
+    });
+
+    let output = json!({
+        "todos": [
+            {"content": "One", "status": "pending", "priority": "low"},
+            {"content": "Two", "status": "completed", "priority": "high"}
+        ],
+        "counts": {"total": 2, "pending": 1, "in_progress": 0, "completed": 1, "cancelled": 0}
+    })
+    .to_string();
+
+    app.handle_event(&TuiEvent::ToolEnd {
+        name: "todo_write".to_string(),
+        is_error: false,
+        output_preview: "preview".to_string(),
+        output_full: output,
+    });
+
+    assert_eq!(app.todo_items.len(), 2);
+    assert_eq!(app.todo_items[0].content, "One");
+    assert_eq!(app.todo_items[0].status, TodoStatus::Pending);
+    assert_eq!(app.todo_items[1].status, TodoStatus::Completed);
 }

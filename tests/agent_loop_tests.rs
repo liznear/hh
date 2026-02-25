@@ -67,7 +67,7 @@ impl AgentEvents for RecordingEvents {
             .push(format!("tool_start:{name}"));
     }
 
-    fn on_tool_end(&self, name: &str, is_error: bool, _output_preview: &str) {
+    fn on_tool_end(&self, name: &str, is_error: bool, _output_preview: &str, _output_full: &str) {
         self.log
             .lock()
             .expect("log")
