@@ -52,6 +52,7 @@ use crate::session::SessionMetadata;
 pub struct ChatApp {
     pub messages: Vec<ChatMessage>,
     pub input: String,
+    pub cursor: usize,
     pub scroll_offset: usize,
     pub should_quit: bool,
     pub is_processing: bool,
@@ -71,6 +72,7 @@ pub struct ChatApp {
     pub commands: Vec<SlashCommand>,
     pub filtered_commands: Vec<SlashCommand>,
     pub selected_command_index: usize,
+    preferred_column: Option<usize>,
 }
 
 impl ChatApp {
@@ -79,6 +81,7 @@ impl ChatApp {
         Self {
             messages: Vec::new(),
             input: String::new(),
+            cursor: 0,
             scroll_offset: 0,
             should_quit: false,
             is_processing: false,
@@ -97,6 +100,7 @@ impl ChatApp {
             commands,
             filtered_commands: Vec::new(),
             selected_command_index: 0,
+            preferred_column: None,
         }
     }
 
@@ -145,6 +149,8 @@ impl ChatApp {
 
     pub fn submit_input(&mut self) -> String {
         let input = std::mem::take(&mut self.input);
+        self.cursor = 0;
+        self.preferred_column = None;
         if !input.is_empty() {
             let extracted_todos = extract_todos(&input);
             if self.todo_items.is_empty() && !extracted_todos.is_empty() {
@@ -323,6 +329,117 @@ impl ChatApp {
     pub fn mark_dirty(&self) {
         *self.needs_rebuild.borrow_mut() = true;
     }
+
+    pub fn insert_char(&mut self, ch: char) {
+        self.input.insert(self.cursor, ch);
+        self.cursor += ch.len_utf8();
+        self.preferred_column = None;
+    }
+
+    pub fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        if let Some((idx, _)) = self.input[..self.cursor].char_indices().next_back() {
+            self.input.drain(idx..self.cursor);
+            self.cursor = idx;
+            self.preferred_column = None;
+        }
+    }
+
+    pub fn clear_input(&mut self) {
+        self.input.clear();
+        self.cursor = 0;
+        self.preferred_column = None;
+    }
+
+    pub fn set_input(&mut self, value: String) {
+        self.input = value;
+        self.cursor = self.input.len();
+        self.preferred_column = None;
+    }
+
+    pub fn move_to_line_start(&mut self) {
+        let (start, _) = current_line_bounds(&self.input, self.cursor);
+        if self.cursor == start {
+            let (line_index, _) = cursor_line_col(&self.input, self.cursor);
+            if line_index > 0
+                && let Some((prev_start, _)) = line_bounds_by_index(&self.input, line_index - 1)
+            {
+                self.cursor = prev_start;
+            }
+        } else {
+            self.cursor = start;
+        }
+        self.preferred_column = None;
+    }
+
+    pub fn move_to_line_end(&mut self) {
+        let (_, end) = current_line_bounds(&self.input, self.cursor);
+        if self.cursor == end {
+            let (line_index, _) = cursor_line_col(&self.input, self.cursor);
+            if let Some((_, next_end)) = line_bounds_by_index(&self.input, line_index + 1) {
+                self.cursor = next_end;
+            }
+        } else {
+            self.cursor = end;
+        }
+        self.preferred_column = None;
+    }
+
+    pub fn move_cursor_up(&mut self) {
+        self.move_cursor_vertical(-1);
+    }
+
+    pub fn move_cursor_down(&mut self) {
+        self.move_cursor_vertical(1);
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        if let Some((idx, _)) = self.input[..self.cursor].char_indices().next_back() {
+            self.cursor = idx;
+            self.preferred_column = None;
+        }
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        if self.cursor >= self.input.len() {
+            return;
+        }
+        if let Some(ch) = self.input[self.cursor..].chars().next() {
+            self.cursor += ch.len_utf8();
+            self.preferred_column = None;
+        }
+    }
+
+    fn move_cursor_vertical(&mut self, direction: isize) {
+        if self.input.is_empty() {
+            return;
+        }
+
+        let (line_index, column) = cursor_line_col(&self.input, self.cursor);
+        let target_column = self.preferred_column.unwrap_or(column);
+        let target_line = if direction < 0 {
+            line_index.saturating_sub(1)
+        } else {
+            line_index + 1
+        };
+
+        if direction < 0 && line_index == 0 {
+            return;
+        }
+
+        let total_lines = self.input.split('\n').count();
+        if target_line >= total_lines {
+            return;
+        }
+
+        self.cursor = line_col_to_cursor(&self.input, target_line, target_column);
+        self.preferred_column = Some(target_column);
+    }
 }
 
 impl TodoStatus {
@@ -401,5 +518,65 @@ fn split_numbered_list(line: &str) -> Option<&str> {
     if let Some(rest) = rest.strip_prefix(')') {
         return rest.strip_prefix(' ');
     }
+    None
+}
+
+fn current_line_bounds(input: &str, cursor: usize) -> (usize, usize) {
+    let cursor = cursor.min(input.len());
+    let start = input[..cursor].rfind('\n').map_or(0, |idx| idx + 1);
+    let end = input[cursor..]
+        .find('\n')
+        .map_or(input.len(), |idx| cursor + idx);
+    (start, end)
+}
+
+fn cursor_line_col(input: &str, cursor: usize) -> (usize, usize) {
+    let cursor = cursor.min(input.len());
+    let mut line = 0usize;
+    let mut line_start = 0usize;
+
+    for (idx, ch) in input.char_indices() {
+        if idx >= cursor {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            line_start = idx + 1;
+        }
+    }
+
+    let col = input[line_start..cursor].chars().count();
+    (line, col)
+}
+
+fn line_col_to_cursor(input: &str, target_line: usize, target_col: usize) -> usize {
+    let mut line_start = 0usize;
+
+    for (line_idx, line) in input.split('\n').enumerate() {
+        let line_end = line_start + line.len();
+        if line_idx == target_line {
+            let rel = line
+                .char_indices()
+                .nth(target_col)
+                .map_or(line.len(), |(idx, _)| idx);
+            return line_start + rel;
+        }
+        line_start = line_end + 1;
+    }
+
+    input.len()
+}
+
+fn line_bounds_by_index(input: &str, target_line: usize) -> Option<(usize, usize)> {
+    let mut line_start = 0usize;
+
+    for (line_idx, line) in input.split('\n').enumerate() {
+        let line_end = line_start + line.len();
+        if line_idx == target_line {
+            return Some((line_start, line_end));
+        }
+        line_start = line_end + 1;
+    }
+
     None
 }

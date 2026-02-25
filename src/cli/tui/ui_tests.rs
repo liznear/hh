@@ -1,7 +1,7 @@
 use super::app::{ChatApp, ChatMessage, TodoItemView, TodoPriority, TodoStatus};
 use super::event::TuiEvent;
 use super::ui::{build_message_lines, render_app};
-use ratatui::{backend::TestBackend, Terminal};
+use ratatui::{Terminal, backend::TestBackend};
 use serde_json::json;
 
 fn line_text(line: &ratatui::text::Line<'_>) -> String {
@@ -384,9 +384,11 @@ fn edit_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("src/main.rs  +1 -1")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("src/main.rs  +1 -1"))
+    );
     assert!(rendered.iter().any(|line| line.contains("+new")));
     assert!(rendered.iter().any(|line| line.contains("-old")));
 
@@ -425,9 +427,11 @@ fn write_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("README.md  +2 -1")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("README.md  +2 -1"))
+    );
     assert!(rendered.iter().any(|line| line.contains("+new")));
     assert!(rendered.iter().any(|line| line.contains("-old")));
 }
@@ -454,9 +458,11 @@ fn edit_diff_header_includes_tool_name() {
         .iter()
         .map(line_text)
         .collect();
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("Edit src/main.rs  +1 -1")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Edit src/main.rs  +1 -1"))
+    );
 }
 
 #[test]
@@ -481,9 +487,11 @@ fn side_by_side_diff_pairs_removed_and_added_lines() {
         .iter()
         .map(line_text)
         .collect();
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("-old") && line.contains("|") && line.contains("+new")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("-old") && line.contains("|") && line.contains("+new"))
+    );
 }
 
 #[test]
@@ -584,6 +592,63 @@ fn processing_indicator_is_hidden_when_idle() {
 
     assert!(!full_text.contains("esc interrupt"));
     assert!(!full_text.contains("■"));
+}
+
+#[test]
+fn input_panel_keeps_top_padding_and_renders_second_line() {
+    let mut app = ChatApp::default();
+    app.set_input("a\nb".to_string());
+
+    let backend = TestBackend::new(120, 25);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let text_x = 6;
+    let mut y_a = None;
+    let mut y_b = None;
+    for y in 0..25 {
+        let symbol = buffer[(text_x, y as u16)].symbol();
+        if symbol == "a" {
+            y_a = Some(y as u16);
+        }
+        if symbol == "b" {
+            y_b = Some(y as u16);
+        }
+    }
+
+    let y_a = y_a.expect("find first input line");
+    let y_b = y_b.expect("find second input line");
+    assert_eq!(y_b, y_a + 1);
+    assert_eq!(buffer[(text_x, y_a - 1)].symbol(), " ");
+}
+
+#[test]
+fn input_panel_grows_up_to_five_lines() {
+    let mut app = ChatApp::default();
+    app.set_input("L1\nL2\nL3\nL4\nL5\nL6".to_string());
+
+    let backend = TestBackend::new(120, 25);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let full_text = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(!full_text.contains("L1"));
+    assert!(full_text.contains("L2"));
+    assert!(full_text.contains("L3"));
+    assert!(full_text.contains("L4"));
+    assert!(full_text.contains("L5"));
+    assert!(full_text.contains("L6"));
 }
 
 #[test]

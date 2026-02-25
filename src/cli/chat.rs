@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use tokio::sync::mpsc;
 
 use crate::cli::render;
@@ -208,6 +210,10 @@ fn handle_key_event<F>(
 where
     F: FnMut() -> anyhow::Result<(u16, u16)>,
 {
+    if key_event.kind == KeyEventKind::Release {
+        return Ok(());
+    }
+
     if key_event.code == KeyCode::Char('c') && key_event.modifiers.contains(KeyModifiers::CONTROL) {
         app.should_quit = true;
         return Ok(());
@@ -215,11 +221,23 @@ where
 
     match key_event.code {
         KeyCode::Char(c) => {
-            app.input.push(c);
-            app.update_command_filtering();
+            if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                match c {
+                    'a' | 'A' => app.move_to_line_start(),
+                    'e' | 'E' => app.move_to_line_end(),
+                    _ => {}
+                }
+            } else {
+                app.insert_char(c);
+                app.update_command_filtering();
+            }
         }
         KeyCode::Backspace => {
-            app.input.pop();
+            app.backspace();
+            app.update_command_filtering();
+        }
+        KeyCode::Enter if key_event.modifiers.contains(KeyModifiers::SHIFT) => {
+            app.insert_char('\n');
             app.update_command_filtering();
         }
         KeyCode::Enter => {
@@ -239,7 +257,7 @@ where
                     app.update_command_filtering();
                     handle_submitted_input(input, app, settings, cwd, event_sender);
                 } else {
-                    app.input = name;
+                    app.set_input(name);
                     app.update_command_filtering();
                 }
             } else {
@@ -249,7 +267,7 @@ where
             }
         }
         KeyCode::Esc => {
-            app.input.clear();
+            app.clear_input();
             app.update_command_filtering();
         }
         KeyCode::Up => {
@@ -259,9 +277,17 @@ where
                 } else {
                     app.selected_command_index = app.filtered_commands.len().saturating_sub(1);
                 }
+            } else if !app.input.is_empty() {
+                app.move_cursor_up();
             } else {
                 app.scroll_up();
             }
+        }
+        KeyCode::Left => {
+            app.move_cursor_left();
+        }
+        KeyCode::Right => {
+            app.move_cursor_right();
         }
         KeyCode::Down => {
             if !app.filtered_commands.is_empty() {
@@ -270,6 +296,8 @@ where
                 } else {
                     app.selected_command_index = 0;
                 }
+            } else if !app.input.is_empty() {
+                app.move_cursor_down();
             } else {
                 let (width, height) = terminal_size()?;
                 scroll_down_once(app, width, height);
@@ -698,6 +726,7 @@ fn handle_chat_message(
 mod tests {
     use super::*;
     use crate::config::settings::{AgentSettings, ProviderSettings, SessionSettings};
+    use crossterm::event::KeyEvent;
     use tempfile::tempdir;
 
     fn create_dummy_settings(root: &Path) -> Settings {
@@ -743,7 +772,7 @@ mod tests {
         let event_sender = TuiEventSender::new(tx);
 
         // Simulate typing "/resume"
-        app.input = "/resume".to_string();
+        app.set_input("/resume".to_string());
         // verify submit_input sets processing to true
         let input = app.submit_input();
         assert!(app.is_processing);
@@ -758,7 +787,7 @@ mod tests {
         assert!(app.is_picking_session);
 
         // Simulate picking session "1"
-        app.input = "1".to_string();
+        app.set_input("1".to_string());
         let input = app.submit_input();
         assert!(app.is_processing);
 
@@ -774,5 +803,262 @@ mod tests {
         // But we provided title "Test Session", so it should be listed.
         // Let's verify session_id is SOME value, and name is correct.
         assert_eq!(app.session_name, "Test Session");
+    }
+
+    #[test]
+    fn test_shift_enter_inserts_newline_without_submitting() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        app.set_input("hello".to_string());
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+
+        assert_eq!(app.input, "hello\n");
+        assert!(app.messages.is_empty());
+        assert!(!app.is_processing);
+    }
+
+    #[test]
+    fn test_shift_enter_press_followed_by_release_does_not_submit() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        app.set_input("hello".to_string());
+
+        handle_key_event(
+            KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::SHIFT, KeyEventKind::Press),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+
+        handle_key_event(
+            KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Release),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+
+        assert_eq!(app.input, "hello\n");
+        assert!(app.messages.is_empty());
+        assert!(!app.is_processing);
+    }
+
+    #[test]
+    fn test_multiline_cursor_shortcuts_ctrl_and_vertical_arrows() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        app.set_input("abc\ndefg\nxy".to_string());
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 9);
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 4);
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 9);
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 11);
+    }
+
+    #[test]
+    fn test_ctrl_e_and_ctrl_a_can_cross_line_edges() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        app.set_input("ab\ncd\nef".to_string());
+
+        // End of first line.
+        app.cursor = 2;
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 5);
+
+        // End of second line should jump to end of third line.
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 8);
+
+        // On last line end, Ctrl+E stays there.
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 8);
+
+        // Ctrl+A at line end moves to that line's start.
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 6);
+
+        // Ctrl+A at line start jumps to previous line start.
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 3);
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn test_left_and_right_move_cursor_across_newline() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        app.set_input("ab\ncd".to_string());
+        app.cursor = 2;
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 3);
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 2);
+
+        app.cursor = 0;
+        handle_key_event(
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, 0);
+
+        app.cursor = app.input.len();
+        handle_key_event(
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert_eq!(app.cursor, app.input.len());
     }
 }
