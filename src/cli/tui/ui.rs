@@ -312,6 +312,7 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                 render_user_message_block(&mut lines, text, width);
             }
             ChatMessage::Assistant(text) => {
+                ensure_single_blank_line(&mut lines);
                 for line in parse_markdown_lines(text, width) {
                     lines.push(line);
                 }

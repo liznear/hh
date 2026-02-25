@@ -1,7 +1,7 @@
 use super::app::{ChatApp, ChatMessage, TodoItemView, TodoPriority, TodoStatus};
 use super::event::TuiEvent;
 use super::ui::{build_message_lines, render_app};
-use ratatui::{Terminal, backend::TestBackend};
+use ratatui::{backend::TestBackend, Terminal};
 use serde_json::json;
 
 fn line_text(line: &ratatui::text::Line<'_>) -> String {
@@ -252,6 +252,32 @@ fn thinking_has_one_blank_line_after_it() {
 }
 
 #[test]
+fn assistant_has_one_blank_line_before_it_after_tool_output() {
+    let mut app = ChatApp::default();
+    app.messages.push(ChatMessage::ToolCall {
+        name: "bash".to_string(),
+        args: json!({"command": "ls"}).to_string(),
+        output: Some("ok".to_string()),
+        is_error: Some(false),
+    });
+    app.messages
+        .push(ChatMessage::Assistant("answer".to_string()));
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+
+    let answer_idx = rendered
+        .iter()
+        .position(|line| line.contains("answer"))
+        .expect("assistant line");
+
+    assert_eq!(rendered[answer_idx - 1], "");
+    assert_ne!(rendered[answer_idx - 2], "");
+}
+
+#[test]
 fn thinking_uses_markdown_renderer() {
     let mut app = ChatApp::default();
     app.messages
@@ -358,11 +384,9 @@ fn edit_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("src/main.rs  +1 -1"))
-    );
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("src/main.rs  +1 -1")));
     assert!(rendered.iter().any(|line| line.contains("+new")));
     assert!(rendered.iter().any(|line| line.contains("-old")));
 
@@ -401,11 +425,9 @@ fn write_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("README.md  +2 -1"))
-    );
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("README.md  +2 -1")));
     assert!(rendered.iter().any(|line| line.contains("+new")));
     assert!(rendered.iter().any(|line| line.contains("-old")));
 }
@@ -432,11 +454,9 @@ fn edit_diff_header_includes_tool_name() {
         .iter()
         .map(line_text)
         .collect();
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("Edit src/main.rs  +1 -1"))
-    );
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("Edit src/main.rs  +1 -1")));
 }
 
 #[test]
@@ -461,11 +481,9 @@ fn side_by_side_diff_pairs_removed_and_added_lines() {
         .iter()
         .map(line_text)
         .collect();
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("-old") && line.contains("|") && line.contains("+new"))
-    );
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("-old") && line.contains("|") && line.contains("+new")));
 }
 
 #[test]
