@@ -74,7 +74,12 @@ async fn bash_tool_blocks_denylisted_command() {
     let output: serde_json::Value = serde_json::from_str(&result.output).expect("json output");
     assert_eq!(output["status"], "blocked");
     assert_eq!(output["ok"], false);
-    assert!(output["error"].as_str().unwrap_or_default().contains("blocked"));
+    assert!(
+        output["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("blocked")
+    );
 }
 
 #[tokio::test]

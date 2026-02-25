@@ -278,7 +278,7 @@ impl ChatApp {
             return false;
         };
 
-        *is_error == None && last_name == name && last_args == &args.to_string()
+        is_error.is_none() && last_name == name && last_args == &args.to_string()
     }
 
     fn complete_tool_call(&mut self, name: &str, is_error: bool, output: &str) {

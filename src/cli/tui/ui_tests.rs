@@ -1,7 +1,7 @@
 use super::app::{ChatApp, ChatMessage, TodoItemView, TodoPriority, TodoStatus};
 use super::event::TuiEvent;
 use super::ui::{build_message_lines, render_app};
-use ratatui::{backend::TestBackend, Terminal};
+use ratatui::{Terminal, backend::TestBackend};
 use serde_json::json;
 
 fn line_text(line: &ratatui::text::Line<'_>) -> String {
@@ -234,9 +234,11 @@ fn edit_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("src/main.rs  +1 -1")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("src/main.rs  +1 -1"))
+    );
     assert!(rendered.iter().any(|line| line.contains("+new")));
     assert!(rendered.iter().any(|line| line.contains("-old")));
 
@@ -275,9 +277,11 @@ fn write_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("README.md  +2 -1")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("README.md  +2 -1"))
+    );
     assert!(rendered.iter().any(|line| line.contains("+new")));
     assert!(rendered.iter().any(|line| line.contains("-old")));
 }
