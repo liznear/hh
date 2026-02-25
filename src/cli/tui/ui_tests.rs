@@ -178,6 +178,73 @@ fn test_fenced_code_block_applies_keyword_highlighting() {
 }
 
 #[test]
+fn assistant_messages_do_not_render_assistant_label() {
+    let mut app = ChatApp::default();
+    app.messages
+        .push(ChatMessage::Assistant("Hello world".to_string()));
+
+    let lines = build_message_lines(&app, 120);
+    let rendered: Vec<String> = lines.iter().map(line_text).collect();
+
+    assert!(rendered.iter().any(|line| line.contains("Hello world")));
+    assert!(rendered.iter().all(|line| !line.contains("Assistant")));
+}
+
+#[test]
+fn thinking_message_is_not_truncated() {
+    let mut app = ChatApp::default();
+    let tail = "TAIL_SEGMENT";
+    app.messages.push(ChatMessage::Thinking(format!(
+        "{}{}",
+        "a".repeat(260),
+        tail
+    )));
+
+    let lines = build_message_lines(&app, 120);
+    let rendered = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+    assert!(rendered.contains(tail));
+}
+
+#[test]
+fn thinking_has_one_blank_line_before_it() {
+    let mut app = ChatApp::default();
+    app.messages
+        .push(ChatMessage::Assistant("previous".to_string()));
+    app.messages
+        .push(ChatMessage::Thinking("thinking".to_string()));
+    app.messages
+        .push(ChatMessage::Assistant("answer".to_string()));
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+
+    let think_idx = rendered
+        .iter()
+        .position(|line| line.contains("Thinking:"))
+        .expect("thinking line");
+    assert_eq!(rendered[think_idx - 1], "");
+    assert_ne!(rendered[think_idx - 2], "");
+}
+
+#[test]
+fn user_prompt_box_has_inner_top_bottom_padding_and_left_indent() {
+    let mut app = ChatApp::default();
+    app.messages.push(ChatMessage::User("hello".to_string()));
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+
+    let bubble_lines: Vec<&String> = rendered.iter().filter(|line| line.contains('▌')).collect();
+    assert!(bubble_lines.len() >= 3);
+    assert!(bubble_lines.iter().all(|line| line.starts_with("  ▌")));
+}
+
+#[test]
 fn sidebar_todo_rendering_shows_progress_and_status_markers() {
     let mut app = ChatApp::default();
     app.todo_items = vec![
@@ -282,6 +349,164 @@ fn write_tool_success_renders_diff_header_and_lines() {
     );
     assert!(rendered.iter().any(|line| line.contains("+new")));
     assert!(rendered.iter().any(|line| line.contains("-old")));
+}
+
+#[test]
+fn edit_diff_header_includes_tool_name() {
+    let mut app = ChatApp::default();
+    let output = serde_json::json!({
+        "path": "src/main.rs",
+        "applied": true,
+        "summary": {"added_lines": 1, "removed_lines": 1},
+        "diff": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-old\n+new\n"
+    })
+    .to_string();
+
+    app.messages.push(ChatMessage::ToolCall {
+        name: "edit".to_string(),
+        args: "{}".to_string(),
+        output: Some(output),
+        is_error: Some(false),
+    });
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Edit src/main.rs  +1 -1"))
+    );
+}
+
+#[test]
+fn side_by_side_diff_pairs_removed_and_added_lines() {
+    let mut app = ChatApp::default();
+    let output = serde_json::json!({
+        "path": "src/main.rs",
+        "applied": true,
+        "summary": {"added_lines": 1, "removed_lines": 1},
+        "diff": "@@ -1 +1 @@\n-old\n+new\n"
+    })
+    .to_string();
+
+    app.messages.push(ChatMessage::ToolCall {
+        name: "edit".to_string(),
+        args: "{}".to_string(),
+        output: Some(output),
+        is_error: Some(false),
+    });
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("-old") && line.contains("|") && line.contains("+new"))
+    );
+}
+
+#[test]
+fn list_tool_completed_row_shows_entry_count() {
+    let mut app = ChatApp::default();
+    app.messages.push(ChatMessage::ToolCall {
+        name: "list".to_string(),
+        args: json!({"path":"."}).to_string(),
+        output: Some(json!({"path":".","count":3,"entries":["a","b","c"]}).to_string()),
+        is_error: Some(false),
+    });
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(rendered.iter().any(|line| line.contains("(3 entries)")));
+}
+
+#[test]
+fn grep_tool_completed_row_shows_match_count() {
+    let mut app = ChatApp::default();
+    app.messages.push(ChatMessage::ToolCall {
+        name: "grep".to_string(),
+        args: json!({"path":".","pattern":"foo"}).to_string(),
+        output: Some(
+            json!({"path":".","pattern":"foo","count":2,"matches":["a:1:foo","b:2:foo"]})
+                .to_string(),
+        ),
+        is_error: Some(false),
+    });
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(rendered.iter().any(|line| line.contains("(2 matches)")));
+}
+
+#[test]
+fn status_row_text_is_not_rendered() {
+    let app = ChatApp::default();
+    let backend = TestBackend::new(120, 25);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let full_text = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(!full_text.contains(":quit | Ctrl+C"));
+}
+
+#[test]
+fn processing_indicator_uses_block_spinner_glyphs() {
+    let mut app = ChatApp::default();
+    app.set_processing(true);
+
+    let backend = TestBackend::new(120, 25);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let full_text = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(full_text.contains("■"));
+    assert!(full_text.contains("⬝"));
+    assert!(full_text.contains("esc interrupt"));
+}
+
+#[test]
+fn processing_indicator_is_hidden_when_idle() {
+    let app = ChatApp::default();
+
+    let backend = TestBackend::new(120, 25);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let full_text = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(!full_text.contains("esc interrupt"));
+    assert!(!full_text.contains("■"));
 }
 
 #[test]

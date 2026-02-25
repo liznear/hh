@@ -9,6 +9,7 @@ use super::event::TuiEvent;
 use super::tool_render::render_tool_result;
 
 const SIDEBAR_WIDTH: u16 = 38;
+const LEFT_COLUMN_RIGHT_MARGIN: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TodoItemView {
@@ -194,12 +195,12 @@ impl ChatApp {
     }
 
     pub fn message_viewport_height(&self, total_height: u16) -> usize {
-        total_height.saturating_sub(self.progress_panel_height() + 1 + 3 + 1 + 2) as usize
+        total_height.saturating_sub(self.progress_panel_height() + 3 + 1 + 1 + 1 + 2) as usize
     }
 
     pub fn message_wrap_width(&self, total_width: u16) -> usize {
         let main_width = if total_width > SIDEBAR_WIDTH {
-            total_width.saturating_sub(SIDEBAR_WIDTH)
+            total_width.saturating_sub(SIDEBAR_WIDTH + LEFT_COLUMN_RIGHT_MARGIN)
         } else {
             total_width
         };
