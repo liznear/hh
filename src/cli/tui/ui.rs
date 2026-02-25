@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Stylize,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::iter::Peekable;
 
 use super::app::{ChatApp, ChatMessage, TodoItemView, TodoStatus};
-use super::markdown::markdown_to_lines;
+use super::markdown::markdown_to_lines_with_indent;
 use super::tool_presentation::render_tool_start;
 
 const SIDEBAR_WIDTH: u16 = 38;
@@ -19,9 +19,15 @@ const LEFT_COLUMN_RIGHT_MARGIN: u16 = 2;
 const MAIN_OUTER_PADDING_X: u16 = 1;
 const MAIN_OUTER_PADDING_Y: u16 = 1;
 const MAX_TOOL_OUTPUT_LEN: usize = 200;
-const USER_BUBBLE_INDENT: usize = 2;
+const USER_BUBBLE_INDENT: usize = 3;
 const USER_BUBBLE_INNER_PADDING: usize = 1;
 const MIN_DIFF_COLUMN_WIDTH: usize = 14;
+const MESSAGE_INDENT: &str = "    ";
+const TOOL_PENDING_MARKER: &str = "-> ";
+const PROCESSING_INDENT: &str = MESSAGE_INDENT;
+const PROCESSING_STATUS_GAP: &str = "  ";
+const SIDEBAR_INDENT: &str = "  ";
+const SIDEBAR_LABEL_INDENT: &str = " ";
 
 const PAGE_BG: Color = Color::Rgb(246, 247, 251);
 const PANEL_BG: Color = Color::Rgb(255, 255, 255);
@@ -174,30 +180,39 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
 
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(Span::styled(
-            "  / / / / / / / /",
+            sidebar_prefixed("/ / / / / / / /"),
             Style::default().fg(ACCENT),
         )),
         Line::from(Span::styled(
-            "  HH",
-            Style::default().fg(INPUT_ACCENT).bold(),
-        )),
-        Line::from(Span::styled("  H H", Style::default().fg(ACCENT).bold())),
-        Line::from(Span::styled(
-            "  HHH",
+            sidebar_prefixed("HH"),
             Style::default().fg(INPUT_ACCENT).bold(),
         )),
         Line::from(Span::styled(
-            "  / / / / / / / /",
+            sidebar_prefixed("H H"),
+            Style::default().fg(ACCENT).bold(),
+        )),
+        Line::from(Span::styled(
+            sidebar_prefixed("HHH"),
+            Style::default().fg(INPUT_ACCENT).bold(),
+        )),
+        Line::from(Span::styled(
+            sidebar_prefixed("/ / / / / / / /"),
             Style::default().fg(ACCENT),
         )),
         Line::from(""),
         Line::from(vec![
-            Span::styled(" Session", Style::default().fg(TEXT_SECONDARY).bold()),
+            Span::styled(
+                sidebar_label("Session"),
+                Style::default().fg(TEXT_SECONDARY).bold(),
+            ),
             Span::raw(": "),
             Span::styled(app.session_name.clone(), Style::default().fg(TEXT_PRIMARY)),
         ]),
         Line::from(vec![
-            Span::styled(" Directory", Style::default().fg(TEXT_SECONDARY).bold()),
+            Span::styled(
+                sidebar_label("Directory"),
+                Style::default().fg(TEXT_SECONDARY).bold(),
+            ),
             Span::raw(": "),
             Span::styled(
                 abbreviate_path(
@@ -208,7 +223,10 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
             ),
         ]),
         Line::from(vec![
-            Span::styled(" Context", Style::default().fg(TEXT_SECONDARY).bold()),
+            Span::styled(
+                sidebar_label("Context"),
+                Style::default().fg(TEXT_SECONDARY).bold(),
+            ),
             Span::raw(": "),
             Span::styled(
                 format!("{} / {} ({}%)", used, budget, context_percent),
@@ -217,7 +235,7 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            " TODO",
+            sidebar_label("TODO"),
             Style::default().fg(TEXT_SECONDARY).bold(),
         )),
     ];
@@ -229,7 +247,7 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
             .filter(|item| item.status == TodoStatus::Completed)
             .count();
         lines.push(Line::from(Span::styled(
-            format!(" {} / {} done", done, app.todo_items.len()),
+            sidebar_label(&format!("{} / {} done", done, app.todo_items.len())),
             Style::default().fg(TEXT_MUTED),
         )));
     }
@@ -284,6 +302,9 @@ pub fn build_message_lines(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
 
 fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+    let tool_done_continuation = message_child_indent();
+    let tool_pending_prefix = format!("{MESSAGE_INDENT}{TOOL_PENDING_MARKER}");
+    let tool_pending_continuation = " ".repeat(tool_pending_prefix.chars().count());
 
     for msg in &app.messages {
         match msg {
@@ -296,25 +317,7 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                 }
             }
             ChatMessage::Thinking(text) => {
-                ensure_single_blank_line(&mut lines);
-                let available_width = width.saturating_sub(4).max(1);
-                let wrapped = wrap_text(text, available_width);
-                for (i, line) in wrapped.iter().enumerate() {
-                    if i == 0 {
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                "  Thinking: ",
-                                Style::default().fg(THINKING_LABEL).italic(),
-                            ),
-                            Span::styled(line.clone(), Style::default().fg(THINKING_LABEL).bold()),
-                        ]));
-                    } else {
-                        lines.push(Line::from(vec![
-                            Span::raw("            "), // "  Thinking: " is 12 chars
-                            Span::styled(line.clone(), Style::default().fg(THINKING_LABEL).bold()),
-                        ]));
-                    }
-                }
+                render_thinking_block(&mut lines, text, width);
             }
             ChatMessage::ToolCall {
                 name,
@@ -349,14 +352,14 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                     for (i, line) in wrapped.iter().enumerate() {
                         if i == 0 {
                             lines.push(Line::from(vec![
-                                Span::raw("  "),
+                                Span::raw(MESSAGE_INDENT),
                                 Span::styled(symbol, Style::default().fg(color).bold()),
                                 Span::raw(" "),
                                 Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
                             ]));
                         } else {
                             lines.push(Line::from(vec![
-                                Span::raw("    "), // Indent 4
+                                Span::raw(tool_done_continuation.clone()),
                                 Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
                             ]));
                         }
@@ -366,12 +369,15 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                     for (i, line) in wrapped.iter().enumerate() {
                         if i == 0 {
                             lines.push(Line::from(vec![
-                                Span::styled("  -> ", Style::default().fg(TEXT_MUTED)),
+                                Span::styled(
+                                    tool_pending_prefix.clone(),
+                                    Style::default().fg(TEXT_MUTED),
+                                ),
                                 Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
                             ]));
                         } else {
                             lines.push(Line::from(vec![
-                                Span::raw("     "), // "  -> " is 5 chars
+                                Span::raw(tool_pending_continuation.clone()),
                                 Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
                             ]));
                         }
@@ -381,6 +387,7 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
             ChatMessage::Error(text) => {
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
+                    Span::raw(MESSAGE_INDENT),
                     Span::styled("Error:", Style::default().fg(Color::Red).bold()),
                     Span::raw(" "),
                     Span::styled(text.clone(), Style::default().fg(Color::Red)),
@@ -394,7 +401,50 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
 
 /// Parse markdown text into styled lines with wrapping
 fn parse_markdown_lines(text: &str, width: usize) -> Vec<Line<'static>> {
-    markdown_to_lines(text, width)
+    markdown_to_lines_with_indent(text, width, MESSAGE_INDENT)
+}
+
+fn parse_markdown_lines_unindented(text: &str, width: usize) -> Vec<Line<'static>> {
+    markdown_to_lines_with_indent(text, width, "")
+}
+
+fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usize) {
+    ensure_single_blank_line(lines);
+
+    let label = format!("{MESSAGE_INDENT}Thinking: ");
+    let label_width = label.chars().count();
+    let wrapped = parse_markdown_lines_unindented(text, width.saturating_sub(label_width).max(1));
+
+    if wrapped.is_empty() {
+        lines.push(Line::from(Span::styled(
+            label,
+            Style::default().fg(THINKING_LABEL).italic(),
+        )));
+        lines.push(Line::from(""));
+        return;
+    }
+
+    let continuation_indent = " ".repeat(label_width);
+    for (index, line) in wrapped.into_iter().enumerate() {
+        let mut spans = Vec::with_capacity(line.spans.len() + 1);
+        if index == 0 {
+            spans.push(Span::styled(
+                label.clone(),
+                Style::default().fg(THINKING_LABEL).italic(),
+            ));
+        } else {
+            spans.push(Span::raw(continuation_indent.clone()));
+        }
+
+        spans.extend(line.spans.into_iter().map(|span| {
+            let style = span.style.fg(THINKING_LABEL).add_modifier(Modifier::BOLD);
+            Span::styled(span.content.into_owned(), style)
+        }));
+
+        lines.push(Line::from(spans));
+    }
+
+    lines.push(Line::from(""));
 }
 
 /// Wrap text to a given width, returning a vector of lines.
@@ -503,8 +553,7 @@ fn render_processing_indicator(f: &mut Frame, app: &ChatApp, area: Rect) {
         return;
     }
 
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.push(Span::raw("  "));
+    let mut spans: Vec<Span<'static>> = vec![Span::raw(PROCESSING_INDENT)];
 
     let bar_len = area.width.saturating_sub(22).clamp(6, 10) as usize;
     let head = scanner_position(app.processing_step(85), bar_len, 6);
@@ -523,7 +572,7 @@ fn render_processing_indicator(f: &mut Frame, app: &ChatApp, area: Rect) {
         spans.push(Span::styled(glyph, style));
     }
 
-    spans.push(Span::raw("  "));
+    spans.push(Span::raw(PROCESSING_STATUS_GAP));
     spans.push(Span::styled(
         "esc interrupt",
         Style::default().fg(TEXT_MUTED),
@@ -589,7 +638,7 @@ fn append_sidebar_list(lines: &mut Vec<Line<'static>>, items: &[TodoItemView], m
     }
     if items.is_empty() {
         lines.push(Line::from(Span::styled(
-            "  none",
+            sidebar_prefixed("none"),
             Style::default().fg(TEXT_MUTED),
         )));
         return;
@@ -597,16 +646,16 @@ fn append_sidebar_list(lines: &mut Vec<Line<'static>>, items: &[TodoItemView], m
 
     let shown = items.len().min(max_items);
     for item in items.iter().take(shown) {
-        let (prefix, item_style) = match item.status {
+        let (marker, item_style) = match item.status {
             TodoStatus::Pending | TodoStatus::InProgress => {
-                ("  [ ] ", Style::default().fg(TEXT_PRIMARY))
+                ("[ ] ", Style::default().fg(TEXT_PRIMARY))
             }
-            TodoStatus::Completed => ("  [x] ", Style::default().fg(TEXT_MUTED)),
-            TodoStatus::Cancelled => ("  [-] ", Style::default().fg(TEXT_MUTED)),
+            TodoStatus::Completed => ("[x] ", Style::default().fg(TEXT_MUTED)),
+            TodoStatus::Cancelled => ("[-] ", Style::default().fg(TEXT_MUTED)),
         };
 
         lines.push(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(INPUT_ACCENT)),
+            Span::styled(sidebar_prefixed(marker), Style::default().fg(INPUT_ACCENT)),
             Span::styled(item.content.clone(), item_style),
         ]));
     }
@@ -629,9 +678,10 @@ fn render_edit_diff_block(
         Ok(value) => value,
         Err(_) => return false,
     };
+    let child_indent = message_child_indent();
 
     lines.push(Line::from(vec![
-        Span::raw("  "),
+        Span::raw(MESSAGE_INDENT),
         Span::styled("✓ ", Style::default().fg(INPUT_ACCENT).bold()),
         Span::styled(
             format!(
@@ -671,7 +721,7 @@ fn render_edit_diff_block(
 
     if truncated {
         lines.push(Line::from(vec![
-            Span::raw("    "),
+            Span::raw(child_indent.clone()),
             Span::styled(
                 "... diff truncated",
                 Style::default().fg(TEXT_MUTED).italic(),
@@ -689,6 +739,7 @@ fn render_edit_diff_block_single_column(
 ) -> bool {
     let mut rendered_chars = 0;
     let mut truncated = false;
+    let child_indent = message_child_indent();
 
     for (rendered_lines, raw_line) in diff.lines().enumerate() {
         let line_chars = raw_line.chars().count();
@@ -715,14 +766,14 @@ fn render_edit_diff_block_single_column(
         };
 
         lines.push(Line::from(vec![
-            Span::raw("    "),
+            Span::raw(child_indent.clone()),
             Span::styled(shown, style),
         ]));
     }
 
     if truncated {
         lines.push(Line::from(vec![
-            Span::raw("    "),
+            Span::raw(child_indent.clone()),
             Span::styled(
                 "... diff truncated",
                 Style::default().fg(TEXT_MUTED).italic(),
@@ -917,7 +968,7 @@ fn render_side_by_side_diff_row(
     };
 
     lines.push(Line::from(vec![
-        Span::raw("    "),
+        Span::raw(message_child_indent()),
         Span::styled(left_text, left_style),
         Span::styled(" | ", Style::default().fg(DIFF_META_FG)),
         Span::styled(right_text, right_style),
@@ -944,6 +995,18 @@ fn tool_title(name: &str) -> &'static str {
         "write" => "Write",
         _ => "Tool",
     }
+}
+
+fn sidebar_prefixed(text: &str) -> String {
+    format!("{SIDEBAR_INDENT}{text}")
+}
+
+fn sidebar_label(text: &str) -> String {
+    format!("{SIDEBAR_LABEL_INDENT}{text}")
+}
+
+fn message_child_indent() -> String {
+    " ".repeat(MESSAGE_INDENT.chars().count() + 2)
 }
 
 fn truncate_chars(input: &str, max_chars: usize) -> String {

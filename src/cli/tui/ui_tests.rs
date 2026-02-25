@@ -145,7 +145,7 @@ fn test_fenced_code_block_preserves_indentation() {
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
     assert!(
-        rendered.iter().any(|line| line == "      .iter()"),
+        rendered.iter().any(|line| line == "        .iter()"),
         "Expected leading spaces in code line to be preserved"
     );
 }
@@ -230,6 +230,46 @@ fn thinking_has_one_blank_line_before_it() {
 }
 
 #[test]
+fn thinking_has_one_blank_line_after_it() {
+    let mut app = ChatApp::default();
+    app.messages
+        .push(ChatMessage::Thinking("thinking".to_string()));
+    app.messages
+        .push(ChatMessage::Assistant("answer".to_string()));
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+
+    let think_idx = rendered
+        .iter()
+        .position(|line| line.contains("Thinking:"))
+        .expect("thinking line");
+
+    assert_eq!(rendered[think_idx + 1], "");
+    assert_ne!(rendered[think_idx + 2], "");
+}
+
+#[test]
+fn thinking_uses_markdown_renderer() {
+    let mut app = ChatApp::default();
+    app.messages
+        .push(ChatMessage::Thinking("**bold** `code`".to_string()));
+
+    let lines = build_message_lines(&app, 120);
+    let rendered: Vec<String> = lines.iter().map(line_text).collect();
+
+    let think_line = rendered
+        .iter()
+        .find(|line| line.contains("Thinking:"))
+        .expect("thinking line");
+    assert!(think_line.contains("bold code"));
+    assert!(!think_line.contains("**"));
+    assert!(!think_line.contains('`'));
+}
+
+#[test]
 fn user_prompt_box_has_inner_top_bottom_padding_and_left_indent() {
     let mut app = ChatApp::default();
     app.messages.push(ChatMessage::User("hello".to_string()));
@@ -241,7 +281,26 @@ fn user_prompt_box_has_inner_top_bottom_padding_and_left_indent() {
 
     let bubble_lines: Vec<&String> = rendered.iter().filter(|line| line.contains('▌')).collect();
     assert!(bubble_lines.len() >= 3);
-    assert!(bubble_lines.iter().all(|line| line.starts_with("  ▌")));
+    assert!(bubble_lines.iter().all(|line| line.starts_with("   ▌")));
+}
+
+#[test]
+fn error_message_uses_message_indent() {
+    let mut app = ChatApp::default();
+    app.messages.push(ChatMessage::Error(
+        "Reached max steps without final answer".to_string(),
+    ));
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+
+    let error_line = rendered
+        .iter()
+        .find(|line| line.contains("Error:"))
+        .expect("error line");
+    assert!(error_line.starts_with("    Error:"));
 }
 
 #[test]

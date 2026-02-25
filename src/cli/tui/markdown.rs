@@ -12,9 +12,11 @@ use syntect::{
 };
 use syntect_tui::translate_style;
 
-const INDENT: &str = "  ";
-
-pub fn markdown_to_lines(markdown: &str, width: usize) -> Vec<Line<'static>> {
+pub fn markdown_to_lines_with_indent(
+    markdown: &str,
+    width: usize,
+    indent: &str,
+) -> Vec<Line<'static>> {
     let mut rendered = Vec::new();
     let mut in_code_block = false;
     let mut code_language = String::new();
@@ -23,7 +25,7 @@ pub fn markdown_to_lines(markdown: &str, width: usize) -> Vec<Line<'static>> {
     for line in markdown.lines() {
         if let Some(language) = fence_language(line) {
             if in_code_block {
-                rendered.extend(render_code_block(&code_lines, &code_language));
+                rendered.extend(render_code_block(&code_lines, &code_language, indent));
                 in_code_block = false;
                 code_language.clear();
                 code_lines.clear();
@@ -39,11 +41,11 @@ pub fn markdown_to_lines(markdown: &str, width: usize) -> Vec<Line<'static>> {
             continue;
         }
 
-        rendered.extend(render_text_line(line, width));
+        rendered.extend(render_text_line(line, width, indent));
     }
 
     if in_code_block {
-        rendered.extend(render_code_block(&code_lines, &code_language));
+        rendered.extend(render_code_block(&code_lines, &code_language, indent));
     }
 
     rendered
@@ -63,32 +65,36 @@ fn fence_language(line: &str) -> Option<String> {
     Some(language.to_string())
 }
 
-fn render_text_line(line: &str, width: usize) -> Vec<Line<'static>> {
+fn render_text_line(line: &str, width: usize, indent: &str) -> Vec<Line<'static>> {
     let spans = parse_inline_markdown_spans(line);
-    let wrapped = wrap_spans(&spans, width.saturating_sub(INDENT.chars().count()));
+    let wrapped = wrap_spans(&spans, width.saturating_sub(indent.chars().count()));
 
     wrapped
         .into_iter()
         .map(|wrapped_line| {
-            let mut indented = vec![Span::raw(INDENT)];
+            let mut indented = vec![Span::raw(indent.to_string())];
             indented.extend(wrapped_line);
             Line::from(indented)
         })
         .collect()
 }
 
-fn render_code_block(code_lines: &[String], language: &str) -> Vec<Line<'static>> {
-    if let Some(highlighted) = highlight_code_block(code_lines, language) {
+fn render_code_block(code_lines: &[String], language: &str, indent: &str) -> Vec<Line<'static>> {
+    if let Some(highlighted) = highlight_code_block(code_lines, language, indent) {
         return highlighted;
     }
 
     code_lines
         .iter()
-        .map(|line| Line::from(vec![Span::raw(INDENT), Span::raw(line.clone())]))
+        .map(|line| Line::from(vec![Span::raw(indent.to_string()), Span::raw(line.clone())]))
         .collect()
 }
 
-fn highlight_code_block(code_lines: &[String], language: &str) -> Option<Vec<Line<'static>>> {
+fn highlight_code_block(
+    code_lines: &[String],
+    language: &str,
+    indent: &str,
+) -> Option<Vec<Line<'static>>> {
     let syntax_set = syntax_set();
     let theme = theme()?;
     let syntax = resolve_syntax(syntax_set, language)?;
@@ -97,7 +103,7 @@ fn highlight_code_block(code_lines: &[String], language: &str) -> Option<Vec<Lin
     let mut rendered = Vec::with_capacity(code_lines.len());
     for line in code_lines {
         let ranges = highlighter.highlight_line(line, syntax_set).ok()?;
-        let mut spans = vec![Span::raw(INDENT)];
+        let mut spans = vec![Span::raw(indent.to_string())];
         for (style, segment) in ranges {
             let tui_style = translate_style(style).unwrap_or_else(|_| Style::default());
             spans.push(Span::styled(segment.to_string(), tui_style));
@@ -256,7 +262,9 @@ fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> 
 
 #[cfg(test)]
 mod tests {
-    use super::markdown_to_lines;
+    use super::markdown_to_lines_with_indent;
+
+    const TEST_INDENT: &str = "    ";
 
     fn line_text(line: &ratatui::text::Line<'_>) -> String {
         line.spans
@@ -267,7 +275,7 @@ mod tests {
 
     #[test]
     fn hides_fence_markers() {
-        let lines = markdown_to_lines("```rust\nlet x = 1;\n```", 120);
+        let lines = markdown_to_lines_with_indent("```rust\nlet x = 1;\n```", 120, TEST_INDENT);
         let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
         assert!(rendered.iter().any(|line| line.contains("let x = 1;")));
@@ -276,15 +284,19 @@ mod tests {
 
     #[test]
     fn preserves_code_indentation() {
-        let lines = markdown_to_lines("```rust\nif state {\n    .iter()\n}\n```", 120);
+        let lines = markdown_to_lines_with_indent(
+            "```rust\nif state {\n    .iter()\n}\n```",
+            120,
+            TEST_INDENT,
+        );
         let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-        assert!(rendered.iter().any(|line| line == "      .iter()"));
+        assert!(rendered.iter().any(|line| line == "        .iter()"));
     }
 
     #[test]
     fn applies_syntax_highlighting_when_language_is_known() {
-        let lines = markdown_to_lines("```rust\nlet value = 1;\n```", 120);
+        let lines = markdown_to_lines_with_indent("```rust\nlet value = 1;\n```", 120, TEST_INDENT);
         let code_line = lines
             .iter()
             .find(|line| line_text(line).contains("let value = 1;"))
@@ -306,7 +318,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_plain_rendering_for_unknown_language() {
-        let lines = markdown_to_lines("```weirdlang\nline\n```", 120);
+        let lines = markdown_to_lines_with_indent("```weirdlang\nline\n```", 120, TEST_INDENT);
         let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
         assert!(rendered.iter().any(|line| line.contains("line")));
