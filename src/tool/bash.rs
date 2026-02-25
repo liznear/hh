@@ -4,6 +4,11 @@ use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
+fn to_json_string(value: Value) -> String {
+    serde_json::to_string(&value)
+        .unwrap_or_else(|err| format!("{{\"status\":\"serialization_error\",\"error\":\"{err}\"}}"))
+}
+
 pub struct BashTool {
     denylist: Vec<String>,
 }
@@ -61,7 +66,12 @@ impl Tool for BashTool {
         if self.denied(command) {
             return ToolResult {
                 is_error: true,
-                output: "command blocked by denylist".to_string(),
+                output: to_json_string(json!({
+                    "status": "blocked",
+                    "ok": false,
+                    "command": command,
+                    "error": "command blocked by denylist"
+                })),
             };
         }
 
@@ -71,13 +81,24 @@ impl Tool for BashTool {
             Ok(Err(err)) => {
                 return ToolResult {
                     is_error: true,
-                    output: err.to_string(),
+                    output: to_json_string(json!({
+                        "status": "spawn_error",
+                        "ok": false,
+                        "command": command,
+                        "error": err.to_string()
+                    })),
                 };
             }
             Err(_) => {
                 return ToolResult {
                     is_error: true,
-                    output: format!("command timed out after {} ms", timeout_ms),
+                    output: to_json_string(json!({
+                        "status": "timeout",
+                        "ok": false,
+                        "command": command,
+                        "timeout_ms": timeout_ms,
+                        "error": format!("command timed out after {} ms", timeout_ms)
+                    })),
                 };
             }
         };
@@ -92,9 +113,21 @@ impl Tool for BashTool {
             format!("{}\n{}", stdout, stderr)
         };
 
+        let is_error = !output.status.success();
+        let status_text = if is_error { "error" } else { "success" };
+        let exit_code = output.status.code();
+
         ToolResult {
-            is_error: !output.status.success(),
-            output: combined,
+            is_error,
+            output: to_json_string(json!({
+                "status": status_text,
+                "ok": !is_error,
+                "command": command,
+                "exit_code": exit_code,
+                "stdout": stdout,
+                "stderr": stderr,
+                "output": combined
+            })),
         }
     }
 }

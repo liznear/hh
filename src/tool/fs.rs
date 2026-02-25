@@ -27,6 +27,36 @@ struct FileWriteOutput {
     diff: String,
 }
 
+#[derive(Debug, Serialize)]
+struct FileReadOutput {
+    path: String,
+    bytes: usize,
+    lines: usize,
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ListOutput {
+    path: String,
+    count: usize,
+    entries: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct GlobOutput {
+    pattern: String,
+    count: usize,
+    matches: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct GrepOutput {
+    path: String,
+    pattern: String,
+    count: usize,
+    matches: Vec<String>,
+}
+
 #[async_trait]
 impl Tool for FsRead {
     fn schema(&self) -> ToolSchema {
@@ -47,7 +77,15 @@ impl Tool for FsRead {
             .and_then(|v| v.as_str())
             .unwrap_or_default();
         match std::fs::read_to_string(path) {
-            Ok(content) => tool_ok(content),
+            Ok(content) => {
+                let output = FileReadOutput {
+                    path: path.to_string(),
+                    bytes: content.len(),
+                    lines: content.lines().count(),
+                    content,
+                };
+                tool_ok_json(&output)
+            }
             Err(err) => tool_err(err),
         }
     }
@@ -166,11 +204,16 @@ impl Tool for FsList {
         let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
         match std::fs::read_dir(path) {
             Ok(entries) => {
-                let mut names = Vec::new();
+                let mut entries_list = Vec::new();
                 for entry in entries.flatten() {
-                    names.push(entry.path().display().to_string());
+                    entries_list.push(entry.path().display().to_string());
                 }
-                tool_ok(names.join("\n"))
+                let output = ListOutput {
+                    path: path.to_string(),
+                    count: entries_list.len(),
+                    entries: entries_list,
+                };
+                tool_ok_json(&output)
             }
             Err(err) => tool_err(err),
         }
@@ -196,13 +239,18 @@ impl Tool for FsGlob {
             .get("pattern")
             .and_then(|v| v.as_str())
             .unwrap_or_default();
-        let mut out = Vec::new();
+        let mut matches = Vec::new();
         match glob::glob(pattern) {
             Ok(paths) => {
                 for p in paths.flatten() {
-                    out.push(p.display().to_string());
+                    matches.push(p.display().to_string());
                 }
-                tool_ok(out.join("\n"))
+                let output = GlobOutput {
+                    pattern: pattern.to_string(),
+                    count: matches.len(),
+                    matches,
+                };
+                tool_ok_json(&output)
             }
             Err(err) => tool_err(err),
         }
@@ -242,7 +290,14 @@ impl Tool for FsGrep {
             return tool_err(err);
         }
 
-        tool_ok(results.join("\n"))
+        let output = GrepOutput {
+            path: root.display().to_string(),
+            pattern: pattern.to_string(),
+            count: results.len(),
+            matches: results,
+        };
+
+        tool_ok_json(&output)
     }
 }
 
@@ -295,6 +350,13 @@ fn tool_ok(output: impl Into<String>) -> ToolResult {
     ToolResult {
         is_error: false,
         output: output.into(),
+    }
+}
+
+fn tool_ok_json(output: &impl Serialize) -> ToolResult {
+    match serde_json::to_string(output) {
+        Ok(serialized) => tool_ok(serialized),
+        Err(err) => tool_err(format!("failed to serialize output: {err}")),
     }
 }
 

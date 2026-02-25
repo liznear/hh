@@ -60,7 +60,10 @@ async fn fs_read_returns_file_content() {
         .await;
 
     assert!(!res.is_error);
-    assert_eq!(res.output, "content");
+    let output: serde_json::Value = serde_json::from_str(&res.output).expect("json output");
+    assert_eq!(output["content"], "content");
+    assert_eq!(output["bytes"], 7);
+    assert_eq!(output["lines"], 1);
 }
 
 #[tokio::test]
@@ -68,7 +71,26 @@ async fn bash_tool_blocks_denylisted_command() {
     let bash = BashTool::new();
     let result = bash.execute(json!({"command": "rm -rf /"})).await;
     assert!(result.is_error);
-    assert!(result.output.contains("blocked"));
+    let output: serde_json::Value = serde_json::from_str(&result.output).expect("json output");
+    assert_eq!(output["status"], "blocked");
+    assert_eq!(output["ok"], false);
+    assert!(output["error"].as_str().unwrap_or_default().contains("blocked"));
+}
+
+#[tokio::test]
+async fn bash_tool_reports_exit_code_and_streams() {
+    let bash = BashTool::new();
+    let result = bash
+        .execute(json!({"command": "printf 'ok'; printf 'warn' 1>&2"}))
+        .await;
+
+    assert!(!result.is_error);
+    let output: serde_json::Value = serde_json::from_str(&result.output).expect("json output");
+    assert_eq!(output["status"], "success");
+    assert_eq!(output["ok"], true);
+    assert_eq!(output["exit_code"], 0);
+    assert_eq!(output["stdout"], "ok");
+    assert_eq!(output["stderr"], "warn");
 }
 
 #[tokio::test]

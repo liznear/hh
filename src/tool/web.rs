@@ -1,6 +1,7 @@
 use crate::tool::{Tool, ToolResult, ToolSchema};
 use async_trait::async_trait;
 use scraper::{Html, Selector};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 pub struct WebFetchTool {
@@ -9,6 +10,41 @@ pub struct WebFetchTool {
 
 pub struct WebSearchTool {
     client: reqwest::Client,
+}
+
+#[derive(Debug, Serialize)]
+struct WebFetchOutput {
+    url: String,
+    status_code: u16,
+    ok: bool,
+    body: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchResult {
+    title: String,
+    url: String,
+    snippet: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WebSearchOutput {
+    query: String,
+    count: usize,
+    results: Vec<SearchResult>,
+}
+
+fn tool_ok_json(output: &impl Serialize) -> ToolResult {
+    match serde_json::to_string(output) {
+        Ok(serialized) => ToolResult {
+            is_error: false,
+            output: serialized,
+        },
+        Err(err) => ToolResult {
+            is_error: true,
+            output: format!("failed to serialize output: {err}"),
+        },
+    }
 }
 
 impl Default for WebFetchTool {
@@ -48,10 +84,23 @@ impl Tool for WebFetchTool {
             Ok(resp) => {
                 let status = resp.status();
                 match resp.text().await {
-                    Ok(body) => ToolResult {
-                        is_error: !status.is_success(),
-                        output: format!("status={}\n{}", status.as_u16(), body),
-                    },
+                    Ok(body) => {
+                        let output = WebFetchOutput {
+                            url: url.to_string(),
+                            status_code: status.as_u16(),
+                            ok: status.is_success(),
+                            body,
+                        };
+                        if status.is_success() {
+                            tool_ok_json(&output)
+                        } else {
+                            ToolResult {
+                                is_error: true,
+                                output: serde_json::to_string(&output)
+                                    .unwrap_or_else(|_| format!("status={}", status.as_u16())),
+                            }
+                        }
+                    }
                     Err(err) => ToolResult {
                         is_error: true,
                         output: err.to_string(),
@@ -134,17 +183,12 @@ impl Tool for WebSearchTool {
                 match resp.text().await {
                     Ok(html) => {
                         let results = parse_ddg_results(&html);
-                        if results.is_empty() {
-                            ToolResult {
-                                is_error: false,
-                                output: "No results found".to_string(),
-                            }
-                        } else {
-                            ToolResult {
-                                is_error: false,
-                                output: results.join("\n\n"),
-                            }
-                        }
+                        let output = WebSearchOutput {
+                            query: query.to_string(),
+                            count: results.len(),
+                            results,
+                        };
+                        tool_ok_json(&output)
                     }
                     Err(err) => ToolResult {
                         is_error: true,
@@ -160,7 +204,7 @@ impl Tool for WebSearchTool {
     }
 }
 
-fn parse_ddg_results(html: &str) -> Vec<String> {
+fn parse_ddg_results(html: &str) -> Vec<SearchResult> {
     let document = Html::parse_document(html);
     let result_selector = match Selector::parse(".result") {
         Ok(s) => s,
@@ -199,14 +243,11 @@ fn parse_ddg_results(html: &str) -> Vec<String> {
             .to_string();
 
         if !title.is_empty() {
-            let mut entry = format!("Title: {}", title);
-            if !url.is_empty() {
-                entry.push_str(&format!("\nURL: {}", url));
-            }
-            if !snippet.is_empty() {
-                entry.push_str(&format!("\nSnippet: {}", snippet));
-            }
-            results.push(entry);
+            results.push(SearchResult {
+                title,
+                url,
+                snippet,
+            });
         }
 
         if results.len() >= 5 {
