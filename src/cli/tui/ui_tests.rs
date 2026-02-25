@@ -216,6 +216,36 @@ fn edit_tool_success_renders_diff_header_and_lines() {
 }
 
 #[test]
+fn write_tool_success_renders_diff_header_and_lines() {
+    let mut app = ChatApp::default();
+    let output = serde_json::json!({
+        "path": "README.md",
+        "applied": true,
+        "summary": {"added_lines": 2, "removed_lines": 1},
+        "diff": "--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n-old\n+new\n+line2\n"
+    })
+    .to_string();
+
+    app.messages.push(ChatMessage::ToolCall {
+        name: "write".to_string(),
+        args: "{}".to_string(),
+        output: Some(output),
+        is_error: Some(false),
+    });
+
+    let lines = build_message_lines(&app, 120);
+    let rendered: Vec<String> = lines.iter().map(line_text).collect();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("README.md  +2 -1"))
+    );
+    assert!(rendered.iter().any(|line| line.contains("+new")));
+    assert!(rendered.iter().any(|line| line.contains("-old")));
+}
+
+#[test]
 fn todo_write_tool_end_updates_todo_state_from_full_output() {
     let mut app = ChatApp::default();
     app.handle_event(&TuiEvent::ToolStart {

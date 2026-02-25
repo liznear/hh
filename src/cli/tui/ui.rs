@@ -343,7 +343,7 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
 
                 if let Some(error) = is_error {
                     if !*error
-                        && name == "edit"
+                        && (name == "edit" || name == "write")
                         && let Some(tool_output) = output.as_deref()
                         && render_edit_diff_block(&mut lines, tool_output, available_width)
                     {

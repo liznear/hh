@@ -14,6 +14,33 @@ async fn fs_write_respects_workspace_boundary() {
         .execute(json!({"path": "a.txt", "content": "hello"}))
         .await;
     assert!(!ok.is_error);
+    let ok_output: serde_json::Value = serde_json::from_str(&ok.output).expect("write json output");
+    assert_eq!(ok_output["path"], "a.txt");
+    assert!(
+        ok_output["diff"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("+hello")
+    );
+
+    let overwrite = write_tool
+        .execute(json!({"path": "a.txt", "content": "hello world"}))
+        .await;
+    assert!(!overwrite.is_error);
+    let overwrite_output: serde_json::Value =
+        serde_json::from_str(&overwrite.output).expect("overwrite json output");
+    assert!(
+        overwrite_output["diff"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("-hello")
+    );
+    assert!(
+        overwrite_output["diff"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("+hello world")
+    );
 
     let blocked = write_tool
         .execute(json!({"path": "/tmp/outside.txt", "content": "bad"}))

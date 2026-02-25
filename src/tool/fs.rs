@@ -1,6 +1,8 @@
 use crate::tool::{Tool, ToolResult, ToolSchema};
 use async_trait::async_trait;
+use serde::Serialize;
 use serde_json::{Value, json};
+use similar::{ChangeTag, TextDiff};
 use std::path::{Component, Path, PathBuf};
 
 pub struct FsRead;
@@ -10,6 +12,20 @@ pub struct FsWrite {
 pub struct FsList;
 pub struct FsGlob;
 pub struct FsGrep;
+
+#[derive(Debug, Serialize)]
+struct FileWriteSummary {
+    added_lines: usize,
+    removed_lines: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct FileWriteOutput {
+    path: String,
+    applied: bool,
+    summary: FileWriteSummary,
+    diff: String,
+}
 
 #[async_trait]
 impl Tool for FsRead {
@@ -61,11 +77,12 @@ impl Tool for FsWrite {
     }
 
     async fn execute(&self, args: Value) -> ToolResult {
-        let path = PathBuf::from(
-            args.get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default(),
-        );
+        let raw_path = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let path = PathBuf::from(&raw_path);
         let content = args
             .get("content")
             .and_then(|v| v.as_str())
@@ -82,8 +99,50 @@ impl Tool for FsWrite {
             return tool_err(err);
         }
 
+        let before = if target.exists() {
+            match std::fs::read_to_string(&target) {
+                Ok(text) => text,
+                Err(err) => {
+                    return tool_err(format!("failed to read existing file before write: {err}"));
+                }
+            }
+        } else {
+            String::new()
+        };
+
         match std::fs::write(target, content) {
-            Ok(_) => tool_ok("ok"),
+            Ok(_) => {
+                let diff = TextDiff::from_lines(before.as_str(), content);
+                let mut added_lines = 0;
+                let mut removed_lines = 0;
+                for change in diff.iter_all_changes() {
+                    match change.tag() {
+                        ChangeTag::Insert => added_lines += 1,
+                        ChangeTag::Delete => removed_lines += 1,
+                        ChangeTag::Equal => {}
+                    }
+                }
+
+                let unified = diff
+                    .unified_diff()
+                    .context_radius(3)
+                    .header(&format!("a/{}", raw_path), &format!("b/{}", raw_path))
+                    .to_string();
+                let output = FileWriteOutput {
+                    path: raw_path,
+                    applied: before != content,
+                    summary: FileWriteSummary {
+                        added_lines,
+                        removed_lines,
+                    },
+                    diff: unified,
+                };
+
+                match serde_json::to_string(&output) {
+                    Ok(serialized) => tool_ok(serialized),
+                    Err(err) => tool_err(format!("failed to serialize write output: {err}")),
+                }
+            }
             Err(err) => tool_err(err),
         }
     }
