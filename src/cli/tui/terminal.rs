@@ -3,9 +3,12 @@ use std::io::{self, Stdout};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen,
+        LeaveAlternateScreen,
+    },
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{backend::CrosstermBackend, Terminal};
 
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 
@@ -13,7 +16,12 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 pub fn setup_terminal() -> io::Result<Tui> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        Clear(ClearType::All)
+    )?;
     let backend = CrosstermBackend::new(stdout);
     Terminal::new(backend)
 }

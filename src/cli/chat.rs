@@ -179,6 +179,7 @@ enum InputEvent {
     Key(event::KeyEvent),
     ScrollUp,
     ScrollDown,
+    Refresh,
 }
 
 async fn handle_input() -> anyhow::Result<Option<InputEvent>> {
@@ -186,6 +187,7 @@ async fn handle_input() -> anyhow::Result<Option<InputEvent>> {
         match event::read()? {
             Event::Key(key) => Ok(Some(InputEvent::Key(key))),
             Event::Mouse(mouse) => Ok(handle_mouse_event(mouse)),
+            Event::Resize(_, _) | Event::FocusGained => Ok(Some(InputEvent::Refresh)),
             _ => Ok(None),
         }
     } else {
@@ -386,6 +388,10 @@ async fn run_interactive_chat_loop(
                         for _ in 0..runner.scroll_down_lines {
                             scroll_down_once(app, terminal_size.width, terminal_size.height);
                         }
+                    }
+                    Some(InputEvent::Refresh) => {
+                        tui_guard.get().autoresize()?;
+                        tui_guard.get().clear()?;
                     }
                     None => {}
                 }
