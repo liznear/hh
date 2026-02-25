@@ -86,39 +86,29 @@ impl Tool for TodoWriteTool {
             }
         }
 
-        let counts = TodoCounts {
+        let mut counts = TodoCounts {
             total: parsed.todos.len(),
-            pending: parsed
-                .todos
-                .iter()
-                .filter(|item| item.status == "pending")
-                .count(),
-            in_progress: parsed
-                .todos
-                .iter()
-                .filter(|item| item.status == "in_progress")
-                .count(),
-            completed: parsed
-                .todos
-                .iter()
-                .filter(|item| item.status == "completed")
-                .count(),
-            cancelled: parsed
-                .todos
-                .iter()
-                .filter(|item| item.status == "cancelled")
-                .count(),
+            pending: 0,
+            in_progress: 0,
+            completed: 0,
+            cancelled: 0,
         };
+        for item in &parsed.todos {
+            match item.status.as_str() {
+                "pending" => counts.pending += 1,
+                "in_progress" => counts.in_progress += 1,
+                "completed" => counts.completed += 1,
+                "cancelled" => counts.cancelled += 1,
+                _ => {}
+            }
+        }
 
         let output = TodoWriteOutput {
             todos: parsed.todos,
             counts,
         };
 
-        match serde_json::to_string(&output) {
-            Ok(serialized) => tool_ok(serialized),
-            Err(err) => tool_err(format!("failed to serialize todo output: {err}")),
-        }
+        tool_ok_json(&output)
     }
 }
 
@@ -126,6 +116,13 @@ fn tool_ok(output: impl Into<String>) -> ToolResult {
     ToolResult {
         is_error: false,
         output: output.into(),
+    }
+}
+
+fn tool_ok_json(output: &impl Serialize) -> ToolResult {
+    match serde_json::to_string(output) {
+        Ok(serialized) => tool_ok(serialized),
+        Err(err) => tool_err(format!("failed to serialize output: {err}")),
     }
 }
 

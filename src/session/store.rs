@@ -211,6 +211,5 @@ pub fn user_message(content: String) -> SessionEvent {
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+        .map_or(0, |duration| duration.as_secs())
 }

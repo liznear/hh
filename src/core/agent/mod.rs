@@ -44,28 +44,24 @@ where
             .all(|message| message.role != Role::System)
             && !self.system_prompt.trim().is_empty()
         {
-            let system_message = Message {
-                role: Role::System,
-                content: self.system_prompt.clone(),
-                tool_call_id: None,
-            };
-            state.push(system_message.clone());
-            self.session.append(&SessionEvent::Message {
-                id: event_id(),
-                message: system_message,
-            })?;
+            self.append_message(
+                &mut state,
+                Message {
+                    role: Role::System,
+                    content: self.system_prompt.clone(),
+                    tool_call_id: None,
+                },
+            )?;
         }
 
-        let user_message = Message {
-            role: Role::User,
-            content: prompt,
-            tool_call_id: None,
-        };
-        state.push(user_message.clone());
-        self.session.append(&SessionEvent::Message {
-            id: event_id(),
-            message: user_message,
-        })?;
+        self.append_message(
+            &mut state,
+            Message {
+                role: Role::User,
+                content: prompt,
+                tool_call_id: None,
+            },
+        )?;
 
         while state.step < self.max_steps {
             let req = ProviderRequest {
@@ -109,17 +105,13 @@ where
                 tool_call_id: None,
             };
 
-            self.session.append(&SessionEvent::Message {
-                id: event_id(),
-                message: assistant.clone(),
-            })?;
+            self.append_message(&mut state, assistant.clone())?;
             if !thinking_content.is_empty() {
                 self.session.append(&SessionEvent::Thinking {
                     id: event_id(),
                     content: thinking_content,
                 })?;
             }
-            state.push(assistant.clone());
 
             if response.done {
                 self.events.on_assistant_done();
@@ -145,11 +137,11 @@ where
                             approved,
                         })?;
                         if !approved {
-                            let output = format!("tool approval denied: {}", call.name);
-                            let output = sanitize_tool_output(&output);
-                            self.events
-                                .on_tool_end(&call.name, true, &preview(&output), &output);
-                            self.record_tool_result(call.id.clone(), true, output, &mut state)?;
+                            self.record_tool_error(
+                                &call,
+                                format!("tool approval denied: {}", call.name),
+                                &mut state,
+                            )?;
                             continue;
                         }
                     }
@@ -212,6 +204,14 @@ where
             output,
         })?;
         Ok(())
+    }
+
+    fn append_message(&self, state: &mut AgentState, message: Message) -> anyhow::Result<()> {
+        state.push(message.clone());
+        self.session.append(&SessionEvent::Message {
+            id: event_id(),
+            message,
+        })
     }
 }
 

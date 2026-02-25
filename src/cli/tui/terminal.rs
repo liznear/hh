@@ -4,11 +4,11 @@ use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{
-        disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen,
-        LeaveAlternateScreen,
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
     },
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 
@@ -40,25 +40,21 @@ pub fn restore_terminal(terminal: &mut Tui) -> io::Result<()> {
 
 /// RAII guard for terminal cleanup on panic
 pub struct TuiGuard {
-    terminal: Option<Tui>,
+    terminal: Tui,
 }
 
 impl TuiGuard {
     pub fn new(terminal: Tui) -> Self {
-        Self {
-            terminal: Some(terminal),
-        }
+        Self { terminal }
     }
 
     pub fn get(&mut self) -> &mut Tui {
-        self.terminal.as_mut().unwrap()
+        &mut self.terminal
     }
 }
 
 impl Drop for TuiGuard {
     fn drop(&mut self) {
-        if let Some(mut terminal) = self.terminal.take() {
-            let _ = restore_terminal(&mut terminal);
-        }
+        let _ = restore_terminal(&mut self.terminal);
     }
 }

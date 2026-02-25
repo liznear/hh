@@ -90,7 +90,7 @@ fn render_code_block(code_lines: &[String], language: &str) -> Vec<Line<'static>
 
 fn highlight_code_block(code_lines: &[String], language: &str) -> Option<Vec<Line<'static>>> {
     let syntax_set = syntax_set();
-    let theme = theme();
+    let theme = theme()?;
     let syntax = resolve_syntax(syntax_set, language)?;
     let mut highlighter = HighlightLines::new(syntax, theme);
 
@@ -113,17 +113,18 @@ fn syntax_set() -> &'static SyntaxSet {
     INSTANCE.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
-fn theme() -> &'static Theme {
-    static INSTANCE: OnceLock<Theme> = OnceLock::new();
-    INSTANCE.get_or_init(|| {
-        let theme_set = ThemeSet::load_defaults();
-        theme_set
-            .themes
-            .get("base16-ocean.light")
-            .or_else(|| theme_set.themes.values().next())
-            .expect("syntect should provide at least one bundled theme")
-            .clone()
-    })
+fn theme() -> Option<&'static Theme> {
+    static INSTANCE: OnceLock<Option<Theme>> = OnceLock::new();
+    INSTANCE
+        .get_or_init(|| {
+            let theme_set = ThemeSet::load_defaults();
+            theme_set
+                .themes
+                .get("base16-ocean.light")
+                .or_else(|| theme_set.themes.values().next())
+                .cloned()
+        })
+        .as_ref()
 }
 
 fn resolve_syntax<'a>(syntax_set: &'a SyntaxSet, language: &str) -> Option<&'a SyntaxReference> {

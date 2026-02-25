@@ -44,6 +44,12 @@ impl OpenAiCompatibleProvider {
     }
 
     fn request_body(&self, req: &ProviderRequest, stream: bool) -> Value {
+        let model = if req.model.is_empty() {
+            self.model.as_str()
+        } else {
+            req.model.as_str()
+        };
+
         let tools = req
             .tools
             .iter()
@@ -59,29 +65,10 @@ impl OpenAiCompatibleProvider {
             })
             .collect::<Vec<_>>();
 
-        let messages = req
-            .messages
-            .iter()
-            .map(|m| {
-                let role = match m.role {
-                    Role::System => "system",
-                    Role::User => "user",
-                    Role::Assistant => "assistant",
-                    Role::Tool => "tool",
-                };
-                let mut obj = json!({
-                    "role": role,
-                    "content": m.content,
-                });
-                if let Some(id) = &m.tool_call_id {
-                    obj["tool_call_id"] = json!(id);
-                }
-                obj
-            })
-            .collect::<Vec<_>>();
+        let messages = req.messages.iter().map(message_to_wire).collect::<Vec<_>>();
 
         json!({
-            "model": if req.model.is_empty() { &self.model } else { &req.model },
+            "model": model,
             "messages": messages,
             "tools": tools,
             "tool_choice": "auto",
@@ -161,10 +148,11 @@ impl OpenAiCompatibleProvider {
         let mut assistant = String::new();
         let mut thinking = String::new();
         let mut partial_calls: Vec<StreamedToolCall> = Vec::new();
+        let mut stream_done = false;
 
         let mut buffer = String::new();
         let mut resp = response;
-        while let Some(chunk) = resp.chunk().await.context("stream read failed")? {
+        while !stream_done && let Some(chunk) = resp.chunk().await.context("stream read failed")? {
             let txt = String::from_utf8_lossy(&chunk);
             buffer.push_str(&txt);
 
@@ -172,45 +160,33 @@ impl OpenAiCompatibleProvider {
                 let line = buffer[..pos].trim_end_matches('\r').to_string();
                 buffer.drain(..=pos);
 
-                let line = line.trim();
-                if line.is_empty() || !line.starts_with("data:") {
-                    continue;
-                }
-
-                let payload = line.trim_start_matches("data:").trim();
-                if payload == "[DONE]" {
-                    break;
-                }
-
-                let value: Value = match serde_json::from_str(payload) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                apply_stream_chunk(
-                    &value,
-                    &mut assistant,
-                    &mut thinking,
-                    &mut partial_calls,
-                    &mut on_event,
-                );
-            }
-        }
-
-        if !buffer.trim().is_empty() {
-            let trailing = buffer.trim();
-            if trailing.starts_with("data:") {
-                let payload = trailing.trim_start_matches("data:").trim();
-                if payload != "[DONE]"
-                    && let Ok(value) = serde_json::from_str::<Value>(payload)
-                {
-                    apply_stream_chunk(
+                match parse_stream_line(&line) {
+                    Some(StreamLine::Done) => {
+                        stream_done = true;
+                        break;
+                    }
+                    Some(StreamLine::Payload(value)) => apply_stream_chunk(
                         &value,
                         &mut assistant,
                         &mut thinking,
                         &mut partial_calls,
                         &mut on_event,
-                    );
+                    ),
+                    None => continue,
                 }
+            }
+        }
+
+        if !stream_done {
+            match parse_stream_line(buffer.trim()) {
+                Some(StreamLine::Payload(value)) => apply_stream_chunk(
+                    &value,
+                    &mut assistant,
+                    &mut thinking,
+                    &mut partial_calls,
+                    &mut on_event,
+                ),
+                Some(StreamLine::Done) | None => {}
             }
         }
 
@@ -235,6 +211,45 @@ impl OpenAiCompatibleProvider {
             },
         })
     }
+}
+
+enum StreamLine {
+    Done,
+    Payload(Value),
+}
+
+fn message_to_wire(message: &Message) -> Value {
+    let mut wire = json!({
+        "role": role_to_wire(&message.role),
+        "content": message.content,
+    });
+    if let Some(id) = &message.tool_call_id {
+        wire["tool_call_id"] = json!(id);
+    }
+    wire
+}
+
+fn role_to_wire(role: &Role) -> &'static str {
+    match role {
+        Role::System => "system",
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::Tool => "tool",
+    }
+}
+
+fn parse_stream_line(line: &str) -> Option<StreamLine> {
+    let line = line.trim();
+    if line.is_empty() || !line.starts_with("data:") {
+        return None;
+    }
+
+    let payload = line.trim_start_matches("data:").trim();
+    if payload == "[DONE]" {
+        return Some(StreamLine::Done);
+    }
+
+    serde_json::from_str(payload).ok().map(StreamLine::Payload)
 }
 
 #[async_trait]

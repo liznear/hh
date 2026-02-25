@@ -176,10 +176,7 @@ impl Tool for FsWrite {
                     diff: unified,
                 };
 
-                match serde_json::to_string(&output) {
-                    Ok(serialized) => tool_ok(serialized),
-                    Err(err) => tool_err(format!("failed to serialize write output: {err}")),
-                }
+                tool_ok_json(&output)
             }
             Err(err) => tool_err(err),
         }

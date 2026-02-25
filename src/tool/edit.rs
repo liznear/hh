@@ -128,10 +128,7 @@ impl Tool for EditTool {
             diff: unified,
         };
 
-        match serde_json::to_string(&output) {
-            Ok(serialized) => tool_ok(serialized),
-            Err(err) => tool_err(format!("failed to serialize edit output: {err}")),
-        }
+        tool_ok_json(&output)
     }
 }
 
@@ -139,6 +136,13 @@ fn tool_ok(output: impl Into<String>) -> ToolResult {
     ToolResult {
         is_error: false,
         output: output.into(),
+    }
+}
+
+fn tool_ok_json(output: &impl Serialize) -> ToolResult {
+    match serde_json::to_string(output) {
+        Ok(serialized) => tool_ok(serialized),
+        Err(err) => tool_err(format!("failed to serialize output: {err}")),
     }
 }
 
