@@ -118,12 +118,14 @@ impl ChatApp {
                 self.mark_dirty();
             }
             TuiEvent::ToolStart { name, args } => {
-                self.messages.push(ChatMessage::ToolCall {
-                    name: name.clone(),
-                    args: args.to_string(),
-                    output: None,
-                    is_error: None,
-                });
+                if !self.is_duplicate_pending_tool_call(name, args) {
+                    self.messages.push(ChatMessage::ToolCall {
+                        name: name.clone(),
+                        args: args.to_string(),
+                        output: None,
+                        is_error: None,
+                    });
+                }
                 self.mark_dirty();
             }
             TuiEvent::ToolEnd {
@@ -263,6 +265,20 @@ impl ChatApp {
         }
 
         self.messages.push(ChatMessage::Thinking(chunk));
+    }
+
+    fn is_duplicate_pending_tool_call(&self, name: &str, args: &serde_json::Value) -> bool {
+        let Some(ChatMessage::ToolCall {
+            name: last_name,
+            args: last_args,
+            is_error,
+            ..
+        }) = self.messages.last()
+        else {
+            return false;
+        };
+
+        *is_error == None && last_name == name && last_args == &args.to_string()
     }
 
     fn complete_tool_call(&mut self, name: &str, is_error: bool, output: &str) {
