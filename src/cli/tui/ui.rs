@@ -4,7 +4,7 @@ use ratatui::{
     prelude::Stylize,
     style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Clear, List, ListItem, Paragraph, Wrap},
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -30,9 +30,9 @@ const SIDEBAR_INDENT: &str = "  ";
 const SIDEBAR_LABEL_INDENT: &str = " ";
 
 const PAGE_BG: Color = Color::Rgb(246, 247, 251);
-const PANEL_BG: Color = Color::Rgb(255, 255, 255);
 const SIDEBAR_BG: Color = Color::Rgb(234, 238, 246);
 const INPUT_PANEL_BG: Color = Color::Rgb(229, 233, 241);
+const COMMAND_PALETTE_BG: Color = Color::Rgb(214, 220, 232);
 const TEXT_PRIMARY: Color = Color::Rgb(37, 45, 58);
 const TEXT_SECONDARY: Color = Color::Rgb(98, 108, 124);
 const TEXT_MUTED: Color = Color::Rgb(125, 133, 147);
@@ -111,11 +111,15 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
 
     if !app.filtered_commands.is_empty() {
         let item_count = app.filtered_commands.len().min(5) as u16;
-        let popup_height = item_count + 2;
+        let popup_height = item_count;
+        let input_left = main_chunks[4].x.saturating_add(USER_BUBBLE_INDENT as u16);
+        let input_width = main_chunks[4]
+            .width
+            .saturating_sub(USER_BUBBLE_INDENT as u16);
         let popup_area = Rect {
-            x: main_chunks[4].x + 1,
+            x: input_left,
             y: main_chunks[4].y.saturating_sub(popup_height),
-            width: 60,
+            width: input_width,
             height: popup_height,
         };
         render_command_palette(f, app, popup_area);
@@ -135,6 +139,25 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
 
 fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect) {
     f.render_widget(Clear, area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(COMMAND_PALETTE_BG)),
+        area,
+    );
+
+    let name_width = app
+        .filtered_commands
+        .iter()
+        .take(5)
+        .map(|cmd| cmd.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(12, 24)
+        + 1;
+
+    let content_width = area.width as usize;
+    let list_left_padding = 2usize;
+    let left_padding = " ".repeat(list_left_padding);
+    let description_width = content_width.saturating_sub(list_left_padding + name_width + 1);
 
     let items: Vec<ListItem> = app
         .filtered_commands
@@ -145,14 +168,17 @@ fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect) {
             let style = if i == app.selected_command_index {
                 Style::default().fg(Color::White).bg(ACCENT)
             } else {
-                Style::default().fg(TEXT_PRIMARY).bg(PANEL_BG)
+                Style::default().fg(TEXT_PRIMARY).bg(COMMAND_PALETTE_BG)
             };
 
+            let description = truncate_chars(&cmd.description, description_width);
+
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{:<12}", cmd.name), Style::default().bold()),
+                Span::raw(left_padding.clone()),
+                Span::styled(format!("{:<name_width$}", cmd.name), Style::default()),
                 Span::raw(" "),
                 Span::styled(
-                    cmd.description.clone(),
+                    description,
                     if i == app.selected_command_index {
                         Style::default().fg(Color::White)
                     } else {
@@ -164,11 +190,7 @@ fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect) {
         })
         .collect();
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .style(Style::default().bg(PANEL_BG)),
-    );
+    let list = List::new(items).style(Style::default().bg(COMMAND_PALETTE_BG));
 
     f.render_widget(list, area);
 }
