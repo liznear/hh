@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Stylize,
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
@@ -22,7 +22,7 @@ const MAX_TOOL_OUTPUT_LEN: usize = 200;
 const USER_BUBBLE_INDENT: usize = 3;
 const USER_BUBBLE_INNER_PADDING: usize = 1;
 const MIN_DIFF_COLUMN_WIDTH: usize = 14;
-const MESSAGE_INDENT: &str = "    ";
+const MESSAGE_INDENT: &str = "     ";
 const TOOL_PENDING_MARKER: &str = "-> ";
 const PROCESSING_INDENT: &str = MESSAGE_INDENT;
 const PROCESSING_STATUS_GAP: &str = "  ";
@@ -446,7 +446,7 @@ fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usiz
         }
 
         spans.extend(line.spans.into_iter().map(|span| {
-            let style = span.style.fg(THINKING_LABEL).add_modifier(Modifier::BOLD);
+            let style = span.style.fg(TEXT_SECONDARY);
             Span::styled(span.content.into_owned(), style)
         }));
 

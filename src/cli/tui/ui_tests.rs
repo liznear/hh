@@ -1,7 +1,7 @@
 use super::app::{ChatApp, ChatMessage, TodoItemView, TodoPriority, TodoStatus};
 use super::event::TuiEvent;
 use super::ui::{build_message_lines, render_app};
-use ratatui::{Terminal, backend::TestBackend};
+use ratatui::{Terminal, backend::TestBackend, style::Color};
 use serde_json::json;
 
 fn line_text(line: &ratatui::text::Line<'_>) -> String {
@@ -145,7 +145,7 @@ fn test_fenced_code_block_preserves_indentation() {
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
     assert!(
-        rendered.iter().any(|line| line == "        .iter()"),
+        rendered.iter().any(|line| line == "         .iter()"),
         "Expected leading spaces in code line to be preserved"
     );
 }
@@ -296,6 +296,33 @@ fn thinking_uses_markdown_renderer() {
 }
 
 #[test]
+fn thinking_prefix_is_yellow_and_body_is_grey() {
+    let mut app = ChatApp::default();
+    app.messages
+        .push(ChatMessage::Thinking("hello".to_string()));
+
+    let lines = build_message_lines(&app, 120);
+    let think_line = lines
+        .iter()
+        .find(|line| line_text(line).contains("Thinking:"))
+        .expect("thinking line");
+
+    let prefix_span = think_line
+        .spans
+        .iter()
+        .find(|span| span.content.contains("Thinking:"))
+        .expect("thinking prefix span");
+    assert_eq!(prefix_span.style.fg, Some(Color::Rgb(227, 152, 67)));
+
+    let body_span = think_line
+        .spans
+        .iter()
+        .find(|span| span.content.contains("hello"))
+        .expect("thinking body span");
+    assert_eq!(body_span.style.fg, Some(Color::Rgb(98, 108, 124)));
+}
+
+#[test]
 fn user_prompt_box_has_inner_top_bottom_padding_and_left_indent() {
     let mut app = ChatApp::default();
     app.messages.push(ChatMessage::User("hello".to_string()));
@@ -326,7 +353,7 @@ fn error_message_uses_message_indent() {
         .iter()
         .find(|line| line.contains("Error:"))
         .expect("error line");
-    assert!(error_line.starts_with("    Error:"));
+    assert!(error_line.starts_with("     Error:"));
 }
 
 #[test]
