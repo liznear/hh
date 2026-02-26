@@ -21,7 +21,8 @@ const MAIN_OUTER_PADDING_Y: u16 = 1;
 const MAX_TOOL_OUTPUT_LEN: usize = 200;
 const USER_BUBBLE_INDENT: usize = 3;
 const USER_BUBBLE_INNER_PADDING: usize = 1;
-const MIN_DIFF_COLUMN_WIDTH: usize = 14;
+const MIN_DIFF_COLUMN_WIDTH: usize = 24;
+const DIFF_LINE_NUMBER_WIDTH: usize = 4;
 const MESSAGE_INDENT: &str = "     ";
 const TOOL_PENDING_MARKER: &str = "-> ";
 const PROCESSING_INDENT: &str = MESSAGE_INDENT;
@@ -934,8 +935,9 @@ fn render_edit_diff_block(
     let mut truncated = false;
 
     let mut raw_lines = parsed.diff.lines().peekable();
+    let mut cursor = DiffLineCursor::default();
     let mut rendered_lines = 0;
-    while let Some(side_by_side) = next_diff_row(&mut raw_lines) {
+    while let Some(side_by_side) = next_diff_row(&mut raw_lines, &mut cursor) {
         let line_chars = side_by_side.total_chars();
         if rendered_lines >= MAX_RENDERED_DIFF_LINES
             || rendered_chars + line_chars > MAX_RENDERED_DIFF_CHARS
@@ -1095,16 +1097,36 @@ fn diff_column_widths(available_width: usize) -> (usize, usize) {
 
 #[derive(Debug)]
 struct SideBySideDiffRow {
-    left: Option<String>,
-    right: Option<String>,
+    left: Option<DiffCell>,
+    right: Option<DiffCell>,
     kind: SideBySideDiffKind,
 }
 
 impl SideBySideDiffRow {
     fn total_chars(&self) -> usize {
-        self.left.as_ref().map(|s| s.chars().count()).unwrap_or(0)
-            + self.right.as_ref().map(|s| s.chars().count()).unwrap_or(0)
+        self.left
+            .as_ref()
+            .map(|cell| cell.text.chars().count())
+            .unwrap_or(0)
+            + self
+                .right
+                .as_ref()
+                .map(|cell| cell.text.chars().count())
+                .unwrap_or(0)
     }
+}
+
+#[derive(Debug, Clone)]
+struct DiffCell {
+    line_number: Option<usize>,
+    marker: Option<char>,
+    text: String,
+}
+
+#[derive(Debug, Default)]
+struct DiffLineCursor {
+    left_line: Option<usize>,
+    right_line: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1118,49 +1140,146 @@ enum SideBySideDiffKind {
 
 fn next_diff_row<'a>(
     lines: &mut Peekable<impl Iterator<Item = &'a str>>,
+    cursor: &mut DiffLineCursor,
 ) -> Option<SideBySideDiffRow> {
     let raw = lines.next()?;
 
     if raw.starts_with("@@") || raw.starts_with("---") || raw.starts_with("+++") {
+        if let Some((left, right)) = parse_hunk_line_numbers(raw) {
+            cursor.left_line = Some(left);
+            cursor.right_line = Some(right);
+        }
+
         return Some(SideBySideDiffRow {
-            left: Some(raw.to_string()),
-            right: Some(raw.to_string()),
+            left: Some(DiffCell {
+                line_number: None,
+                marker: None,
+                text: raw.to_string(),
+            }),
+            right: Some(DiffCell {
+                line_number: None,
+                marker: None,
+                text: raw.to_string(),
+            }),
             kind: SideBySideDiffKind::Meta,
         });
     }
 
-    if raw.starts_with('-') {
+    if let Some(context_text) = raw.strip_prefix(' ') {
+        return Some(SideBySideDiffRow {
+            left: Some(DiffCell {
+                line_number: take_next_line_number(&mut cursor.left_line),
+                marker: None,
+                text: context_text.to_string(),
+            }),
+            right: Some(DiffCell {
+                line_number: take_next_line_number(&mut cursor.right_line),
+                marker: None,
+                text: context_text.to_string(),
+            }),
+            kind: SideBySideDiffKind::Context,
+        });
+    }
+
+    if raw.starts_with('-') && !raw.starts_with("---") {
         if let Some(next) = lines.peek()
             && next.starts_with('+')
+            && !next.starts_with("+++")
         {
             let added = lines.next().unwrap_or_default().to_string();
+            let removed_text = raw.strip_prefix('-').unwrap_or(raw);
+            let added_text = added.strip_prefix('+').unwrap_or(&added);
             return Some(SideBySideDiffRow {
-                left: Some(raw.to_string()),
-                right: Some(added),
+                left: Some(DiffCell {
+                    line_number: take_next_line_number(&mut cursor.left_line),
+                    marker: Some('-'),
+                    text: removed_text.to_string(),
+                }),
+                right: Some(DiffCell {
+                    line_number: take_next_line_number(&mut cursor.right_line),
+                    marker: Some('+'),
+                    text: added_text.to_string(),
+                }),
                 kind: SideBySideDiffKind::Changed,
             });
         }
 
+        let removed_text = raw.strip_prefix('-').unwrap_or(raw);
+
         return Some(SideBySideDiffRow {
-            left: Some(raw.to_string()),
+            left: Some(DiffCell {
+                line_number: take_next_line_number(&mut cursor.left_line),
+                marker: Some('-'),
+                text: removed_text.to_string(),
+            }),
             right: None,
             kind: SideBySideDiffKind::Removed,
         });
     }
 
-    if raw.starts_with('+') {
+    if raw.starts_with('+') && !raw.starts_with("+++") {
+        let added_text = raw.strip_prefix('+').unwrap_or(raw);
         return Some(SideBySideDiffRow {
             left: None,
-            right: Some(raw.to_string()),
+            right: Some(DiffCell {
+                line_number: take_next_line_number(&mut cursor.right_line),
+                marker: Some('+'),
+                text: added_text.to_string(),
+            }),
             kind: SideBySideDiffKind::Added,
         });
     }
 
     Some(SideBySideDiffRow {
-        left: Some(raw.to_string()),
-        right: Some(raw.to_string()),
+        left: Some(DiffCell {
+            line_number: None,
+            marker: None,
+            text: raw.to_string(),
+        }),
+        right: Some(DiffCell {
+            line_number: None,
+            marker: None,
+            text: raw.to_string(),
+        }),
         kind: SideBySideDiffKind::Context,
     })
+}
+
+fn parse_hunk_line_numbers(raw: &str) -> Option<(usize, usize)> {
+    if !raw.starts_with("@@") {
+        return None;
+    }
+
+    let mut parts = raw.split_whitespace();
+    let _ = parts.next()?;
+    let left = parts.next()?;
+    let right = parts.next()?;
+
+    let left_start = left
+        .strip_prefix('-')?
+        .split(',')
+        .next()?
+        .parse::<usize>()
+        .ok()?;
+    let right_start = right
+        .strip_prefix('+')?
+        .split(',')
+        .next()?
+        .parse::<usize>()
+        .ok()?;
+
+    Some((left_start, right_start))
+}
+
+fn take_next_line_number(line_number: &mut Option<usize>) -> Option<usize> {
+    match line_number {
+        Some(current) => {
+            let value = *current;
+            *current = current.saturating_add(1);
+            Some(value)
+        }
+        None => None,
+    }
 }
 
 fn render_side_by_side_diff_row(
@@ -1169,10 +1288,8 @@ fn render_side_by_side_diff_row(
     left_width: usize,
     right_width: usize,
 ) {
-    let left_raw = row.left.as_deref().unwrap_or("");
-    let right_raw = row.right.as_deref().unwrap_or("");
-    let left_text = pad_for_column(left_raw, left_width);
-    let right_text = pad_for_column(right_raw, right_width);
+    let left_text = render_diff_cell(row.left.as_ref(), left_width);
+    let right_text = render_diff_cell(row.right.as_ref(), right_width);
 
     let (left_style, right_style) = match row.kind {
         SideBySideDiffKind::Context => (
@@ -1210,12 +1327,62 @@ fn pad_for_column(text: &str, width: usize) -> String {
         return String::new();
     }
 
-    let shown = truncate_chars(text, width);
+    let shown = truncate_for_column(text, width);
     let shown_len = shown.chars().count();
     if shown_len >= width {
         shown
     } else {
         format!("{shown}{}", " ".repeat(width - shown_len))
+    }
+}
+
+fn render_diff_cell(cell: Option<&DiffCell>, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+
+    let Some(cell) = cell else {
+        return " ".repeat(width);
+    };
+
+    if cell.marker.is_none() && cell.line_number.is_none() {
+        return pad_for_column(&cell.text, width);
+    }
+
+    let line_number = match cell.line_number {
+        Some(n) => format!("{n:>width$}", width = DIFF_LINE_NUMBER_WIDTH),
+        None => " ".repeat(DIFF_LINE_NUMBER_WIDTH),
+    };
+    let marker = cell.marker.unwrap_or(' ');
+    let prefix = format!("{line_number} {marker} ");
+    let prefix_width = prefix.chars().count();
+
+    let combined = if width <= prefix_width {
+        truncate_for_column(&prefix, width)
+    } else {
+        let content = truncate_for_column(&cell.text, width - prefix_width);
+        format!("{prefix}{content}")
+    };
+
+    pad_for_column(&combined, width)
+}
+
+fn truncate_for_column(input: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+
+    let mut chars = input.chars();
+    let taken: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_none() {
+        return taken;
+    }
+
+    if max_chars <= 3 {
+        ".".repeat(max_chars)
+    } else {
+        let visible: String = taken.chars().take(max_chars - 3).collect();
+        format!("{visible}...")
     }
 }
 

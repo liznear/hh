@@ -502,18 +502,26 @@ fn edit_tool_success_renders_diff_header_and_lines() {
             .iter()
             .any(|line| line.contains("src/main.rs  +1 -1"))
     );
-    assert!(rendered.iter().any(|line| line.contains("+new")));
-    assert!(rendered.iter().any(|line| line.contains("-old")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("+") && line.contains("new"))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("-") && line.contains("old"))
+    );
 
     let added_span = lines
         .iter()
         .flat_map(|line| line.spans.iter())
-        .find(|span| span.content.as_ref().contains("+new"))
+        .find(|span| span.content.as_ref().contains("new"))
         .expect("added diff line");
     let removed_span = lines
         .iter()
         .flat_map(|line| line.spans.iter())
-        .find(|span| span.content.as_ref().contains("-old"))
+        .find(|span| span.content.as_ref().contains("old"))
         .expect("removed diff line");
 
     assert_ne!(added_span.style.fg, removed_span.style.fg);
@@ -545,8 +553,16 @@ fn write_tool_success_renders_diff_header_and_lines() {
             .iter()
             .any(|line| line.contains("README.md  +2 -1"))
     );
-    assert!(rendered.iter().any(|line| line.contains("+new")));
-    assert!(rendered.iter().any(|line| line.contains("-old")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("+") && line.contains("new"))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("-") && line.contains("old"))
+    );
 }
 
 #[test]
@@ -603,8 +619,39 @@ fn side_by_side_diff_pairs_removed_and_added_lines() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("-old") && line.contains("|") && line.contains("+new"))
+            .any(|line| line.contains("old") && line.contains("|") && line.contains("new"))
     );
+}
+
+#[test]
+fn side_by_side_diff_shows_line_numbers_for_changed_rows() {
+    let mut app = ChatApp::default();
+    let output = serde_json::json!({
+        "path": "Cargo.toml",
+        "applied": true,
+        "summary": {"added_lines": 1, "removed_lines": 1},
+        "diff": "@@ -27 +27 @@\n-arboard = \"3.6\"\n+arboard = { version = \"3.6\", features = [\"wayland-data-control\"] }\n"
+    })
+    .to_string();
+
+    app.messages.push(ChatMessage::ToolCall {
+        name: "edit".to_string(),
+        args: "{}".to_string(),
+        output: Some(output),
+        is_error: Some(false),
+    });
+
+    let rendered: Vec<String> = build_message_lines(&app, 140)
+        .iter()
+        .map(line_text)
+        .collect();
+
+    let changed_row = rendered
+        .iter()
+        .find(|line| line.contains("arboard") && line.contains("|"))
+        .expect("changed row");
+    assert!(changed_row.contains("27 -"));
+    assert!(changed_row.contains("27 +"));
 }
 
 #[test]
