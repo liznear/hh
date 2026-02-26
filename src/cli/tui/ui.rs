@@ -433,7 +433,7 @@ fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usiz
         return;
     }
 
-    let continuation_indent = " ".repeat(label_width);
+    let continuation_indent = MESSAGE_INDENT.to_string();
     for (index, line) in wrapped.into_iter().enumerate() {
         let mut spans = Vec::with_capacity(line.spans.len() + 1);
         if index == 0 {
