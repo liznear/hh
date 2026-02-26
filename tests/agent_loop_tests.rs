@@ -5,7 +5,7 @@ use hh::permission::PermissionMatcher;
 use hh::provider::{
     Message, Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role, ToolCall,
 };
-use hh::session::SessionStore;
+use hh::session::{SessionEvent, SessionStore};
 use hh::tool::registry::ToolRegistry;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -196,4 +196,72 @@ async fn agent_loop_emits_stream_and_tool_events() {
     assert!(entries.iter().any(|e| e == "tool_start:read"));
     assert!(entries.iter().any(|e| e == "tool_end:read:false"));
     assert!(entries.iter().any(|e| e == "done"));
+}
+
+#[tokio::test]
+async fn agent_loop_persists_thinking_before_assistant_message() {
+    let provider = MockProvider {
+        responses: Arc::new(Mutex::new(vec![ProviderResponse {
+            assistant_message: Message {
+                role: Role::Assistant,
+                content: "done".to_string(),
+                tool_call_id: None,
+            },
+            tool_calls: vec![],
+            done: true,
+            thinking: Some("plan first".to_string()),
+        }])),
+        stream_events: vec![],
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("ws");
+    std::fs::create_dir_all(&cwd).expect("mkdir");
+
+    let settings = Settings::default();
+    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
+    let session_for_assert = session.clone();
+    let tools = ToolRegistry::new(&settings, &cwd);
+    let schemas = tools.schemas();
+
+    let agent = AgentLoop {
+        provider,
+        tools,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        max_steps: 3,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.provider.model,
+        session,
+        events: NoopEvents,
+    };
+
+    let _ = agent
+        .run("hello".to_string(), |_tool| Ok(true))
+        .await
+        .expect("run");
+
+    let events = session_for_assert.replay_events().expect("replay events");
+    let mut thinking_idx = None;
+    let mut assistant_idx = None;
+
+    for (idx, event) in events.iter().enumerate() {
+        match event {
+            SessionEvent::Thinking { content, .. } if content == "plan first" => {
+                thinking_idx = Some(idx);
+            }
+            SessionEvent::Message { message, .. }
+                if message.role == Role::Assistant && message.content == "done" =>
+            {
+                assistant_idx = Some(idx);
+            }
+            _ => {}
+        }
+    }
+
+    let thinking_idx = thinking_idx.expect("missing thinking event");
+    let assistant_idx = assistant_idx.expect("missing assistant message");
+    assert!(
+        thinking_idx < assistant_idx,
+        "thinking must be persisted before assistant output"
+    );
 }

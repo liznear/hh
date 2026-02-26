@@ -107,6 +107,13 @@ where
                 thinking_content = t.clone();
             }
 
+            if !thinking_content.is_empty() {
+                self.session.append(&SessionEvent::Thinking {
+                    id: event_id(),
+                    content: thinking_content,
+                })?;
+            }
+
             let assistant = Message {
                 role: Role::Assistant,
                 content: assistant_content.clone(),
@@ -114,12 +121,6 @@ where
             };
 
             self.append_message(&mut state, assistant.clone())?;
-            if !thinking_content.is_empty() {
-                self.session.append(&SessionEvent::Thinking {
-                    id: event_id(),
-                    content: thinking_content,
-                })?;
-            }
 
             if response.done {
                 self.events.on_assistant_done();
