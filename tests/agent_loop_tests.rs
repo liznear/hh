@@ -265,3 +265,103 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
         "thinking must be persisted before assistant output"
     );
 }
+
+#[tokio::test]
+async fn agent_loop_zero_max_steps_is_unbounded() {
+    let provider = MockProvider {
+        responses: Arc::new(Mutex::new(vec![
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "working".to_string(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![],
+                done: false,
+                thinking: None,
+            },
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "final".to_string(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![],
+                done: true,
+                thinking: None,
+            },
+        ])),
+        stream_events: vec![],
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("ws");
+    std::fs::create_dir_all(&cwd).expect("mkdir");
+
+    let settings = Settings::default();
+    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
+    let tools = ToolRegistry::new(&settings, &cwd);
+    let schemas = tools.schemas();
+
+    let agent = AgentLoop {
+        provider,
+        tools,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        max_steps: 0,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.provider.model,
+        session,
+        events: NoopEvents,
+    };
+
+    let out = agent
+        .run("hello".to_string(), |_tool| Ok(true))
+        .await
+        .expect("run");
+
+    assert_eq!(out, "final");
+}
+
+#[tokio::test]
+async fn agent_loop_respects_max_steps_when_set() {
+    let provider = MockProvider {
+        responses: Arc::new(Mutex::new(vec![ProviderResponse {
+            assistant_message: Message {
+                role: Role::Assistant,
+                content: "not done yet".to_string(),
+                tool_call_id: None,
+            },
+            tool_calls: vec![],
+            done: false,
+            thinking: None,
+        }])),
+        stream_events: vec![],
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("ws");
+    std::fs::create_dir_all(&cwd).expect("mkdir");
+
+    let settings = Settings::default();
+    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
+    let tools = ToolRegistry::new(&settings, &cwd);
+    let schemas = tools.schemas();
+
+    let agent = AgentLoop {
+        provider,
+        tools,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        max_steps: 1,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.provider.model,
+        session,
+        events: NoopEvents,
+    };
+
+    let err = agent
+        .run("hello".to_string(), |_tool| Ok(true))
+        .await
+        .expect_err("should hit max steps");
+
+    assert!(err.to_string().contains("Reached max steps"));
+}

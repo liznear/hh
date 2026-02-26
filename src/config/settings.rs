@@ -43,7 +43,7 @@ pub struct AgentSettings {
 impl Default for AgentSettings {
     fn default() -> Self {
         Self {
-            max_steps: 12,
+            max_steps: 0,
             token_budget: 32_000,
             sub_agent_max_depth: default_sub_agent_max_depth(),
             system_prompt: None,

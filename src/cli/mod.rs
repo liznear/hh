@@ -15,7 +15,8 @@ pub async fn run() -> anyhow::Result<()> {
     let settings = load_settings(&cwd)?;
 
     match cli.command {
-        Commands::Chat { debug } => {
+        Commands::Chat { debug, max_turns } => {
+            let settings = apply_max_turns(settings, max_turns);
             if let Some(debug_path) = debug {
                 // Interactive mode with debug dumping
                 chat::run_chat_with_debug(settings, &cwd, debug_path).await
@@ -31,7 +32,12 @@ pub async fn run() -> anyhow::Result<()> {
             replay::replay_frames(&dir, delay, loop_replay)?;
             Ok(())
         }
-        Commands::Run { prompt, debug } => {
+        Commands::Run {
+            prompt,
+            debug,
+            max_turns,
+        } => {
+            let settings = apply_max_turns(settings, max_turns);
             if let Some(debug_path) = debug {
                 chat::run_prompt_with_debug(settings, &cwd, debug_path, prompt).await
             } else {
@@ -61,4 +67,14 @@ pub async fn run() -> anyhow::Result<()> {
             }
         },
     }
+}
+
+fn apply_max_turns(
+    mut settings: crate::config::Settings,
+    max_turns: Option<usize>,
+) -> crate::config::Settings {
+    if let Some(max_turns) = max_turns {
+        settings.agent.max_steps = max_turns;
+    }
+    settings
 }

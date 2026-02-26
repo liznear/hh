@@ -16,6 +16,9 @@ pub enum Commands {
         /// Also dump frames to files while running interactive TUI
         #[arg(long)]
         debug: Option<PathBuf>,
+        /// Limit autonomous turns; unlimited when omitted
+        #[arg(long, value_parser = parse_positive_usize)]
+        max_turns: Option<usize>,
     },
     /// Replay debug frames from a directory
     Replay {
@@ -34,6 +37,9 @@ pub enum Commands {
         /// Dump headless debug frames to this directory
         #[arg(long)]
         debug: Option<PathBuf>,
+        /// Limit autonomous turns; unlimited when omitted
+        #[arg(long, value_parser = parse_positive_usize)]
+        max_turns: Option<usize>,
     },
     /// List available tools
     Tools,
@@ -48,4 +54,14 @@ pub enum Commands {
 pub enum ConfigCommand {
     Init,
     Show,
+}
+
+fn parse_positive_usize(raw: &str) -> Result<usize, String> {
+    let value = raw
+        .parse::<usize>()
+        .map_err(|_| format!("invalid integer: {raw}"))?;
+    if value == 0 {
+        return Err("value must be greater than 0".to_string());
+    }
+    Ok(value)
 }

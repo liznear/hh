@@ -4,7 +4,7 @@ model = "glm-4.7"
 api_key_env = "ZAI_API_KEY"
 
 [agent]
-max_steps = 12
+max_steps = 0
 token_budget = 32000
 
 [tools]

@@ -71,7 +71,11 @@ where
             },
         )?;
 
-        while state.step < self.max_steps {
+        loop {
+            if self.max_steps > 0 && state.step >= self.max_steps {
+                anyhow::bail!("Reached max steps without final answer")
+            }
+
             let req = ProviderRequest {
                 model: self.model.clone(),
                 messages: state.messages.clone(),
@@ -162,8 +166,6 @@ where
 
             state.step += 1;
         }
-
-        anyhow::bail!("Reached max steps without final answer")
     }
 
     async fn execute_tool_call(
