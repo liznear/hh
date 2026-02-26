@@ -203,7 +203,7 @@ impl ChatApp {
         let cached_width = *self.cached_width.borrow();
 
         if needs_rebuild || cached_width != width {
-            let lines = super::ui::build_message_lines_internal(self, width);
+            let lines = super::ui::build_message_lines(self, width);
             *self.cached_lines.borrow_mut() = lines;
             *self.cached_width.borrow_mut() = width;
             *self.needs_rebuild.borrow_mut() = false;
@@ -365,10 +365,6 @@ impl ChatApp {
                 .filter(|cmd| cmd.name.starts_with(query))
                 .cloned()
                 .collect();
-            // Reset selection if out of bounds or just reset to 0
-            if self.selected_command_index >= self.filtered_commands.len() {
-                self.selected_command_index = 0;
-            }
         } else {
             self.filtered_commands.clear();
         }

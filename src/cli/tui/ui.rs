@@ -321,12 +321,7 @@ fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
     f.render_widget(paragraph, content);
 }
 
-/// Build message lines (used for caching in ChatApp)
-pub fn build_message_lines_internal(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
-    build_message_lines_impl(app, width)
-}
-
-/// Public function for external callers (e.g., calculating scroll bounds)
+/// Build message lines (used for caching and scroll bounds)
 pub fn build_message_lines(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
     build_message_lines_impl(app, width)
 }
@@ -363,54 +358,17 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                 output,
                 is_error,
             } => {
-                let available_width = width.saturating_sub(4).max(1);
-
-                // Parse args to Value for rendering
-                let args_value: Value = serde_json::from_str(args).unwrap_or(Value::Null);
-                let tool_view = render_tool_start(name, &args_value);
-                let label = tool_view.line;
-
-                if let Some(error) = is_error {
-                    if !*error
-                        && (name == "edit" || name == "write")
-                        && let Some(tool_output) = output.as_deref()
-                        && render_edit_diff_block(&mut lines, name, tool_output, available_width)
-                    {
-                        continue;
-                    }
-
-                    let completed_label = if !*error {
-                        append_tool_result_count(name, &label, output.as_deref())
-                    } else {
-                        label.clone()
-                    };
-                    let symbol = if *error { "x" } else { "✓" };
-                    let color = if *error { Color::Red } else { INPUT_ACCENT };
-                    let wrapped = wrap_compact_text(&completed_label, available_width);
-                    push_wrapped_tool_rows(
-                        &mut lines,
-                        &wrapped,
-                        vec![
-                            Span::raw(MESSAGE_INDENT),
-                            Span::styled(symbol, Style::default().fg(color).bold()),
-                            Span::raw(" "),
-                        ],
-                        vec![Span::raw(tool_done_continuation.clone())],
-                        Style::default().fg(TEXT_SECONDARY),
-                    );
-                } else {
-                    let wrapped = wrap_compact_text(&label, available_width.saturating_sub(1)); // "->" is 2 chars + spaces
-                    push_wrapped_tool_rows(
-                        &mut lines,
-                        &wrapped,
-                        vec![Span::styled(
-                            tool_pending_prefix.clone(),
-                            Style::default().fg(TEXT_MUTED),
-                        )],
-                        vec![Span::raw(tool_pending_continuation.clone())],
-                        Style::default().fg(TEXT_SECONDARY),
-                    );
-                }
+                render_tool_call_message(
+                    &mut lines,
+                    name,
+                    args,
+                    output.as_deref(),
+                    *is_error,
+                    width,
+                    &tool_done_continuation,
+                    &tool_pending_prefix,
+                    &tool_pending_continuation,
+                );
             }
             ChatMessage::Error(text) => {
                 lines.push(Line::from(""));
@@ -563,6 +521,102 @@ fn push_wrapped_tool_rows(
     }
 }
 
+fn render_tool_call_message(
+    lines: &mut Vec<Line<'static>>,
+    name: &str,
+    args: &str,
+    output: Option<&str>,
+    is_error: Option<bool>,
+    width: usize,
+    tool_done_continuation: &str,
+    tool_pending_prefix: &str,
+    tool_pending_continuation: &str,
+) {
+    let available_width = width.saturating_sub(4).max(1);
+    let args_value: Value = serde_json::from_str(args).unwrap_or(Value::Null);
+    let label = render_tool_start(name, &args_value).line;
+
+    match is_error {
+        Some(error) => {
+            if !error
+                && (name == "edit" || name == "write")
+                && let Some(tool_output) = output
+                && render_edit_diff_block(lines, name, tool_output, available_width)
+            {
+                return;
+            }
+
+            render_completed_tool_call(
+                lines,
+                name,
+                &label,
+                output,
+                error,
+                available_width,
+                tool_done_continuation,
+            );
+        }
+        None => render_pending_tool_call(
+            lines,
+            &label,
+            available_width,
+            tool_pending_prefix,
+            tool_pending_continuation,
+        ),
+    }
+}
+
+fn render_completed_tool_call(
+    lines: &mut Vec<Line<'static>>,
+    name: &str,
+    label: &str,
+    output: Option<&str>,
+    is_error: bool,
+    available_width: usize,
+    tool_done_continuation: &str,
+) {
+    let completed_label = if is_error {
+        label.to_string()
+    } else {
+        append_tool_result_count(name, label, output)
+    };
+    let symbol = if is_error { "x" } else { "✓" };
+    let color = if is_error { Color::Red } else { INPUT_ACCENT };
+    let wrapped = wrap_compact_text(&completed_label, available_width);
+
+    push_wrapped_tool_rows(
+        lines,
+        &wrapped,
+        vec![
+            Span::raw(MESSAGE_INDENT),
+            Span::styled(symbol, Style::default().fg(color).bold()),
+            Span::raw(" "),
+        ],
+        vec![Span::raw(tool_done_continuation.to_string())],
+        Style::default().fg(TEXT_SECONDARY),
+    );
+}
+
+fn render_pending_tool_call(
+    lines: &mut Vec<Line<'static>>,
+    label: &str,
+    available_width: usize,
+    tool_pending_prefix: &str,
+    tool_pending_continuation: &str,
+) {
+    let wrapped = wrap_compact_text(label, available_width.saturating_sub(1));
+    push_wrapped_tool_rows(
+        lines,
+        &wrapped,
+        vec![Span::styled(
+            tool_pending_prefix.to_string(),
+            Style::default().fg(TEXT_MUTED),
+        )],
+        vec![Span::raw(tool_pending_continuation.to_string())],
+        Style::default().fg(TEXT_SECONDARY),
+    );
+}
+
 fn render_input(f: &mut Frame, app: &ChatApp, area: Rect) {
     let left_border_x = area.x.saturating_add(USER_BUBBLE_INDENT as u16);
     f.render_widget(Block::default().style(Style::default().bg(PAGE_BG)), area);
@@ -606,16 +660,20 @@ fn render_input(f: &mut Frame, app: &ChatApp, area: Rect) {
         height: content_height,
     };
 
-    let input_value = if app.input.is_empty() {
-        "Tell me more about this project...".to_string()
+    let (input_value, cursor_row, cursor_col) = if app.input.is_empty() {
+        ("Tell me more about this project...".to_string(), 0, 0)
     } else {
-        let wrapped_lines = input_viewport_lines(
+        let layout = input_viewport_layout(
             &app.input,
             app.cursor,
             content_area.width as usize,
             content_area.height as usize,
         );
-        wrapped_lines.join("\n")
+        (
+            layout.lines.join("\n"),
+            layout.cursor_row,
+            layout.cursor_col,
+        )
     };
 
     f.render_widget(
@@ -625,12 +683,6 @@ fn render_input(f: &mut Frame, app: &ChatApp, area: Rect) {
         content_area,
     );
 
-    let (cursor_row, cursor_col) = input_cursor_position(
-        &app.input,
-        app.cursor,
-        content_area.width as usize,
-        content_area.height as usize,
-    );
     if (cursor_col as u16) < content_area.width && (cursor_row as u16) < content_area.height {
         f.set_cursor_position((
             content_area.x + cursor_col as u16,
@@ -646,74 +698,53 @@ struct WrappedInputLine {
     end: usize,
 }
 
-fn input_cursor_position(
+struct InputViewportLayout {
+    lines: Vec<String>,
+    cursor_row: usize,
+    cursor_col: usize,
+}
+
+fn input_viewport_layout(
     input: &str,
     cursor: usize,
     width: usize,
     height: usize,
-) -> (usize, usize) {
+) -> InputViewportLayout {
     if input.is_empty() {
-        return (0, 0);
+        return InputViewportLayout {
+            lines: Vec::new(),
+            cursor_row: 0,
+            cursor_col: 0,
+        };
     }
 
     let wrapped = wrap_input_lines(input, width);
-    let (cursor_line, col) = cursor_visual_position(input, cursor, &wrapped);
+    let (cursor_line, cursor_col) = cursor_visual_position(input, cursor, &wrapped);
     let start = viewport_start(cursor_line, wrapped.len(), height);
-    let row = cursor_line.saturating_sub(start);
-    (row, col)
-}
-
-fn input_viewport_lines(input: &str, cursor: usize, width: usize, height: usize) -> Vec<String> {
-    let wrapped = wrap_input_lines(input, width);
-    let (cursor_line, _) = cursor_visual_position(input, cursor, &wrapped);
-    let start = viewport_start(cursor_line, wrapped.len(), height);
-    wrapped[start..(start + height.max(1)).min(wrapped.len())]
+    let end = (start + height.max(1)).min(wrapped.len());
+    let lines = wrapped[start..end]
         .iter()
         .map(|line| line.text.clone())
-        .collect()
+        .collect();
+
+    InputViewportLayout {
+        lines,
+        cursor_row: cursor_line.saturating_sub(start),
+        cursor_col,
+    }
 }
 
 fn wrap_input_lines(input: &str, width: usize) -> Vec<WrappedInputLine> {
     let max_width = width.max(1);
     let mut lines = Vec::new();
-    let logical_lines: Vec<&str> = input.split('\n').collect();
     let mut line_start = 0usize;
+    let mut logical_lines = input.split('\n').peekable();
 
-    for (logical_idx, raw_line) in logical_lines.iter().enumerate() {
-        if raw_line.is_empty() {
-            lines.push(WrappedInputLine {
-                text: String::new(),
-                start: line_start,
-                end: line_start,
-            });
-        } else {
-            let mut chunk_start_rel = 0usize;
-            let mut chunk_chars = 0usize;
-            for (rel, ch) in raw_line.char_indices() {
-                if chunk_chars >= max_width {
-                    let chunk = &raw_line[chunk_start_rel..rel];
-                    lines.push(WrappedInputLine {
-                        text: chunk.to_string(),
-                        start: line_start + chunk_start_rel,
-                        end: line_start + rel,
-                    });
-                    chunk_start_rel = rel;
-                    chunk_chars = 0;
-                }
-                chunk_chars += 1;
-                if rel + ch.len_utf8() == raw_line.len() {
-                    let chunk = &raw_line[chunk_start_rel..raw_line.len()];
-                    lines.push(WrappedInputLine {
-                        text: chunk.to_string(),
-                        start: line_start + chunk_start_rel,
-                        end: line_start + raw_line.len(),
-                    });
-                }
-            }
-        }
+    while let Some(raw_line) = logical_lines.next() {
+        push_wrapped_input_logical_line(&mut lines, raw_line, line_start, max_width);
 
         line_start += raw_line.len();
-        if logical_idx < logical_lines.len().saturating_sub(1) {
+        if logical_lines.peek().is_some() {
             line_start += 1;
         }
     }
@@ -727,6 +758,52 @@ fn wrap_input_lines(input: &str, width: usize) -> Vec<WrappedInputLine> {
     }
 
     lines
+}
+
+fn push_wrapped_input_logical_line(
+    lines: &mut Vec<WrappedInputLine>,
+    raw_line: &str,
+    line_start: usize,
+    max_width: usize,
+) {
+    if raw_line.is_empty() {
+        lines.push(WrappedInputLine {
+            text: String::new(),
+            start: line_start,
+            end: line_start,
+        });
+        return;
+    }
+
+    let mut chunk_start_rel = 0usize;
+    let mut chunk_chars = 0usize;
+
+    for (rel, ch) in raw_line.char_indices() {
+        if chunk_chars >= max_width {
+            push_wrapped_input_chunk(lines, raw_line, line_start, chunk_start_rel, rel);
+            chunk_start_rel = rel;
+            chunk_chars = 0;
+        }
+
+        chunk_chars += 1;
+        if rel + ch.len_utf8() == raw_line.len() {
+            push_wrapped_input_chunk(lines, raw_line, line_start, chunk_start_rel, raw_line.len());
+        }
+    }
+}
+
+fn push_wrapped_input_chunk(
+    lines: &mut Vec<WrappedInputLine>,
+    raw_line: &str,
+    line_start: usize,
+    chunk_start_rel: usize,
+    chunk_end_rel: usize,
+) {
+    lines.push(WrappedInputLine {
+        text: raw_line[chunk_start_rel..chunk_end_rel].to_string(),
+        start: line_start + chunk_start_rel,
+        end: line_start + chunk_end_rel,
+    });
 }
 
 fn cursor_visual_position(
@@ -1368,22 +1445,7 @@ fn render_diff_cell(cell: Option<&DiffCell>, width: usize) -> String {
 }
 
 fn truncate_for_column(input: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-
-    let mut chars = input.chars();
-    let taken: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_none() {
-        return taken;
-    }
-
-    if max_chars <= 3 {
-        ".".repeat(max_chars)
-    } else {
-        let visible: String = taken.chars().take(max_chars - 3).collect();
-        format!("{visible}...")
-    }
+    truncate_chars_impl(input, max_chars, TruncationMode::FixedWidth)
 }
 
 fn tool_title(name: &str) -> &'static str {
@@ -1407,15 +1469,35 @@ fn message_child_indent() -> String {
 }
 
 fn truncate_chars(input: &str, max_chars: usize) -> String {
+    truncate_chars_impl(input, max_chars, TruncationMode::AppendEllipsis)
+}
+
+#[derive(Clone, Copy)]
+enum TruncationMode {
+    FixedWidth,
+    AppendEllipsis,
+}
+
+fn truncate_chars_impl(input: &str, max_chars: usize, mode: TruncationMode) -> String {
     if max_chars == 0 {
         return String::new();
     }
 
     let mut chars = input.chars();
     let taken: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() {
-        format!("{}...", taken)
-    } else {
-        taken
+    if chars.next().is_none() {
+        return taken;
+    }
+
+    match mode {
+        TruncationMode::FixedWidth => {
+            if max_chars <= 3 {
+                ".".repeat(max_chars)
+            } else {
+                let visible: String = taken.chars().take(max_chars - 3).collect();
+                format!("{visible}...")
+            }
+        }
+        TruncationMode::AppendEllipsis => format!("{taken}..."),
     }
 }

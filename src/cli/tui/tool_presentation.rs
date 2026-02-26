@@ -75,21 +75,11 @@ const TOOL_PRESENTATIONS: &[ToolPresentation] = &[
 ];
 
 fn render_read_start(args: &Value) -> ToolCallStartView {
-    ToolCallStartView {
-        line: format!(
-            "Read {}",
-            json_str(args, "path").unwrap_or_else(|| compact_json(args))
-        ),
-    }
+    render_action_with_field("Read", "path", args)
 }
 
 fn render_write_start(args: &Value) -> ToolCallStartView {
-    ToolCallStartView {
-        line: format!(
-            "Write {}",
-            json_str(args, "path").unwrap_or_else(|| compact_json(args))
-        ),
-    }
+    render_action_with_field("Write", "path", args)
 }
 
 fn render_glob_start(args: &Value) -> ToolCallStartView {
@@ -125,21 +115,11 @@ fn render_bash_start(args: &Value) -> ToolCallStartView {
 }
 
 fn render_web_fetch_start(args: &Value) -> ToolCallStartView {
-    ToolCallStartView {
-        line: format!(
-            "Fetch {}",
-            json_str(args, "url").unwrap_or_else(|| compact_json(args))
-        ),
-    }
+    render_action_with_field("Fetch", "url", args)
 }
 
 fn render_web_search_start(args: &Value) -> ToolCallStartView {
-    ToolCallStartView {
-        line: format!(
-            "Search {}",
-            json_str(args, "query").unwrap_or_else(|| compact_json(args))
-        ),
-    }
+    render_action_with_field("Search", "query", args)
 }
 
 fn render_todo_write_start(args: &Value) -> ToolCallStartView {
@@ -155,10 +135,14 @@ fn render_todo_write_start(args: &Value) -> ToolCallStartView {
 }
 
 fn render_edit_start(args: &Value) -> ToolCallStartView {
+    render_action_with_field("Edit", "path", args)
+}
+
+fn render_action_with_field(action: &str, key: &str, args: &Value) -> ToolCallStartView {
     ToolCallStartView {
         line: format!(
-            "Edit {}",
-            json_str(args, "path").unwrap_or_else(|| compact_json(args))
+            "{action} {}",
+            json_str(args, key).unwrap_or_else(|| compact_json(args))
         ),
     }
 }
