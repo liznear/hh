@@ -288,13 +288,12 @@ impl ChatApp {
             return;
         }
 
-        let chunk = delta.replace('\n', " ");
         if let Some(ChatMessage::Thinking(existing)) = self.messages.last_mut() {
-            existing.push_str(&chunk);
+            existing.push_str(delta);
             return;
         }
 
-        self.messages.push(ChatMessage::Thinking(chunk));
+        self.messages.push(ChatMessage::Thinking(delta.to_string()));
     }
 
     fn is_duplicate_pending_tool_call(&self, name: &str, args: &serde_json::Value) -> bool {

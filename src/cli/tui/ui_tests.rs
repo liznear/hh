@@ -253,6 +253,20 @@ fn assistant_messages_do_not_render_assistant_label() {
 }
 
 #[test]
+fn assistant_list_items_render_during_streaming() {
+    let mut app = ChatApp::default();
+    app.handle_event(&TuiEvent::AssistantDelta("- first item\n".to_string()));
+    app.handle_event(&TuiEvent::AssistantDelta("- second item".to_string()));
+
+    let lines = build_message_lines(&app, 120);
+    let rendered: Vec<String> = lines.iter().map(line_text).collect();
+    let combined = rendered.join("\n");
+
+    assert!(combined.contains("- first item"));
+    assert!(combined.contains("- second item"));
+}
+
+#[test]
 fn thinking_message_is_not_truncated() {
     let mut app = ChatApp::default();
     let tail = "TAIL_SEGMENT";
@@ -379,6 +393,21 @@ fn thinking_uses_markdown_renderer() {
     assert!(think_line.contains("bold code"));
     assert!(!think_line.contains("**"));
     assert!(!think_line.contains('`'));
+}
+
+#[test]
+fn thinking_list_items_render_during_streaming() {
+    let mut app = ChatApp::default();
+    app.handle_event(&TuiEvent::Thinking(
+        "- first item\n- second item".to_string(),
+    ));
+
+    let lines = build_message_lines(&app, 120);
+    let rendered: Vec<String> = lines.iter().map(line_text).collect();
+    let combined = rendered.join("\n");
+
+    assert!(combined.contains("Thinking: - first item"));
+    assert!(combined.contains("- second item"));
 }
 
 #[test]
