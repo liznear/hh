@@ -593,9 +593,6 @@ fn handle_slash_command(
     match input.as_str() {
         "/new" => {
             app.start_new_session(build_session_name(cwd));
-            app.messages.push(tui::ChatMessage::Assistant(
-                "Started a new session.".to_string(),
-            ));
             app.mark_dirty();
             app.set_processing(false);
         }
@@ -829,10 +826,6 @@ fn handle_session_selection(
             _ => {}
         }
     }
-    app.messages.push(tui::ChatMessage::Assistant(format!(
-        "Resumed session: {}",
-        session.title
-    )));
     app.mark_dirty();
 
     Ok(())
@@ -979,11 +972,7 @@ mod tests {
         assert!(!app.is_processing);
         assert!(app.session_id.is_none());
         assert_eq!(app.session_name, build_session_name(cwd));
-        assert_eq!(app.messages.len(), 1);
-        assert!(matches!(
-            app.messages[0],
-            tui::ChatMessage::Assistant(ref text) if text == "Started a new session."
-        ));
+        assert!(app.messages.is_empty());
     }
 
     #[test]
