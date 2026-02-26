@@ -37,6 +37,8 @@ pub enum TodoPriority {
 pub enum ChatMessage {
     User(String),
     Assistant(String),
+    CompactionPending,
+    Compaction(String),
     Thinking(String),
     ToolCall {
         name: String,
@@ -137,6 +139,25 @@ impl ChatApp {
             TuiEvent::AssistantDone => {
                 self.set_processing(false);
             }
+            TuiEvent::CompactionStart => {
+                self.messages.push(ChatMessage::CompactionPending);
+                self.mark_dirty();
+            }
+            TuiEvent::CompactionDone(summary) => {
+                let mut replaced_pending = false;
+                for message in self.messages.iter_mut().rev() {
+                    if matches!(message, ChatMessage::CompactionPending) {
+                        *message = ChatMessage::Compaction(summary.clone());
+                        replaced_pending = true;
+                        break;
+                    }
+                }
+                if !replaced_pending {
+                    self.messages.push(ChatMessage::Compaction(summary.clone()));
+                }
+                self.set_processing(false);
+                self.mark_dirty();
+            }
             TuiEvent::Error(msg) => {
                 self.messages.push(ChatMessage::Error(msg.clone()));
                 self.set_processing(false);
@@ -214,12 +235,19 @@ impl ChatApp {
     }
 
     pub fn context_usage(&self) -> (usize, usize) {
+        let boundary = self
+            .messages
+            .iter()
+            .rposition(|message| matches!(message, ChatMessage::Compaction(_)))
+            .unwrap_or(0);
         let mut chars = self.input.len();
-        for message in &self.messages {
+        for message in self.messages.iter().skip(boundary) {
             chars += match message {
                 ChatMessage::User(text)
                 | ChatMessage::Assistant(text)
+                | ChatMessage::Compaction(text)
                 | ChatMessage::Thinking(text) => text.len(),
+                ChatMessage::CompactionPending => 0,
                 ChatMessage::ToolCall {
                     name, args, output, ..
                 } => name.len() + args.len() + output.as_ref().map(|s| s.len()).unwrap_or(0),
@@ -302,6 +330,19 @@ impl ChatApp {
         } else {
             None
         };
+    }
+
+    pub fn start_new_session(&mut self, session_name: String) {
+        self.messages.clear();
+        self.todo_items.clear();
+        self.session_id = None;
+        self.session_name = session_name;
+        self.available_sessions.clear();
+        self.is_picking_session = false;
+        self.scroll_offset = 0;
+        self.auto_scroll = true;
+        self.set_processing(false);
+        self.mark_dirty();
     }
 
     pub fn update_command_filtering(&mut self) {

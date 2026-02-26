@@ -18,6 +18,8 @@ pub enum TuiEvent {
     },
     AssistantDelta(String),
     AssistantDone,
+    CompactionStart,
+    CompactionDone(String),
     Error(String),
     Key(crossterm::event::KeyEvent),
     Tick,

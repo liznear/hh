@@ -91,3 +91,47 @@ fn replays_legacy_message_event_shape() {
     assert_eq!(replayed[0].role, Role::User);
     assert_eq!(replayed[0].content, "legacy");
 }
+
+#[test]
+fn replay_messages_uses_latest_compact_boundary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("workspace");
+    std::fs::create_dir_all(&cwd).expect("create workspace");
+
+    let store = SessionStore::new(temp.path(), &cwd, None, Some("compact session".to_string()))
+        .expect("store");
+
+    store
+        .append(&SessionEvent::Message {
+            id: "1".to_string(),
+            message: Message {
+                role: Role::User,
+                content: "before compact".to_string(),
+                tool_call_id: None,
+            },
+        })
+        .expect("append before compact");
+
+    store
+        .append(&SessionEvent::Compact {
+            id: "2".to_string(),
+            summary: "compacted summary".to_string(),
+        })
+        .expect("append compact marker");
+
+    store
+        .append(&SessionEvent::Message {
+            id: "3".to_string(),
+            message: Message {
+                role: Role::Assistant,
+                content: "after compact".to_string(),
+                tool_call_id: None,
+            },
+        })
+        .expect("append after compact");
+
+    let replayed = store.replay_messages().expect("replay");
+    assert_eq!(replayed.len(), 2);
+    assert_eq!(replayed[0].content, "compacted summary");
+    assert_eq!(replayed[1].content, "after compact");
+}

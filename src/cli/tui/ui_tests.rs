@@ -1,7 +1,7 @@
 use super::app::{ChatApp, ChatMessage, TodoItemView, TodoPriority, TodoStatus};
 use super::event::TuiEvent;
 use super::ui::{build_message_lines, render_app};
-use ratatui::{backend::TestBackend, style::Color, Terminal};
+use ratatui::{Terminal, backend::TestBackend, style::Color};
 use serde_json::json;
 
 fn line_text(line: &ratatui::text::Line<'_>) -> String {
@@ -73,6 +73,62 @@ fn test_tool_start_wrapping() {
     let lines = build_message_lines(&app, 50);
     // Should wrap
     assert!(lines.len() > 1, "Expected multiple lines for long args");
+}
+
+#[test]
+fn compaction_renders_separator_and_preserves_previous_messages() {
+    let mut app = ChatApp::default();
+    app.messages
+        .push(ChatMessage::Assistant("Before compaction".to_string()));
+    app.messages.push(ChatMessage::Compaction(
+        "- Keep key requirements\n- Keep pending tasks".to_string(),
+    ));
+
+    let lines = build_message_lines(&app, 100);
+    let rendered: Vec<String> = lines.iter().map(line_text).collect();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Before compaction"))
+    );
+    assert!(rendered.iter().any(|line| line.contains("Compaction")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Keep key requirements"))
+    );
+}
+
+#[test]
+fn compaction_start_renders_separator_immediately() {
+    let mut app = ChatApp::default();
+    app.messages
+        .push(ChatMessage::Assistant("Before compaction".to_string()));
+    app.handle_event(&TuiEvent::CompactionStart);
+
+    let lines = build_message_lines(&app, 100);
+    let rendered: Vec<String> = lines.iter().map(line_text).collect();
+
+    assert!(rendered.iter().any(|line| line.contains("Compaction")));
+}
+
+#[test]
+fn context_usage_ignores_messages_before_compaction_boundary() {
+    let mut app = ChatApp::default();
+    app.messages
+        .push(ChatMessage::Assistant("1234567890".to_string()));
+    app.messages
+        .push(ChatMessage::Assistant("abcdefghij".to_string()));
+    app.messages
+        .push(ChatMessage::Compaction("summary".to_string()));
+    app.messages
+        .push(ChatMessage::Assistant("after".to_string()));
+
+    let (used, _) = app.context_usage();
+    let expected_chars = "summary".len() + "after".len();
+    let expected_tokens = expected_chars / 4;
+    assert_eq!(used, expected_tokens);
 }
 
 #[test]
@@ -439,9 +495,11 @@ fn edit_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("src/main.rs  +1 -1")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("src/main.rs  +1 -1"))
+    );
     assert!(rendered.iter().any(|line| line.contains("+new")));
     assert!(rendered.iter().any(|line| line.contains("-old")));
 
@@ -480,9 +538,11 @@ fn write_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("README.md  +2 -1")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("README.md  +2 -1"))
+    );
     assert!(rendered.iter().any(|line| line.contains("+new")));
     assert!(rendered.iter().any(|line| line.contains("-old")));
 }
@@ -509,9 +569,11 @@ fn edit_diff_header_includes_tool_name() {
         .iter()
         .map(line_text)
         .collect();
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("Edit src/main.rs  +1 -1")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Edit src/main.rs  +1 -1"))
+    );
 }
 
 #[test]
@@ -536,9 +598,11 @@ fn side_by_side_diff_pairs_removed_and_added_lines() {
         .iter()
         .map(line_text)
         .collect();
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("-old") && line.contains("|") && line.contains("+new")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("-old") && line.contains("|") && line.contains("+new"))
+    );
 }
 
 #[test]

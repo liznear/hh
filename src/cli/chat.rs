@@ -9,10 +9,11 @@ use tokio::sync::mpsc;
 use crate::cli::render;
 use crate::cli::tui::{self, ChatApp, DebugRenderer, TuiEvent, TuiEventSender};
 use crate::config::Settings;
+use crate::core::Message;
 use crate::core::agent::{AgentEvents, AgentLoop, NoopEvents};
 use crate::permission::PermissionMatcher;
 use crate::provider::openai_compatible::OpenAiCompatibleProvider;
-use crate::session::{SessionEvent, SessionStore};
+use crate::session::{SessionEvent, SessionStore, event_id};
 use crate::tool::registry::ToolRegistry;
 use uuid::Uuid;
 
@@ -563,7 +564,13 @@ fn handle_submitted_input(
     event_sender: &TuiEventSender,
 ) {
     if input.starts_with('/') {
-        handle_slash_command(input, app, settings, cwd);
+        if let Some(tui::ChatMessage::User(last)) = app.messages.last()
+            && last == &input
+        {
+            app.messages.pop();
+            app.mark_dirty();
+        }
+        handle_slash_command(input, app, settings, cwd, event_sender);
     } else if app.is_picking_session {
         if let Err(e) = handle_session_selection(input, app, settings, cwd) {
             app.messages
@@ -576,8 +583,63 @@ fn handle_submitted_input(
     }
 }
 
-fn handle_slash_command(input: String, app: &mut ChatApp, settings: &Settings, cwd: &Path) {
+fn handle_slash_command(
+    input: String,
+    app: &mut ChatApp,
+    settings: &Settings,
+    cwd: &Path,
+    event_sender: &TuiEventSender,
+) {
     match input.as_str() {
+        "/new" => {
+            app.start_new_session(build_session_name(cwd));
+            app.messages.push(tui::ChatMessage::Assistant(
+                "Started a new session.".to_string(),
+            ));
+            app.mark_dirty();
+            app.set_processing(false);
+        }
+        "/compact" => {
+            let Some(session_id) = app.session_id.clone() else {
+                app.messages.push(tui::ChatMessage::Assistant(
+                    "No active session to compact yet.".to_string(),
+                ));
+                app.mark_dirty();
+                app.set_processing(false);
+                return;
+            };
+
+            app.handle_event(&TuiEvent::CompactionStart);
+
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let settings = settings.clone();
+                let cwd = cwd.to_path_buf();
+                let sender = event_sender.clone();
+                handle.spawn(async move {
+                    match compact_session_with_llm(settings, &cwd, &session_id).await {
+                        Ok(summary) => sender.send(TuiEvent::CompactionDone(summary)),
+                        Err(e) => sender.send(TuiEvent::Error(format!("Failed to compact: {e}"))),
+                    }
+                });
+            } else {
+                let result = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .context("Failed to create runtime for compaction")
+                    .and_then(|rt| {
+                        rt.block_on(compact_session_with_llm(settings.clone(), cwd, &session_id))
+                    });
+
+                match result {
+                    Ok(summary) => {
+                        app.handle_event(&TuiEvent::CompactionDone(summary));
+                    }
+                    Err(e) => {
+                        app.handle_event(&TuiEvent::Error(format!("Failed to compact: {e}")));
+                    }
+                }
+            }
+        }
         "/quit" => {
             app.should_quit = true;
         }
@@ -611,6 +673,88 @@ fn handle_slash_command(input: String, app: &mut ChatApp, settings: &Settings, c
             app.mark_dirty();
             app.set_processing(false);
         }
+    }
+}
+
+async fn compact_session_with_llm(
+    settings: Settings,
+    cwd: &Path,
+    session_id: &str,
+) -> anyhow::Result<String> {
+    let store = SessionStore::new(&settings.session.root, cwd, Some(session_id), None)
+        .context("Failed to load session store")?;
+    let messages = store
+        .replay_messages()
+        .context("Failed to replay session for compaction")?;
+
+    if messages.is_empty() {
+        return Ok("No prior context to compact yet.".to_string());
+    }
+
+    let summary = generate_compaction_summary(&settings, messages).await?;
+    store
+        .append(&SessionEvent::Compact {
+            id: event_id(),
+            summary: summary.clone(),
+        })
+        .context("Failed to append compact marker")?;
+
+    Ok(summary)
+}
+
+async fn generate_compaction_summary(
+    settings: &Settings,
+    messages: Vec<Message>,
+) -> anyhow::Result<String> {
+    #[cfg(test)]
+    {
+        let _ = settings;
+        let _ = messages;
+        return Ok("Compacted context summary for tests.".to_string());
+    }
+
+    #[cfg(not(test))]
+    {
+        let mut prompt_messages = Vec::with_capacity(messages.len() + 2);
+        prompt_messages.push(Message {
+            role: crate::core::Role::System,
+            content: "You compact conversation history for an engineering assistant. Produce a concise summary that preserves requirements, decisions, constraints, open questions, and pending work items. Prefer bullet points. Do not invent details.".to_string(),
+            tool_call_id: None,
+        });
+        prompt_messages.extend(messages);
+        prompt_messages.push(Message {
+            role: crate::core::Role::User,
+            content: "Compact the conversation so future turns can continue from this summary with minimal context loss.".to_string(),
+            tool_call_id: None,
+        });
+
+        let provider = OpenAiCompatibleProvider::new(
+            settings.provider.base_url.clone(),
+            settings.provider.model.clone(),
+            settings.provider.api_key_env.clone(),
+        );
+
+        let response = crate::core::Provider::complete(
+            &provider,
+            crate::core::ProviderRequest {
+                model: settings.provider.model.clone(),
+                messages: prompt_messages,
+                tools: Vec::new(),
+            },
+        )
+        .await
+        .context("Compaction request failed")?;
+
+        if !response.tool_calls.is_empty() {
+            anyhow::bail!("Compaction response unexpectedly requested tools");
+        }
+
+        let summary = response.assistant_message.content.trim().to_string();
+        if summary.is_empty() {
+            anyhow::bail!("Compaction response was empty");
+        }
+
+        Ok(summary)
     }
 }
 
@@ -679,6 +823,9 @@ fn handle_session_selection(
             SessionEvent::Thinking { content, .. } => {
                 app.messages.push(tui::ChatMessage::Thinking(content));
             }
+            SessionEvent::Compact { summary, .. } => {
+                app.messages.push(tui::ChatMessage::Compaction(summary));
+            }
             _ => {}
         }
     }
@@ -731,6 +878,7 @@ fn handle_chat_message(
 mod tests {
     use super::*;
     use crate::config::settings::{AgentSettings, ProviderSettings, SessionSettings};
+    use crate::core::{Message, Role};
     use crossterm::event::KeyEvent;
     use tempfile::tempdir;
 
@@ -808,6 +956,99 @@ mod tests {
         // But we provided title "Test Session", so it should be listed.
         // Let's verify session_id is SOME value, and name is correct.
         assert_eq!(app.session_name, "Test Session");
+    }
+
+    #[test]
+    fn test_new_starts_fresh_session() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+
+        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        app.session_id = Some("existing-session".to_string());
+        app.session_name = "Existing Session".to_string();
+        app.messages
+            .push(tui::ChatMessage::Assistant("previous context".to_string()));
+
+        app.set_input("/new".to_string());
+        let input = app.submit_input();
+        handle_submitted_input(input, &mut app, &settings, cwd, &event_sender);
+
+        assert!(!app.is_processing);
+        assert!(app.session_id.is_none());
+        assert_eq!(app.session_name, build_session_name(cwd));
+        assert_eq!(app.messages.len(), 1);
+        assert!(matches!(
+            app.messages[0],
+            tui::ChatMessage::Assistant(ref text) if text == "Started a new session."
+        ));
+    }
+
+    #[test]
+    fn test_compact_appends_marker_and_clears_replayed_context() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+
+        let session_id = "compact-session-id";
+        let store = SessionStore::new(
+            &settings.session.root,
+            cwd,
+            Some(session_id),
+            Some("Compact Session".to_string()),
+        )
+        .unwrap();
+        store
+            .append(&SessionEvent::Message {
+                id: event_id(),
+                message: Message {
+                    role: Role::User,
+                    content: "hello".to_string(),
+                    tool_call_id: None,
+                },
+            })
+            .unwrap();
+
+        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        app.session_id = Some(session_id.to_string());
+        app.session_name = "Compact Session".to_string();
+        app.messages
+            .push(tui::ChatMessage::Assistant("previous context".to_string()));
+
+        app.set_input("/compact".to_string());
+        let input = app.submit_input();
+        handle_submitted_input(input, &mut app, &settings, cwd, &event_sender);
+
+        assert!(!app.is_processing);
+        assert_eq!(app.messages.len(), 2);
+        assert!(matches!(
+            app.messages[0],
+            tui::ChatMessage::Assistant(ref text) if text == "previous context"
+        ));
+        assert!(matches!(
+            app.messages[1],
+            tui::ChatMessage::Compaction(ref text)
+                if text == "Compacted context summary for tests."
+        ));
+
+        let store = SessionStore::new(&settings.session.root, cwd, Some(session_id), None).unwrap();
+        let replayed_events = store.replay_events().unwrap();
+        assert_eq!(replayed_events.len(), 2);
+        assert!(matches!(
+            replayed_events[1],
+            SessionEvent::Compact { ref summary, .. } if summary == "Compacted context summary for tests."
+        ));
+
+        let replayed_messages = store.replay_messages().unwrap();
+        assert_eq!(replayed_messages.len(), 1);
+        assert_eq!(
+            replayed_messages[0].content,
+            "Compacted context summary for tests."
+        );
     }
 
     #[test]

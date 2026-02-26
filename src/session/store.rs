@@ -152,6 +152,14 @@ impl SessionStore {
                         tool_call_id: Some(id),
                     });
                 }
+                SessionEvent::Compact { summary, .. } => {
+                    messages.clear();
+                    messages.push(Message {
+                        role: Role::Assistant,
+                        content: summary,
+                        tool_call_id: None,
+                    });
+                }
                 _ => {}
             }
         }

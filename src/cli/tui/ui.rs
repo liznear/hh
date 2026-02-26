@@ -347,6 +347,12 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                     lines.push(line);
                 }
             }
+            ChatMessage::CompactionPending => {
+                render_compaction_block(&mut lines, None, width);
+            }
+            ChatMessage::Compaction(summary) => {
+                render_compaction_block(&mut lines, Some(summary), width);
+            }
             ChatMessage::Thinking(text) => {
                 render_thinking_block(&mut lines, text, width);
             }
@@ -476,6 +482,34 @@ fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usiz
     }
 
     lines.push(Line::from(""));
+}
+
+fn render_compaction_block(lines: &mut Vec<Line<'static>>, summary: Option<&str>, width: usize) {
+    ensure_single_blank_line(lines);
+
+    let indent = MESSAGE_INDENT;
+    let label = " Compaction ";
+    let available = width.saturating_sub(indent.chars().count());
+    let total_rule = available.max(label.chars().count() + 4);
+    let side = total_rule.saturating_sub(label.chars().count()) / 2;
+    let left = "-".repeat(side);
+    let right = "-".repeat(total_rule.saturating_sub(side + label.chars().count()));
+
+    lines.push(Line::from(vec![
+        Span::raw(indent),
+        Span::styled(left, Style::default().fg(TEXT_MUTED)),
+        Span::styled(label, Style::default().fg(TEXT_MUTED)),
+        Span::styled(right, Style::default().fg(TEXT_MUTED)),
+    ]));
+    lines.push(Line::from(""));
+
+    if let Some(summary) = summary
+        && !summary.trim().is_empty()
+    {
+        for line in parse_markdown_lines(summary, width) {
+            lines.push(line);
+        }
+    }
 }
 
 /// Wrap text to a given width, returning a vector of lines.
