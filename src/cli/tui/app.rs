@@ -7,6 +7,7 @@ use ratatui::text::Line;
 use super::commands::{SlashCommand, get_default_commands};
 use super::event::TuiEvent;
 use super::tool_render::render_tool_result;
+use crate::core::MessageAttachment;
 
 const SIDEBAR_WIDTH: u16 = 38;
 const LEFT_COLUMN_RIGHT_MARGIN: u16 = 2;
@@ -74,7 +75,13 @@ pub struct ChatApp {
     pub commands: Vec<SlashCommand>,
     pub filtered_commands: Vec<SlashCommand>,
     pub selected_command_index: usize,
+    pub pending_attachments: Vec<MessageAttachment>,
     preferred_column: Option<usize>,
+}
+
+pub struct SubmittedInput {
+    pub text: String,
+    pub attachments: Vec<MessageAttachment>,
 }
 
 impl ChatApp {
@@ -102,6 +109,7 @@ impl ChatApp {
             commands,
             filtered_commands: Vec::new(),
             selected_command_index: 0,
+            pending_attachments: Vec::new(),
             preferred_column: None,
         }
     }
@@ -168,11 +176,12 @@ impl ChatApp {
         }
     }
 
-    pub fn submit_input(&mut self) -> String {
+    pub fn submit_input(&mut self) -> SubmittedInput {
         let input = std::mem::take(&mut self.input);
+        let attachments = std::mem::take(&mut self.pending_attachments);
         self.cursor = 0;
         self.preferred_column = None;
-        if !input.is_empty() {
+        if !input.is_empty() || !attachments.is_empty() {
             let extracted_todos = extract_todos(&input);
             if self.todo_items.is_empty() && !extracted_todos.is_empty() {
                 self.todo_items = extracted_todos;
@@ -182,7 +191,10 @@ impl ChatApp {
             self.auto_scroll = true; // Follow the new response
             self.mark_dirty();
         }
-        input
+        SubmittedInput {
+            text: input,
+            attachments,
+        }
     }
 
     /// Get or rebuild cached lines for the given width (interior mutability)
@@ -377,6 +389,15 @@ impl ChatApp {
         self.preferred_column = None;
     }
 
+    pub fn insert_str(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.input.insert_str(self.cursor, text);
+        self.cursor += text.len();
+        self.preferred_column = None;
+    }
+
     pub fn backspace(&mut self) {
         if self.cursor == 0 {
             return;
@@ -390,14 +411,20 @@ impl ChatApp {
 
     pub fn clear_input(&mut self) {
         self.input.clear();
+        self.pending_attachments.clear();
         self.cursor = 0;
         self.preferred_column = None;
     }
 
     pub fn set_input(&mut self, value: String) {
         self.input = value;
+        self.pending_attachments.clear();
         self.cursor = self.input.len();
         self.preferred_column = None;
+    }
+
+    pub fn add_pending_attachment(&mut self, attachment: MessageAttachment) {
+        self.pending_attachments.push(attachment);
     }
 
     pub fn move_to_line_start(&mut self) {

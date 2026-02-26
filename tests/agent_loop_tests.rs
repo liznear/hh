@@ -90,6 +90,7 @@ async fn agent_loop_stops_on_final_answer() {
             assistant_message: Message {
                 role: Role::Assistant,
                 content: "done".to_string(),
+                attachments: Vec::new(),
                 tool_call_id: None,
             },
             tool_calls: vec![],
@@ -120,7 +121,15 @@ async fn agent_loop_stops_on_final_answer() {
     };
 
     let out = agent
-        .run("hello".to_string(), |_tool| Ok(true))
+        .run(
+            Message {
+                role: Role::User,
+                content: "hello".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            |_tool| Ok(true),
+        )
         .await
         .expect("run");
 
@@ -135,6 +144,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
                 assistant_message: Message {
                     role: Role::Assistant,
                     content: "hello world".to_string(),
+                    attachments: Vec::new(),
                     tool_call_id: None,
                 },
                 tool_calls: vec![ToolCall {
@@ -149,6 +159,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
                 assistant_message: Message {
                     role: Role::Assistant,
                     content: "final".to_string(),
+                    attachments: Vec::new(),
                     tool_call_id: None,
                 },
                 tool_calls: vec![],
@@ -185,7 +196,15 @@ async fn agent_loop_emits_stream_and_tool_events() {
     };
 
     let _ = agent
-        .run("hello".to_string(), |_tool| Ok(true))
+        .run(
+            Message {
+                role: Role::User,
+                content: "hello".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            |_tool| Ok(true),
+        )
         .await
         .expect("run");
 
@@ -205,6 +224,7 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
             assistant_message: Message {
                 role: Role::Assistant,
                 content: "done".to_string(),
+                attachments: Vec::new(),
                 tool_call_id: None,
             },
             tool_calls: vec![],
@@ -236,7 +256,15 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
     };
 
     let _ = agent
-        .run("hello".to_string(), |_tool| Ok(true))
+        .run(
+            Message {
+                role: Role::User,
+                content: "hello".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            |_tool| Ok(true),
+        )
         .await
         .expect("run");
 
@@ -274,6 +302,7 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
                 assistant_message: Message {
                     role: Role::Assistant,
                     content: "working".to_string(),
+                    attachments: Vec::new(),
                     tool_call_id: None,
                 },
                 tool_calls: vec![],
@@ -284,6 +313,7 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
                 assistant_message: Message {
                     role: Role::Assistant,
                     content: "final".to_string(),
+                    attachments: Vec::new(),
                     tool_call_id: None,
                 },
                 tool_calls: vec![],
@@ -315,7 +345,15 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
     };
 
     let out = agent
-        .run("hello".to_string(), |_tool| Ok(true))
+        .run(
+            Message {
+                role: Role::User,
+                content: "hello".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            |_tool| Ok(true),
+        )
         .await
         .expect("run");
 
@@ -329,6 +367,7 @@ async fn agent_loop_respects_max_steps_when_set() {
             assistant_message: Message {
                 role: Role::Assistant,
                 content: "not done yet".to_string(),
+                attachments: Vec::new(),
                 tool_call_id: None,
             },
             tool_calls: vec![],
@@ -359,7 +398,15 @@ async fn agent_loop_respects_max_steps_when_set() {
     };
 
     let err = agent
-        .run("hello".to_string(), |_tool| Ok(true))
+        .run(
+            Message {
+                role: Role::User,
+                content: "hello".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            |_tool| Ok(true),
+        )
         .await
         .expect_err("should hit max steps");
 

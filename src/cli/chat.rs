@@ -1,16 +1,18 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::{fs, io::Cursor};
 
+use base64::Engine;
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
 };
 use tokio::sync::mpsc;
 
 use crate::cli::render;
-use crate::cli::tui::{self, ChatApp, DebugRenderer, TuiEvent, TuiEventSender};
+use crate::cli::tui::{self, ChatApp, DebugRenderer, SubmittedInput, TuiEvent, TuiEventSender};
 use crate::config::Settings;
-use crate::core::Message;
 use crate::core::agent::{AgentEvents, AgentLoop, NoopEvents};
+use crate::core::{Message, MessageAttachment, Role};
 use crate::permission::PermissionMatcher;
 use crate::provider::openai_compatible::OpenAiCompatibleProvider;
 use crate::session::{SessionEvent, SessionStore, event_id};
@@ -125,7 +127,12 @@ pub async fn run_prompt_with_debug(
         let result = run_agent(
             settings_clone,
             &cwd_clone,
-            prompt_clone,
+            Message {
+                role: crate::core::Role::User,
+                content: prompt_clone,
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
             sender_clone.clone(),
             None,
             Some(title_clone),
@@ -180,6 +187,7 @@ pub async fn run_prompt_with_debug(
 /// Input event from terminal
 enum InputEvent {
     Key(event::KeyEvent),
+    Paste(String),
     ScrollUp,
     ScrollDown,
     Refresh,
@@ -189,6 +197,7 @@ async fn handle_input() -> anyhow::Result<Option<InputEvent>> {
     if event::poll(Duration::from_millis(16))? {
         match event::read()? {
             Event::Key(key) => Ok(Some(InputEvent::Key(key))),
+            Event::Paste(text) => Ok(Some(InputEvent::Paste(text))),
             Event::Mouse(mouse) => Ok(handle_mouse_event(mouse)),
             Event::Resize(_, _) | Event::FocusGained => Ok(Some(InputEvent::Refresh)),
             _ => Ok(None),
@@ -221,6 +230,10 @@ where
         } else {
             mutate_input(app, ChatApp::clear_input);
         }
+        return Ok(());
+    }
+
+    if maybe_handle_paste_shortcut(key_event, app) {
         return Ok(());
     }
 
@@ -307,6 +320,261 @@ fn mutate_input(app: &mut ChatApp, mutator: impl FnOnce(&mut ChatApp)) {
     app.update_command_filtering();
 }
 
+fn apply_paste(app: &mut ChatApp, pasted: String) {
+    let mut prepared = prepare_paste(&pasted);
+    if prepared.attachments.is_empty()
+        && let Some(clipboard_image) = prepare_clipboard_image_paste()
+    {
+        prepared = clipboard_image;
+    }
+    apply_prepared_paste(app, prepared);
+}
+
+fn apply_prepared_paste(app: &mut ChatApp, prepared: PreparedPaste) {
+    mutate_input(app, |app| {
+        app.insert_str(&prepared.insert_text);
+        for attachment in prepared.attachments {
+            app.add_pending_attachment(attachment);
+        }
+    });
+}
+
+struct PreparedPaste {
+    insert_text: String,
+    attachments: Vec<MessageAttachment>,
+}
+
+fn prepare_paste(pasted: &str) -> PreparedPaste {
+    if let Some(image_paste) = prepare_image_file_paste(pasted) {
+        return image_paste;
+    }
+
+    PreparedPaste {
+        insert_text: pasted.to_string(),
+        attachments: Vec::new(),
+    }
+}
+
+fn prepare_image_file_paste(pasted: &str) -> Option<PreparedPaste> {
+    let non_empty_lines: Vec<&str> = pasted
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if non_empty_lines.is_empty() {
+        return None;
+    }
+
+    let mut image_paths = Vec::with_capacity(non_empty_lines.len());
+    let mut attachments = Vec::with_capacity(non_empty_lines.len());
+    for line in &non_empty_lines {
+        let Some(path) = extract_image_path(line) else {
+            return None;
+        };
+        let Some(attachment) = read_image_file_attachment(&path) else {
+            return None;
+        };
+        image_paths.push(path);
+        attachments.push(attachment);
+    }
+
+    let insert_text = image_paths
+        .iter()
+        .enumerate()
+        .map(|(idx, path)| {
+            let name = Path::new(path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("image");
+            if image_paths.len() == 1 {
+                format!("[pasted image: {name}]")
+            } else {
+                format!("[pasted image {}: {name}]", idx + 1)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Some(PreparedPaste {
+        insert_text,
+        attachments,
+    })
+}
+
+fn maybe_handle_paste_shortcut(key_event: event::KeyEvent, app: &mut ChatApp) -> bool {
+    if !is_paste_shortcut(key_event) {
+        return false;
+    }
+
+    if let Some(prepared) = prepare_clipboard_image_paste() {
+        apply_prepared_paste(app, prepared);
+        return true;
+    }
+
+    if let Some(text) = read_clipboard_text() {
+        apply_paste(app, text);
+    }
+
+    true
+}
+
+fn is_paste_shortcut(key_event: event::KeyEvent) -> bool {
+    (key_event.code == KeyCode::Char('v')
+        && (key_event.modifiers.contains(KeyModifiers::CONTROL)
+            || key_event.modifiers.contains(KeyModifiers::SUPER)))
+        || (key_event.code == KeyCode::Insert && key_event.modifiers.contains(KeyModifiers::SHIFT))
+}
+
+fn prepare_clipboard_image_paste() -> Option<PreparedPaste> {
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let image = clipboard.get_image().ok()?;
+    let png_data = encode_rgba_to_png(image.width, image.height, image.bytes.as_ref())?;
+    let data_base64 = base64::engine::general_purpose::STANDARD.encode(png_data);
+
+    Some(PreparedPaste {
+        insert_text: "[pasted image from clipboard]".to_string(),
+        attachments: vec![MessageAttachment::Image {
+            media_type: "image/png".to_string(),
+            data_base64,
+        }],
+    })
+}
+
+fn read_clipboard_text() -> Option<String> {
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let text = clipboard.get_text().ok()?;
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn encode_rgba_to_png(width: usize, height: usize, rgba_bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut output = Vec::new();
+    {
+        let mut cursor = Cursor::new(&mut output);
+        let mut encoder = png::Encoder::new(&mut cursor, width as u32, height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().ok()?;
+        writer.write_image_data(rgba_bytes).ok()?;
+    }
+    Some(output)
+}
+
+fn extract_image_path(raw: &str) -> Option<String> {
+    let trimmed = strip_surrounding_quotes(raw.trim());
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let normalized = if let Some(rest) = trimmed.strip_prefix("file://") {
+        let path = if rest.starts_with('/') {
+            rest
+        } else {
+            return None;
+        };
+        match urlencoding::decode(path) {
+            Ok(decoded) => decoded.into_owned(),
+            Err(_) => return None,
+        }
+    } else {
+        trimmed.to_string()
+    };
+
+    resolve_image_path(&normalized)
+}
+
+fn resolve_image_path(path: &str) -> Option<String> {
+    let unescaped = unescape_shell_escaped_path(path);
+    let mut candidates = vec![path.to_string()];
+    if unescaped != path {
+        candidates.push(unescaped);
+    }
+
+    for candidate in &candidates {
+        if is_image_path(candidate) && Path::new(candidate).exists() {
+            return Some(candidate.clone());
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|candidate| is_image_path(candidate))
+}
+
+fn unescape_shell_escaped_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    let mut chars = path.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                out.push(next);
+            } else {
+                out.push('\\');
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn read_image_file_attachment(path: &str) -> Option<MessageAttachment> {
+    let media_type = image_media_type(path)?;
+    let bytes = fs::read(path).ok()?;
+    let data_base64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Some(MessageAttachment::Image {
+        media_type: media_type.to_string(),
+        data_base64,
+    })
+}
+
+fn image_media_type(path: &str) -> Option<&'static str> {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".png") {
+        Some("image/png")
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        Some("image/jpeg")
+    } else if lower.ends_with(".gif") {
+        Some("image/gif")
+    } else if lower.ends_with(".webp") {
+        Some("image/webp")
+    } else if lower.ends_with(".bmp") {
+        Some("image/bmp")
+    } else if lower.ends_with(".tiff") || lower.ends_with(".tif") {
+        Some("image/tiff")
+    } else if lower.ends_with(".heic") {
+        Some("image/heic")
+    } else if lower.ends_with(".heif") {
+        Some("image/heif")
+    } else if lower.ends_with(".avif") {
+        Some("image/avif")
+    } else {
+        None
+    }
+}
+
+fn strip_surrounding_quotes(value: &str) -> &str {
+    if value.len() < 2 {
+        return value;
+    }
+    let bytes = value.as_bytes();
+    let first = bytes[0];
+    let last = bytes[value.len() - 1];
+    if (first == b'\'' && last == b'\'') || (first == b'"' && last == b'"') {
+        &value[1..value.len() - 1]
+    } else {
+        value
+    }
+}
+
+fn is_image_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    [
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif",
+        ".avif",
+    ]
+    .iter()
+    .any(|ext| lower.ends_with(ext))
+}
+
 fn selected_command_name(app: &ChatApp) -> Option<String> {
     app.filtered_commands
         .get(app.selected_command_index)
@@ -359,7 +627,7 @@ fn scroll_bounds(app: &ChatApp, width: u16, height: u16) -> (usize, usize) {
 fn spawn_agent_task(
     settings: &Settings,
     cwd: &Path,
-    input: String,
+    input: Message,
     event_sender: &TuiEventSender,
     session_id: Option<String>,
     session_title: Option<String>,
@@ -422,6 +690,9 @@ async fn run_interactive_chat_loop(
                             },
                         )?;
                     }
+                    Some(InputEvent::Paste(text)) => {
+                        apply_paste(app, text);
+                    }
                     Some(InputEvent::ScrollUp) => {
                         for _ in 0..3 {
                             app.scroll_up();
@@ -474,7 +745,7 @@ fn build_session_name(cwd: &std::path::Path) -> String {
 async fn run_agent(
     settings: Settings,
     cwd: &std::path::Path,
-    prompt: String,
+    prompt: Message,
     events: impl AgentEvents + 'static,
     session_id: Option<String>,
     session_title: Option<String>,
@@ -514,12 +785,20 @@ where
     let loop_runner = create_agent_loop(settings, cwd, events, None, Some(title))?;
 
     loop_runner
-        .run(prompt, |tool_name| {
-            Ok(render::confirm(&format!(
-                "Allow tool '{}' execution?",
-                tool_name
-            ))?)
-        })
+        .run(
+            Message {
+                role: Role::User,
+                content: prompt,
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            |tool_name| {
+                Ok(render::confirm(&format!(
+                    "Allow tool '{}' execution?",
+                    tool_name
+                ))?)
+            },
+        )
         .await
 }
 
@@ -567,22 +846,22 @@ where
 use anyhow::Context;
 
 fn handle_submitted_input(
-    input: String,
+    input: SubmittedInput,
     app: &mut ChatApp,
     settings: &Settings,
     cwd: &Path,
     event_sender: &TuiEventSender,
 ) {
-    if input.starts_with('/') {
+    if input.text.starts_with('/') && input.attachments.is_empty() {
         if let Some(tui::ChatMessage::User(last)) = app.messages.last()
-            && last == &input
+            && last == &input.text
         {
             app.messages.pop();
             app.mark_dirty();
         }
-        handle_slash_command(input, app, settings, cwd, event_sender);
+        handle_slash_command(input.text, app, settings, cwd, event_sender);
     } else if app.is_picking_session {
-        if let Err(e) = handle_session_selection(input, app, settings, cwd) {
+        if let Err(e) = handle_session_selection(input.text, app, settings, cwd) {
             app.messages
                 .push(tui::ChatMessage::Assistant(e.to_string()));
             app.mark_dirty();
@@ -721,12 +1000,14 @@ async fn generate_compaction_summary(
         prompt_messages.push(Message {
             role: crate::core::Role::System,
             content: "You compact conversation history for an engineering assistant. Produce a concise summary that preserves requirements, decisions, constraints, open questions, and pending work items. Prefer bullet points. Do not invent details.".to_string(),
+            attachments: Vec::new(),
             tool_call_id: None,
         });
         prompt_messages.extend(messages);
         prompt_messages.push(Message {
             role: crate::core::Role::User,
             content: "Compact the conversation so future turns can continue from this summary with minimal context loss.".to_string(),
+            attachments: Vec::new(),
             tool_call_id: None,
         });
 
@@ -837,16 +1118,20 @@ fn handle_session_selection(
 }
 
 fn handle_chat_message(
-    input: String,
+    input: SubmittedInput,
     app: &mut ChatApp,
     settings: &Settings,
     cwd: &Path,
     event_sender: &TuiEventSender,
 ) {
-    if !input.is_empty() {
+    if !input.text.is_empty() || !input.attachments.is_empty() {
         let session_id = app.session_id.clone();
         let session_title = if session_id.is_none() {
-            Some(input.chars().take(30).collect::<String>())
+            if input.text.is_empty() {
+                Some("Image input".to_string())
+            } else {
+                Some(input.text.chars().take(30).collect::<String>())
+            }
         } else {
             None
         };
@@ -859,10 +1144,17 @@ fn handle_chat_message(
             }
         }
 
+        let message = Message {
+            role: crate::core::Role::User,
+            content: input.text,
+            attachments: input.attachments,
+            tool_call_id: None,
+        };
+
         spawn_agent_task(
             settings,
             cwd,
-            input,
+            message,
             event_sender,
             Some(current_session_id),
             session_title,
@@ -1002,6 +1294,7 @@ mod tests {
                 message: Message {
                     role: Role::User,
                     content: "hello".to_string(),
+                    attachments: Vec::new(),
                     tool_call_id: None,
                 },
             })
@@ -1347,5 +1640,90 @@ mod tests {
         )
         .unwrap();
         assert_eq!(app.cursor, app.input.len());
+    }
+
+    #[test]
+    fn test_paste_transforms_single_image_path_into_attachment() {
+        let temp_dir = tempdir().unwrap();
+        let image_path = temp_dir.path().join("example.png");
+        std::fs::write(&image_path, [1u8, 2, 3, 4]).unwrap();
+
+        let prepared = prepare_paste(image_path.to_string_lossy().as_ref());
+        assert_eq!(prepared.insert_text, "[pasted image: example.png]");
+        assert_eq!(prepared.attachments.len(), 1);
+    }
+
+    #[test]
+    fn test_paste_transforms_shell_escaped_image_path_into_attachment() {
+        let temp_dir = tempdir().unwrap();
+        let image_path = temp_dir.path().join("my image.png");
+        std::fs::write(&image_path, [1u8, 2, 3, 4]).unwrap();
+        let escaped = image_path.to_string_lossy().replace(' ', "\\ ");
+
+        let prepared = prepare_paste(&escaped);
+        assert_eq!(prepared.insert_text, "[pasted image: my image.png]");
+        assert_eq!(prepared.attachments.len(), 1);
+    }
+
+    #[test]
+    fn test_paste_transforms_file_url_image_path_into_attachment() {
+        let temp_dir = tempdir().unwrap();
+        let image_path = temp_dir.path().join("my image.jpeg");
+        std::fs::write(&image_path, [1u8, 2, 3, 4]).unwrap();
+        let file_url = format!(
+            "file://{}",
+            image_path.to_string_lossy().replace(' ', "%20")
+        );
+
+        let prepared = prepare_paste(&file_url);
+        assert_eq!(prepared.insert_text, "[pasted image: my image.jpeg]");
+        assert_eq!(prepared.attachments.len(), 1);
+    }
+
+    #[test]
+    fn test_paste_leaves_plain_text_unchanged() {
+        let prepared = prepare_paste("hello\nworld");
+        assert_eq!(prepared.insert_text, "hello\nworld");
+        assert!(prepared.attachments.is_empty());
+    }
+
+    #[test]
+    fn test_apply_paste_inserts_content_at_cursor() {
+        let temp_dir = tempdir().unwrap();
+        let cwd = temp_dir.path();
+        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        app.set_input("abcXYZ".to_string());
+        app.cursor = 3;
+
+        let image_path = temp_dir.path().join("shot.png");
+        std::fs::write(&image_path, [1u8, 2, 3, 4]).unwrap();
+
+        apply_paste(&mut app, image_path.to_string_lossy().to_string());
+
+        assert_eq!(app.input, "abc[pasted image: shot.png]XYZ");
+        assert_eq!(app.pending_attachments.len(), 1);
+    }
+
+    #[test]
+    fn test_cmd_v_does_not_insert_literal_v() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        app.set_input("abc".to_string());
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('v'), KeyModifiers::SUPER),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+
+        assert_ne!(app.input, "abcv");
     }
 }

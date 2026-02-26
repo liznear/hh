@@ -1,5 +1,6 @@
 use crate::core::{
-    Message, Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role, ToolCall,
+    Message, MessageAttachment, Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent,
+    Role, ToolCall,
 };
 use crate::provider::StreamedToolCall;
 use anyhow::{Context, bail};
@@ -43,37 +44,55 @@ impl OpenAiCompatibleProvider {
         Ok(headers)
     }
 
-    fn request_body(&self, req: &ProviderRequest, stream: bool) -> Value {
-        let model = if req.model.is_empty() {
+    fn request_body(
+        &self,
+        req: &ProviderRequest,
+        stream: bool,
+        image_url_as_object: bool,
+        image_data_format: ImageDataFormat,
+        include_tools: bool,
+    ) -> Value {
+        let requested_model = if req.model.is_empty() {
             self.model.as_str()
         } else {
             req.model.as_str()
         };
+        let model = select_model_for_request(self.base_url.as_str(), requested_model, req);
 
-        let tools = req
-            .tools
-            .iter()
-            .map(|t| {
-                json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    }
+        let tools = if include_tools {
+            req.tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.parameters,
+                        }
+                    })
                 })
-            })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        let messages = req
+            .messages
+            .iter()
+            .map(|message| message_to_wire(message, image_url_as_object, image_data_format))
             .collect::<Vec<_>>();
 
-        let messages = req.messages.iter().map(message_to_wire).collect::<Vec<_>>();
-
-        json!({
+        let mut body = json!({
             "model": model,
             "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto",
             "stream": stream,
-        })
+        });
+        if include_tools && !tools.is_empty() {
+            body["tools"] = json!(tools);
+            body["tool_choice"] = json!("auto");
+        }
+        body
     }
 
     fn parse_chat_response(value: &Value) -> anyhow::Result<ProviderResponse> {
@@ -101,6 +120,7 @@ impl OpenAiCompatibleProvider {
             assistant_message: Message {
                 role: Role::Assistant,
                 content,
+                attachments: Vec::new(),
                 tool_call_id: None,
             },
             done: tool_calls.is_empty(),
@@ -115,22 +135,103 @@ impl OpenAiCompatibleProvider {
         stream: bool,
         error_context: &str,
     ) -> anyhow::Result<reqwest::Response> {
-        let response = self
+        let primary_body = self.request_body(req, stream, true, ImageDataFormat::DataUrl, true);
+
+        let primary = self
             .client
             .post(self.endpoint())
             .headers(self.auth_headers()?)
-            .json(&self.request_body(req, stream))
+            .json(&primary_body)
             .send()
             .await
             .with_context(|| error_context.to_string())?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            bail!("provider error {}: {}", status, body);
+        if primary.status().is_success() {
+            return Ok(primary);
         }
 
-        Ok(response)
+        let primary_status = primary.status();
+        let primary_error = primary.text().await.unwrap_or_default();
+        if has_image_attachments(req)
+            && should_retry_for_image_payload(primary_status, &primary_error)
+        {
+            let no_tools_body =
+                self.request_body(req, stream, true, ImageDataFormat::DataUrl, false);
+            let fallback_no_tools = self
+                .client
+                .post(self.endpoint())
+                .headers(self.auth_headers()?)
+                .json(&no_tools_body)
+                .send()
+                .await
+                .with_context(|| format!("{} (fallback: no tools)", error_context))?;
+
+            if fallback_no_tools.status().is_success() {
+                return Ok(fallback_no_tools);
+            }
+
+            let no_tools_status = fallback_no_tools.status();
+            let no_tools_error = fallback_no_tools.text().await.unwrap_or_default();
+
+            if should_retry_for_image_payload(no_tools_status, &no_tools_error) {
+                let raw_base64_body =
+                    self.request_body(req, stream, true, ImageDataFormat::RawBase64, false);
+                let fallback_raw_base64 = self
+                    .client
+                    .post(self.endpoint())
+                    .headers(self.auth_headers()?)
+                    .json(&raw_base64_body)
+                    .send()
+                    .await
+                    .with_context(|| format!("{} (fallback: raw base64)", error_context))?;
+
+                if fallback_raw_base64.status().is_success() {
+                    return Ok(fallback_raw_base64);
+                }
+
+                let raw_base64_status = fallback_raw_base64.status();
+                let raw_base64_error = fallback_raw_base64.text().await.unwrap_or_default();
+
+                let string_image_body =
+                    self.request_body(req, stream, false, ImageDataFormat::DataUrl, false);
+                let fallback_string_image = self
+                    .client
+                    .post(self.endpoint())
+                    .headers(self.auth_headers()?)
+                    .json(&string_image_body)
+                    .send()
+                    .await
+                    .with_context(|| format!("{} (fallback: string image_url)", error_context))?;
+
+                if fallback_string_image.status().is_success() {
+                    return Ok(fallback_string_image);
+                }
+
+                let string_status = fallback_string_image.status();
+                let string_error = fallback_string_image.text().await.unwrap_or_default();
+                bail!(
+                    "provider error {}: {} (fallback_no_tools {}: {}) (fallback_raw_base64 {}: {}) (fallback_string_image_url {}: {})",
+                    primary_status,
+                    primary_error,
+                    no_tools_status,
+                    no_tools_error,
+                    raw_base64_status,
+                    raw_base64_error,
+                    string_status,
+                    string_error
+                );
+            }
+
+            bail!(
+                "provider error {}: {} (fallback_no_tools {}: {})",
+                primary_status,
+                primary_error,
+                no_tools_status,
+                no_tools_error
+            );
+        }
+
+        bail!("provider error {}: {}", primary_status, primary_error)
     }
 
     async fn complete_stream_inner<F>(
@@ -200,6 +301,7 @@ impl OpenAiCompatibleProvider {
             assistant_message: Message {
                 role: Role::Assistant,
                 content: assistant,
+                attachments: Vec::new(),
                 tool_call_id: None,
             },
             done: tool_calls.is_empty(),
@@ -232,15 +334,100 @@ enum StreamLine {
     Payload(Value),
 }
 
-fn message_to_wire(message: &Message) -> Value {
+#[derive(Clone, Copy)]
+enum ImageDataFormat {
+    DataUrl,
+    RawBase64,
+}
+
+fn message_to_wire(
+    message: &Message,
+    image_url_as_object: bool,
+    image_data_format: ImageDataFormat,
+) -> Value {
+    let content = if message.attachments.is_empty() {
+        json!(message.content)
+    } else {
+        let mut parts = Vec::new();
+        if !message.content.is_empty() {
+            parts.push(json!({
+                "type": "text",
+                "text": message.content,
+            }));
+        }
+
+        for attachment in &message.attachments {
+            match attachment {
+                MessageAttachment::Image {
+                    media_type,
+                    data_base64,
+                } => {
+                    let image_payload = match image_data_format {
+                        ImageDataFormat::DataUrl => {
+                            format!("data:{};base64,{}", media_type, data_base64)
+                        }
+                        ImageDataFormat::RawBase64 => data_base64.clone(),
+                    };
+                    if image_url_as_object {
+                        parts.push(json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": image_payload,
+                            }
+                        }));
+                    } else {
+                        parts.push(json!({
+                            "type": "image_url",
+                            "image_url": image_payload,
+                        }));
+                    }
+                }
+            }
+        }
+
+        json!(parts)
+    };
+
     let mut wire = json!({
         "role": role_to_wire(&message.role),
-        "content": message.content,
+        "content": content,
     });
     if let Some(id) = &message.tool_call_id {
         wire["tool_call_id"] = json!(id);
     }
     wire
+}
+
+fn has_image_attachments(req: &ProviderRequest) -> bool {
+    req.messages
+        .iter()
+        .any(|message| !message.attachments.is_empty())
+}
+
+fn should_retry_for_image_payload(status: reqwest::StatusCode, body: &str) -> bool {
+    if !status.is_client_error() {
+        return false;
+    }
+    let lower = body.to_ascii_lowercase();
+    lower.contains("invalid api parameter")
+        || lower.contains("invalid parameter")
+        || lower.contains("image_url")
+        || lower.contains("invalid type")
+}
+
+fn select_model_for_request(
+    base_url: &str,
+    requested_model: &str,
+    req: &ProviderRequest,
+) -> String {
+    if has_image_attachments(req)
+        && base_url.contains("api.z.ai")
+        && requested_model.starts_with("glm-")
+        && !requested_model.contains('v')
+    {
+        return "glm-4.6v".to_string();
+    }
+    requested_model.to_string()
 }
 
 fn role_to_wire(role: &Role) -> &'static str {

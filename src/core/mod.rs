@@ -9,6 +9,6 @@ pub use traits::{
     SessionSink, ToolExecutor,
 };
 pub use types::{
-    Message, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role, SubAgentCall,
-    SubAgentResult, ToolCall,
+    Message, MessageAttachment, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role,
+    SubAgentCall, SubAgentResult, ToolCall,
 };

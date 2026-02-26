@@ -149,6 +149,7 @@ impl SessionStore {
                     messages.push(Message {
                         role: Role::Tool,
                         content,
+                        attachments: Vec::new(),
                         tool_call_id: Some(id),
                     });
                 }
@@ -157,6 +158,7 @@ impl SessionStore {
                     messages.push(Message {
                         role: Role::Assistant,
                         content: summary,
+                        attachments: Vec::new(),
                         tool_call_id: None,
                     });
                 }
@@ -227,6 +229,7 @@ pub fn user_message(content: String) -> SessionEvent {
         message: Message {
             role: Role::User,
             content,
+            attachments: Vec::new(),
             tool_call_id: None,
         },
     }

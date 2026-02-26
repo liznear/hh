@@ -46,6 +46,7 @@ fn provider_response_supports_thinking_field() {
         assistant_message: hh::provider::Message {
             role: hh::provider::Role::Assistant,
             content: "hello".to_string(),
+            attachments: Vec::new(),
             tool_call_id: None,
         },
         tool_calls: vec![ToolCall {

@@ -8,7 +8,7 @@ mod tool_presentation;
 mod tool_render;
 mod ui;
 
-pub use app::{ChatApp, ChatMessage};
+pub use app::{ChatApp, ChatMessage, SubmittedInput};
 pub use commands::SlashCommand;
 pub use debug::DebugRenderer;
 pub use event::{TuiEvent, TuiEventSender};

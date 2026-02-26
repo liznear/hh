@@ -13,6 +13,7 @@ fn appends_and_replays_messages() {
     let msg1 = Message {
         role: Role::User,
         content: "hello".to_string(),
+        attachments: Vec::new(),
         tool_call_id: None,
     };
     store
@@ -25,6 +26,7 @@ fn appends_and_replays_messages() {
     let msg2 = Message {
         role: Role::Assistant,
         content: "hi".to_string(),
+        attachments: Vec::new(),
         tool_call_id: None,
     };
     store
@@ -107,6 +109,7 @@ fn replay_messages_uses_latest_compact_boundary() {
             message: Message {
                 role: Role::User,
                 content: "before compact".to_string(),
+                attachments: Vec::new(),
                 tool_call_id: None,
             },
         })
@@ -125,6 +128,7 @@ fn replay_messages_uses_latest_compact_boundary() {
             message: Message {
                 role: Role::Assistant,
                 content: "after compact".to_string(),
+                attachments: Vec::new(),
                 tool_call_id: None,
             },
         })

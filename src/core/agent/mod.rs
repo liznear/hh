@@ -37,7 +37,7 @@ where
     A: ApprovalPolicy,
     S: SessionSink + SessionReader,
 {
-    pub async fn run<F>(&self, prompt: String, mut approve: F) -> anyhow::Result<String>
+    pub async fn run<F>(&self, prompt: Message, mut approve: F) -> anyhow::Result<String>
     where
         F: FnMut(&str) -> anyhow::Result<bool>,
     {
@@ -57,19 +57,13 @@ where
                 Message {
                     role: Role::System,
                     content: self.system_prompt.clone(),
+                    attachments: Vec::new(),
                     tool_call_id: None,
                 },
             )?;
         }
 
-        self.append_message(
-            &mut state,
-            Message {
-                role: Role::User,
-                content: prompt,
-                tool_call_id: None,
-            },
-        )?;
+        self.append_message(&mut state, prompt)?;
 
         loop {
             if self.max_steps > 0 && state.step >= self.max_steps {
@@ -121,6 +115,7 @@ where
             let assistant = Message {
                 role: Role::Assistant,
                 content: assistant_content.clone(),
+                attachments: Vec::new(),
                 tool_call_id: None,
             };
 
@@ -201,6 +196,7 @@ where
         state.push(Message {
             role: Role::Tool,
             content: result.output.clone(),
+            attachments: Vec::new(),
             tool_call_id: Some(call_id.clone()),
         });
         self.session.append(&SessionEvent::ToolResult {

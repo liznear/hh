@@ -2,8 +2,8 @@ use std::io::{self, Stdout};
 
 use crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{
@@ -27,6 +27,7 @@ pub fn setup_terminal() -> io::Result<Tui> {
         stdout,
         EnterAlternateScreen,
         EnableMouseCapture,
+        EnableBracketedPaste,
         Clear(ClearType::All)
     )?;
     let _ = execute!(
@@ -44,7 +45,8 @@ pub fn restore_terminal(terminal: &mut Tui) -> io::Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
     Ok(())
