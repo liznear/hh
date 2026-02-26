@@ -6,14 +6,17 @@ Happy Harness (hh) is a terminal-based agentic coding harness. It provides a rob
 
 ## Features
 
-- **Terminal-Based TUI**: Rich, interactive terminal interface built with ratatui with syntax highlighting
-- **Agent Runtime**: Core loop orchestrating turns, tool calls, approvals, and termination
-- **Provider-Agnostic Architecture**: Clean separation between LLM concepts and provider implementations
-- **Extensible Tools**: 9 integrated tools including file operations, bash, web access, and todo management
-- **Permission System**: Fine-grained per-tool permission control (allow/ask/deny)
-- **Session Persistence**: Full session history with support for multiple sessions and resume
+- **Terminal-Based TUI**: Rich, interactive terminal interface built with ratatui with syntax highlighting and markdown rendering
+- **Agent Runtime**: Core loop orchestrating turns, tool calls, approvals, and termination with trait-based architecture
+- **Provider-Agnostic Architecture**: Clean separation between LLM concepts and provider implementations (OpenAI-compatible API)
+- **Extensible Tools**: 10 integrated tools including file operations, bash, web access, diff visualization, and todo management
+- **Typed Tool Output**: Structured tool results with content-type metadata for intelligent rendering
+- **Permission System**: Fine-grained per-tool permission control (allow/ask/deny) with capability-based policy
+- **Session Persistence**: Full session history with workspace-based storage, compaction, and resume support
 - **Configuration**: TOML-based project and global configuration
+- **Image Support**: Paste images from clipboard or file paths for multimodal interactions
 - **Debug Mode**: Frame-by-frame TUI debugging for development and troubleshooting
+- **Sub-Agent Protocol**: Scaffolding for nested agent execution with depth limits
 
 ## Quick Start
 
@@ -43,6 +46,15 @@ hh replay ./debug
 hh config show
 ```
 
+## TUI Slash Commands
+
+When running `hh chat`, the following slash commands are available:
+
+- `/new` - Start a new session
+- `/resume` - Resume a previous session from a list
+- `/compact` - Summarize conversation history to save context
+- `/quit` - Exit the application
+
 ## Available Tools
 
 - `read` - Read file contents
@@ -55,6 +67,7 @@ hh config show
 - `web_search` - Search the web
 - `web_fetch` - Fetch content from URLs
 - `todo_write` - Manage canonical todo list state
+- `diff` - Compute and display unified diffs between text
 
 ## Configuration
 
@@ -69,7 +82,7 @@ hh config init  # Creates .hh/config.toml in current directory
 ### Configuration Structure
 
 - `provider` - LLM provider settings (base_url, model, api_key_env)
-- `agent` - Agent behavior (max_steps, token_budget, system_prompt)
+- `agent` - Agent behavior (max_steps, token_budget, sub_agent_max_depth, system_prompt)
 - `tools` - Tool enablement flags (fs, bash, web)
 - `permission` - Per-tool permission policy (allow/ask/deny)
 - `session` - Session storage root directory
@@ -84,18 +97,29 @@ export OPENAI_API_KEY="your-key-here"
 
 ## Architecture
 
-The project follows a layered architecture with provider-agnostic core types:
+The project follows a layered architecture with provider-agnostic core types and trait-based boundaries:
 
-- **Core Domain Types**: Canonical data structures for LLM interactions (`Role`, `Message`, `ToolCall`)
-- **Agent Loop**: Orchestrates conversation flow, tool execution, and termination
-- **Core Traits**: Protocols for integration points (provider/model client, tools, events, persistence, approval policy)
-- **Adapters**: Implement traits for specific providers (OpenAI, Anthropic, etc.) and interfaces (TUI, CLI)
+### Core Design Principles
 
-Key design principles:
-- Single source of truth for LLM semantics
-- Provider-specific details isolated in adapters
-- UI state separated from core runtime logic
-- Small, testable traits with clear contracts
+- **Provider-Agnostic Core**: Canonical data structures for LLM interactions (`Role`, `Message`, `ToolCall`)
+- **Trait-Based Boundaries**: `Provider`, `ToolExecutor`, `ApprovalPolicy`, `SessionSink`, `SessionReader`
+- **Event-Driven UI**: TUI and CLI render by observing `AgentEvents`, not by embedding runtime logic
+- **Typed Tool Output**: `ToolResult` includes structured metadata (summary, content_type, payload) for intelligent rendering
+- **Session Per Workspace**: Sessions are organized by workspace path for automatic project context
+
+### Module Structure
+
+- **`src/core/`** - Core runtime, types, traits, and agent loop
+  - `AgentLoop` - Generic orchestration over trait bounds
+  - Domain types (`Message`, `ToolCall`, `SubAgentCall`, etc.)
+  - Core traits (`Provider`, `ToolExecutor`, `ApprovalPolicy`, `SessionSink`, `SessionReader`)
+- **`src/config/`** - Configuration loading and settings
+- **`src/provider/`** - LLM provider adapters (OpenAI-compatible)
+- **`src/tool/`** - Tool implementations and registry
+- **`src/cli/`** - Command-line interface and TUI
+- **`src/permission/`** - Permission policy system with capability-based matching
+- **`src/session/`** - Session persistence, compaction, and workspace-aware storage
+- **`src/safety/`** - Safety and validation utilities
 
 ## Development
 
@@ -114,6 +138,12 @@ cargo fmt --check
 cargo clippy -- -D warnings
 ```
 
+### Nix Development Environment
+
+```bash
+nix develop  # Enter development shell with Rust toolchain
+```
+
 ### Debugging the TUI
 
 The TUI supports debug mode for development:
@@ -129,22 +159,36 @@ hh chat --debug ./debug-session
 hh replay ./debug --delay 100
 ```
 
+### Running Specific Tests
+
+```bash
+cargo test agent_loop
+cargo test tool
+cargo test session
+```
+
 See `AGENTS.md` for detailed architecture documentation and debugging workflows.
 
-## Project Structure
+## Session Management
 
-- `src/` - Core Rust source code
-  - `src/core/` - Core runtime, types, traits, and agent loop
-  - `src/config/` - Configuration loading and settings
-  - `src/provider/` - LLM provider adapters (OpenAI-compatible)
-  - `src/tool/` - Tool implementations and registry
-  - `src/cli/` - Command-line interface and TUI
-  - `src/permission/` - Permission policy system
-  - `src/session/` - Session persistence and management
-  - `src/safety/` - Safety and validation utilities
-- `tests/` - Integration and unit tests
-- `AGENTS.md` - Detailed architecture and debugging guide
-- `Cargo.toml` - Project dependencies and metadata
+Sessions are automatically organized by workspace path:
+
+- Each workspace (directory) gets its own session collection
+- Use `/new` to start a fresh session in the current workspace
+- Use `/resume` to browse and resume previous sessions
+- Use `/compact` to summarize conversation history and save tokens
+
+Sessions persist across runs in `~/.local/state/hh/sessions/<workspace-path>/`.
+
+## Image Support
+
+The TUI supports image attachments for multimodal interactions:
+
+- Paste images from clipboard (Ctrl+V or Cmd+V)
+- Drag and drop image file paths into the input
+- Supported formats: PNG, JPEG, GIF, WebP, BMP, TIFF, HEIC/HEIF, AVIF
+
+Images are base64-encoded and sent to the provider if supported.
 
 ## License
 
