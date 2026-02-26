@@ -24,7 +24,7 @@ syntect = { version = "5.3", default-features = false, features = ["default-fanc
 syntect-tui = "3.0"
 urlencoding = "2.1"
 base64 = "0.22"
-arboard = "3.6"
+arboard = { version = "3.6", features = ["wayland-data-control"] }
 png = "0.18"
 
 [dev-dependencies]
