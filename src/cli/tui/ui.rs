@@ -331,6 +331,11 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
     let tool_done_continuation = message_child_indent();
     let tool_pending_prefix = format!("{MESSAGE_INDENT}{TOOL_PENDING_MARKER}");
     let tool_pending_continuation = " ".repeat(tool_pending_prefix.chars().count());
+    let tool_style = ToolCallRenderStyle {
+        done_continuation: &tool_done_continuation,
+        pending_prefix: &tool_pending_prefix,
+        pending_continuation: &tool_pending_continuation,
+    };
 
     for msg in &app.messages {
         match msg {
@@ -358,16 +363,15 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                 output,
                 is_error,
             } => {
+                let available_width = width.saturating_sub(4).max(1);
                 render_tool_call_message(
                     &mut lines,
                     name,
                     args,
                     output.as_deref(),
                     *is_error,
-                    width,
-                    &tool_done_continuation,
-                    &tool_pending_prefix,
-                    &tool_pending_continuation,
+                    available_width,
+                    tool_style,
                 );
             }
             ChatMessage::Error(text) => {
@@ -521,18 +525,22 @@ fn push_wrapped_tool_rows(
     }
 }
 
+#[derive(Clone, Copy)]
+struct ToolCallRenderStyle<'a> {
+    done_continuation: &'a str,
+    pending_prefix: &'a str,
+    pending_continuation: &'a str,
+}
+
 fn render_tool_call_message(
     lines: &mut Vec<Line<'static>>,
     name: &str,
     args: &str,
     output: Option<&str>,
     is_error: Option<bool>,
-    width: usize,
-    tool_done_continuation: &str,
-    tool_pending_prefix: &str,
-    tool_pending_continuation: &str,
+    available_width: usize,
+    style: ToolCallRenderStyle<'_>,
 ) {
-    let available_width = width.saturating_sub(4).max(1);
     let args_value: Value = serde_json::from_str(args).unwrap_or(Value::Null);
     let label = render_tool_start(name, &args_value).line;
 
@@ -553,15 +561,15 @@ fn render_tool_call_message(
                 output,
                 error,
                 available_width,
-                tool_done_continuation,
+                style.done_continuation,
             );
         }
         None => render_pending_tool_call(
             lines,
             &label,
             available_width,
-            tool_pending_prefix,
-            tool_pending_continuation,
+            style.pending_prefix,
+            style.pending_continuation,
         ),
     }
 }
