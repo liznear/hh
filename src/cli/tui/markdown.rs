@@ -19,19 +19,19 @@ pub fn markdown_to_lines_with_indent(
 ) -> Vec<Line<'static>> {
     let mut rendered = Vec::new();
     let mut in_code_block = false;
-    let mut code_language = String::new();
+    let mut code_fence = CodeFence::default();
     let mut code_lines: Vec<String> = Vec::new();
 
     for line in markdown.lines() {
-        if let Some(language) = fence_language(line) {
+        if let Some(fence) = parse_code_fence(line) {
             if in_code_block {
-                rendered.extend(render_code_block(&code_lines, &code_language, indent));
+                rendered.extend(render_code_block(&code_lines, &code_fence, width, indent));
                 in_code_block = false;
-                code_language.clear();
+                code_fence = CodeFence::default();
                 code_lines.clear();
             } else {
                 in_code_block = true;
-                code_language = language;
+                code_fence = fence;
             }
             continue;
         }
@@ -45,24 +45,38 @@ pub fn markdown_to_lines_with_indent(
     }
 
     if in_code_block {
-        rendered.extend(render_code_block(&code_lines, &code_language, indent));
+        rendered.extend(render_code_block(&code_lines, &code_fence, width, indent));
     }
 
     rendered
 }
 
-fn fence_language(line: &str) -> Option<String> {
+#[derive(Default, Clone)]
+struct CodeFence {
+    language: String,
+    location_hint: Option<String>,
+}
+
+fn parse_code_fence(line: &str) -> Option<CodeFence> {
     let trimmed = line.trim_start();
     if !trimmed.starts_with("```") {
         return None;
     }
 
-    let language = trimmed
-        .trim_start_matches("```")
-        .split_whitespace()
-        .next()
-        .unwrap_or("");
-    Some(language.to_string())
+    let info = trimmed.trim_start_matches("```").trim();
+    if info.is_empty() {
+        return Some(CodeFence::default());
+    }
+
+    let mut parts = info.split_whitespace();
+    let language = parts.next().unwrap_or("").to_string();
+    let metadata = parts.collect::<Vec<_>>().join(" ");
+    let location_hint = parse_location_hint(&metadata);
+
+    Some(CodeFence {
+        language,
+        location_hint,
+    })
 }
 
 fn render_text_line(line: &str, width: usize, indent: &str) -> Vec<Line<'static>> {
@@ -79,22 +93,190 @@ fn render_text_line(line: &str, width: usize, indent: &str) -> Vec<Line<'static>
         .collect()
 }
 
-fn render_code_block(code_lines: &[String], language: &str, indent: &str) -> Vec<Line<'static>> {
-    if let Some(highlighted) = highlight_code_block(code_lines, language, indent) {
-        return highlighted;
+const CODE_BLOCK_BG: Color = Color::Rgb(236, 240, 248);
+const CODE_BLOCK_HEADER_FG: Color = Color::Rgb(86, 96, 113);
+const CODE_BLOCK_SEPARATOR_FG: Color = Color::Rgb(184, 193, 207);
+const CODE_BLOCK_PADDING_X: usize = 2;
+
+fn render_code_block(
+    code_lines: &[String],
+    fence: &CodeFence,
+    width: usize,
+    indent: &str,
+) -> Vec<Line<'static>> {
+    let styled_code_lines =
+        highlight_code_block(code_lines, &fence.language).unwrap_or_else(|| {
+            code_lines
+                .iter()
+                .map(|line| vec![Span::raw(line.clone())])
+                .collect()
+        });
+
+    let indent_width = indent.chars().count();
+    let available_width = width
+        .saturating_sub(indent_width)
+        .max(CODE_BLOCK_PADDING_X * 2 + 1);
+    let inner_width = available_width
+        .saturating_sub(CODE_BLOCK_PADDING_X * 2)
+        .max(1);
+    let block_style = Style::default().bg(CODE_BLOCK_BG);
+
+    let mut rendered = Vec::with_capacity(styled_code_lines.len() + 3);
+    rendered.push(Line::from(vec![
+        Span::raw(indent.to_string()),
+        Span::styled(" ".repeat(available_width), block_style),
+    ]));
+
+    let header = code_block_header(fence, inner_width);
+    rendered.push(Line::from(vec![
+        Span::raw(indent.to_string()),
+        Span::styled(" ".repeat(CODE_BLOCK_PADDING_X), block_style),
+        Span::styled(
+            pad_right(&header, inner_width),
+            Style::default().fg(CODE_BLOCK_HEADER_FG).bg(CODE_BLOCK_BG),
+        ),
+        Span::styled(" ".repeat(CODE_BLOCK_PADDING_X), block_style),
+    ]));
+
+    rendered.push(Line::from(vec![
+        Span::raw(indent.to_string()),
+        Span::styled(" ".repeat(CODE_BLOCK_PADDING_X), block_style),
+        Span::styled(
+            "─".repeat(inner_width),
+            Style::default()
+                .fg(CODE_BLOCK_SEPARATOR_FG)
+                .bg(CODE_BLOCK_BG),
+        ),
+        Span::styled(" ".repeat(CODE_BLOCK_PADDING_X), block_style),
+    ]));
+
+    for spans in styled_code_lines {
+        let (clipped_spans, content_width) = truncate_spans_to_width(spans, inner_width);
+
+        let mut line_spans = Vec::with_capacity(clipped_spans.len() + 3);
+        line_spans.push(Span::raw(indent.to_string()));
+        line_spans.push(Span::styled(" ".repeat(CODE_BLOCK_PADDING_X), block_style));
+
+        for span in clipped_spans {
+            line_spans.push(Span::styled(
+                span.content.into_owned(),
+                span.style.bg(CODE_BLOCK_BG),
+            ));
+        }
+
+        line_spans.push(Span::styled(
+            " ".repeat(inner_width.saturating_sub(content_width)),
+            block_style,
+        ));
+        line_spans.push(Span::styled(" ".repeat(CODE_BLOCK_PADDING_X), block_style));
+        rendered.push(Line::from(line_spans));
     }
 
-    code_lines
-        .iter()
-        .map(|line| Line::from(vec![Span::raw(indent.to_string()), Span::raw(line.clone())]))
-        .collect()
+    if code_lines.is_empty() {
+        rendered.push(Line::from(vec![
+            Span::raw(indent.to_string()),
+            Span::styled(" ".repeat(available_width), block_style),
+        ]));
+    }
+
+    rendered.push(Line::from(vec![
+        Span::raw(indent.to_string()),
+        Span::styled(" ".repeat(available_width), block_style),
+    ]));
+
+    rendered
 }
 
-fn highlight_code_block(
-    code_lines: &[String],
-    language: &str,
-    indent: &str,
-) -> Option<Vec<Line<'static>>> {
+fn parse_location_hint(metadata: &str) -> Option<String> {
+    let trimmed = metadata.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    for key in ["file", "path", "filename", "location", "title"] {
+        if let Some(value) = extract_key_value(trimmed, key) {
+            return Some(value);
+        }
+    }
+
+    Some(trimmed.to_string())
+}
+
+fn extract_key_value(metadata: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    let start = metadata.find(&prefix)? + prefix.len();
+    let value = metadata[start..].trim_start();
+
+    if let Some(stripped) = value.strip_prefix('"') {
+        let end = stripped.find('"')?;
+        return Some(stripped[..end].to_string());
+    }
+
+    let token = value.split_whitespace().next()?;
+    Some(token.trim_end_matches(',').to_string())
+}
+
+fn code_block_header(fence: &CodeFence, max_width: usize) -> String {
+    let language = if fence.language.trim().is_empty() {
+        "text".to_string()
+    } else {
+        fence.language.trim().to_string()
+    };
+
+    let label = if let Some(location) = fence.location_hint.as_deref() {
+        format!("{language}  {location}")
+    } else {
+        language
+    };
+
+    truncate_to_width(&label, max_width)
+}
+
+fn truncate_spans_to_width(
+    spans: Vec<Span<'static>>,
+    max_width: usize,
+) -> (Vec<Span<'static>>, usize) {
+    let mut clipped = Vec::new();
+    let mut used = 0;
+
+    for span in spans {
+        if used >= max_width {
+            break;
+        }
+
+        let text = span.content.into_owned();
+        let span_len = text.chars().count();
+        if span_len <= max_width.saturating_sub(used) {
+            used += span_len;
+            clipped.push(Span::styled(text, span.style));
+            continue;
+        }
+
+        let keep = max_width.saturating_sub(used);
+        if keep > 0 {
+            let partial = text.chars().take(keep).collect::<String>();
+            used += keep;
+            clipped.push(Span::styled(partial, span.style));
+        }
+    }
+
+    (clipped, used)
+}
+
+fn truncate_to_width(text: &str, max_width: usize) -> String {
+    text.chars().take(max_width).collect()
+}
+
+fn pad_right(text: &str, width: usize) -> String {
+    let visible = text.chars().count();
+    if visible >= width {
+        return text.to_string();
+    }
+
+    format!("{text}{}", " ".repeat(width - visible))
+}
+
+fn highlight_code_block(code_lines: &[String], language: &str) -> Option<Vec<Vec<Span<'static>>>> {
     let syntax_set = syntax_set();
     let theme = theme()?;
     let syntax = resolve_syntax(syntax_set, language)?;
@@ -103,12 +285,12 @@ fn highlight_code_block(
     let mut rendered = Vec::with_capacity(code_lines.len());
     for line in code_lines {
         let ranges = highlighter.highlight_line(line, syntax_set).ok()?;
-        let mut spans = vec![Span::raw(indent.to_string())];
+        let mut spans = Vec::new();
         for (style, segment) in ranges {
             let tui_style = translate_style(style).unwrap_or_else(|_| Style::default());
             spans.push(Span::styled(segment.to_string(), tui_style));
         }
-        rendered.push(Line::from(spans));
+        rendered.push(spans);
     }
 
     Some(rendered)
@@ -262,7 +444,7 @@ fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> 
 
 #[cfg(test)]
 mod tests {
-    use super::markdown_to_lines_with_indent;
+    use super::{CODE_BLOCK_BG, markdown_to_lines_with_indent};
 
     const TEST_INDENT: &str = "    ";
 
@@ -291,7 +473,7 @@ mod tests {
         );
         let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-        assert!(rendered.iter().any(|line| line == "        .iter()"));
+        assert!(rendered.iter().any(|line| line.contains("    .iter()")));
     }
 
     #[test]
@@ -322,5 +504,54 @@ mod tests {
         let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
         assert!(rendered.iter().any(|line| line.contains("line")));
+    }
+
+    #[test]
+    fn renders_code_blocks_with_background_box() {
+        let lines = markdown_to_lines_with_indent("```rust\nlet x = 1;\n```", 40, TEST_INDENT);
+
+        assert!(lines.len() >= 5);
+
+        let top_line = &lines[0];
+        let header_line = &lines[1];
+        let separator_line = &lines[2];
+        let middle_line = &lines[3];
+        let bottom_line = lines.last().expect("expected closing line");
+
+        assert!(
+            top_line
+                .spans
+                .iter()
+                .any(|span| span.style.bg == Some(CODE_BLOCK_BG))
+        );
+        assert!(
+            bottom_line
+                .spans
+                .iter()
+                .any(|span| span.style.bg == Some(CODE_BLOCK_BG))
+        );
+        assert!(line_text(header_line).contains("rust"));
+        assert!(line_text(separator_line).contains("─"));
+
+        let code_spans_with_bg = middle_line
+            .spans
+            .iter()
+            .filter(|span| !span.content.is_empty())
+            .skip(1)
+            .all(|span| span.style.bg == Some(CODE_BLOCK_BG));
+        assert!(code_spans_with_bg);
+    }
+
+    #[test]
+    fn shows_location_hint_in_code_block_header() {
+        let markdown = "```rust src/cli/chat.rs:508\nlet x = 1;\n```";
+        let lines = markdown_to_lines_with_indent(markdown, 80, TEST_INDENT);
+        let rendered: Vec<String> = lines.iter().map(line_text).collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("rust  src/cli/chat.rs:508"))
+        );
     }
 }
