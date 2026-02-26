@@ -4,6 +4,7 @@ pub mod edit;
 pub mod fs;
 pub mod registry;
 pub mod schema;
+pub mod skill;
 pub mod todo;
 pub mod web;
 

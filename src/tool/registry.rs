@@ -3,6 +3,7 @@ use crate::core::ToolExecutor;
 use crate::tool::bash::BashTool;
 use crate::tool::edit::EditTool;
 use crate::tool::fs::{FsGlob, FsGrep, FsList, FsRead, FsWrite};
+use crate::tool::skill::SkillTool;
 use crate::tool::todo::TodoWriteTool;
 use crate::tool::web::{WebFetchTool, WebSearchTool};
 use crate::tool::{Tool, ToolSchema};
@@ -34,6 +35,11 @@ impl ToolRegistry {
                 &mut tools,
                 "edit",
                 EditTool::new(workspace_root.to_path_buf()),
+            );
+            register(
+                &mut tools,
+                "skill",
+                SkillTool::new(workspace_root.to_path_buf()),
             );
         }
 

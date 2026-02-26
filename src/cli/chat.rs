@@ -1036,7 +1036,7 @@ async fn generate_compaction_summary(
     {
         let _ = settings;
         let _ = messages;
-        return Ok("Compacted context summary for tests.".to_string());
+        Ok("Compacted context summary for tests.".to_string())
     }
 
     #[cfg(not(test))]
