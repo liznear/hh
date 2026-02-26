@@ -107,3 +107,14 @@ When running in a terminal:
    ```
 
 4. Fix the issue based on what you observed in the screen dumps.
+
+## TUI UI Learnings
+
+### Slash command autocomplete
+
+- Anchor popup geometry to the input box geometry, not the parent chunk geometry.
+  - Use the same left edge and width as the rendered input panel so borders line up.
+- Keep autocomplete list styling flat (no extra border block) when matching the current TUI visual language.
+- Avoid hardcoded spacing literals (for example, `"  "`) in row layout.
+  - Define a padding variable (for example, `list_left_padding`) and derive both spacing and width calculations from it.
+- When adding row padding, update description width math accordingly to prevent overflow/truncation regressions.
