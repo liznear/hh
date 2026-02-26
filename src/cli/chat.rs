@@ -193,19 +193,35 @@ enum InputEvent {
     Refresh,
 }
 
-async fn handle_input() -> anyhow::Result<Option<InputEvent>> {
-    if event::poll(Duration::from_millis(16))? {
-        match event::read()? {
-            Event::Key(key) => Ok(Some(InputEvent::Key(key))),
-            Event::Paste(text) => Ok(Some(InputEvent::Paste(text))),
-            Event::Mouse(mouse) => Ok(handle_mouse_event(mouse)),
-            Event::Resize(_, _) | Event::FocusGained => Ok(Some(InputEvent::Refresh)),
-            _ => Ok(None),
+const INPUT_POLL_TIMEOUT: Duration = Duration::from_millis(16);
+const INPUT_BATCH_MAX: usize = 64;
+
+async fn handle_input_batch() -> anyhow::Result<Vec<InputEvent>> {
+    if !event::poll(INPUT_POLL_TIMEOUT)? {
+        return Ok(Vec::new());
+    }
+
+    let mut events = Vec::with_capacity(INPUT_BATCH_MAX.min(8));
+    if let Some(input_event) = translate_terminal_event(event::read()?) {
+        events.push(input_event);
+    }
+
+    while events.len() < INPUT_BATCH_MAX && event::poll(Duration::ZERO)? {
+        if let Some(input_event) = translate_terminal_event(event::read()?) {
+            events.push(input_event);
         }
-    } else {
-        // No event available, yield and continue
-        tokio::time::sleep(Duration::from_millis(8)).await;
-        Ok(None)
+    }
+
+    Ok(events)
+}
+
+fn translate_terminal_event(event: Event) -> Option<InputEvent> {
+    match event {
+        Event::Key(key) => Some(InputEvent::Key(key)),
+        Event::Paste(text) => Some(InputEvent::Paste(text)),
+        Event::Mouse(mouse) => handle_mouse_event(mouse),
+        Event::Resize(_, _) | Event::FocusGained => Some(InputEvent::Refresh),
+        _ => None,
     }
 }
 
@@ -271,7 +287,8 @@ where
             } else if !app.input.is_empty() {
                 app.move_cursor_up();
             } else {
-                app.scroll_up();
+                let (width, height) = terminal_size()?;
+                scroll_up_steps(app, width, height, 1);
             }
         }
         KeyCode::Left => {
@@ -295,10 +312,13 @@ where
             }
         }
         KeyCode::PageUp => {
-            let (_, height) = terminal_size()?;
-            for _ in 0..app.message_viewport_height(height).saturating_sub(1) {
-                app.scroll_up();
-            }
+            let (width, height) = terminal_size()?;
+            scroll_up_steps(
+                app,
+                width,
+                height,
+                app.message_viewport_height(height).saturating_sub(1),
+            );
         }
         KeyCode::PageDown => {
             let (width, height) = terminal_size()?;
@@ -311,8 +331,34 @@ where
 }
 
 fn scroll_down_once(app: &mut ChatApp, width: u16, height: u16) {
+    scroll_down_steps(app, width, height, 1);
+}
+
+fn scroll_up_steps(app: &mut ChatApp, width: u16, height: u16, steps: usize) {
+    if steps == 0 {
+        return;
+    }
+
     let (total_lines, visible_height) = scroll_bounds(app, width, height);
-    app.scroll_down(total_lines, visible_height);
+    if app.auto_scroll {
+        app.scroll_offset = total_lines.saturating_sub(visible_height);
+        app.auto_scroll = false;
+    }
+
+    for _ in 0..steps {
+        app.scroll_up();
+    }
+}
+
+fn scroll_down_steps(app: &mut ChatApp, width: u16, height: u16, steps: usize) {
+    if steps == 0 {
+        return;
+    }
+
+    let (total_lines, visible_height) = scroll_bounds(app, width, height);
+    for _ in 0..steps {
+        app.scroll_down(total_lines, visible_height);
+    }
 }
 
 fn mutate_input(app: &mut ChatApp, mutator: impl FnOnce(&mut ChatApp)) {
@@ -671,9 +717,10 @@ async fn run_interactive_chat_loop(
         }
 
         tokio::select! {
-            input_result = handle_input() => {
-                match input_result? {
-                    Some(InputEvent::Key(key_event)) => {
+            input_result = handle_input_batch() => {
+                for input_event in input_result? {
+                    match input_event {
+                    InputEvent::Key(key_event) => {
                         handle_key_event(
                             key_event,
                             app,
@@ -686,25 +733,27 @@ async fn run_interactive_chat_loop(
                             },
                         )?;
                     }
-                    Some(InputEvent::Paste(text)) => {
+                    InputEvent::Paste(text) => {
                         apply_paste(app, text);
                     }
-                    Some(InputEvent::ScrollUp) => {
-                        for _ in 0..3 {
-                            app.scroll_up();
-                        }
-                    }
-                    Some(InputEvent::ScrollDown) => {
+                    InputEvent::ScrollUp => {
                         let terminal_size = tui_guard.get().size()?;
-                        for _ in 0..runner.scroll_down_lines {
-                            scroll_down_once(app, terminal_size.width, terminal_size.height);
-                        }
+                        scroll_up_steps(app, terminal_size.width, terminal_size.height, 3);
                     }
-                    Some(InputEvent::Refresh) => {
+                    InputEvent::ScrollDown => {
+                        let terminal_size = tui_guard.get().size()?;
+                        scroll_down_steps(
+                            app,
+                            terminal_size.width,
+                            terminal_size.height,
+                            runner.scroll_down_lines,
+                        );
+                    }
+                    InputEvent::Refresh => {
                         tui_guard.get().autoresize()?;
                         tui_guard.get().clear()?;
                     }
-                    None => {}
+                    }
                 }
             }
             event = runner.event_rx.recv() => {
@@ -1721,5 +1770,25 @@ mod tests {
         .unwrap();
 
         assert_ne!(app.input, "abcv");
+    }
+
+    #[test]
+    fn test_scroll_up_from_auto_scroll_moves_immediately() {
+        let temp_dir = tempdir().unwrap();
+        let cwd = temp_dir.path();
+        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+
+        for i in 0..120 {
+            app.messages
+                .push(tui::ChatMessage::Assistant(format!("line {i}")));
+        }
+        app.mark_dirty();
+        app.auto_scroll = true;
+        app.scroll_offset = 0;
+
+        scroll_up_steps(&mut app, 120, 30, 1);
+
+        assert!(!app.auto_scroll);
+        assert!(app.scroll_offset > 0);
     }
 }
