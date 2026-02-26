@@ -1,5 +1,6 @@
 use crate::tool::{Tool, ToolResult, ToolSchema};
 use async_trait::async_trait;
+use reqwest::StatusCode;
 use scraper::{Html, Selector};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -34,14 +35,18 @@ struct WebSearchOutput {
     results: Vec<SearchResult>,
 }
 
-fn tool_ok_json(output: &impl Serialize) -> ToolResult {
-    match serde_json::to_value(output) {
-        Ok(value) => ToolResult::ok_json("ok", value),
-        Err(err) => ToolResult::err_text(
-            "serialization_error",
-            format!("failed to serialize output: {err}"),
-        ),
-    }
+enum WebRequestError {
+    Request(reqwest::Error),
+    ReadBody(reqwest::Error),
+}
+
+async fn send_and_read_text(
+    request: reqwest::RequestBuilder,
+) -> Result<(StatusCode, String), WebRequestError> {
+    let response = request.send().await.map_err(WebRequestError::Request)?;
+    let status = response.status();
+    let body = response.text().await.map_err(WebRequestError::ReadBody)?;
+    Ok((status, body))
 }
 
 impl Default for WebFetchTool {
@@ -78,30 +83,29 @@ impl Tool for WebFetchTool {
 
     async fn execute(&self, args: Value) -> ToolResult {
         let url = args.get("url").and_then(|v| v.as_str()).unwrap_or_default();
-        let response = self.client.get(url).send().await;
-        match response {
-            Ok(resp) => {
-                let status = resp.status();
-                match resp.text().await {
-                    Ok(body) => {
-                        let output = WebFetchOutput {
-                            url: url.to_string(),
-                            status_code: status.as_u16(),
-                            ok: status.is_success(),
-                            body,
-                        };
-                        if status.is_success() {
-                            tool_ok_json(&output)
-                        } else {
-                            let payload = serde_json::to_value(&output)
-                                .unwrap_or_else(|_| json!({"status_code": status.as_u16()}));
-                            ToolResult::err_json("request_failed", payload)
-                        }
-                    }
-                    Err(err) => ToolResult::err_text("read_body_error", err.to_string()),
-                }
+        let (status, body) = match send_and_read_text(self.client.get(url)).await {
+            Ok(result) => result,
+            Err(WebRequestError::Request(err)) => {
+                return ToolResult::err_text("request_error", err.to_string());
             }
-            Err(err) => ToolResult::err_text("request_error", err.to_string()),
+            Err(WebRequestError::ReadBody(err)) => {
+                return ToolResult::err_text("read_body_error", err.to_string());
+            }
+        };
+
+        let output = WebFetchOutput {
+            url: url.to_string(),
+            status_code: status.as_u16(),
+            ok: status.is_success(),
+            body,
+        };
+
+        if status.is_success() {
+            ToolResult::ok_json_serializable("ok", &output)
+        } else {
+            let payload = serde_json::to_value(&output)
+                .unwrap_or_else(|_| json!({"status_code": status.as_u16()}));
+            ToolResult::err_json("request_failed", payload)
         }
     }
 }
@@ -159,37 +163,36 @@ impl Tool for WebSearchTool {
             urlencoding::encode(query)
         );
 
-        let response = self.client.get(&url).send().await;
-
-        match response {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    return ToolResult::err_text(
-                        "search_failed",
-                        format!("search failed: status={}", resp.status()),
-                    );
-                }
-
-                match resp.text().await {
-                    Ok(html) => {
-                        let results = parse_ddg_results(&html);
-                        let output = WebSearchOutput {
-                            query: query.to_string(),
-                            count: results.len(),
-                            results,
-                        };
-                        tool_ok_json(&output)
-                    }
-                    Err(err) => ToolResult::err_text(
-                        "read_body_error",
-                        format!("failed to read response: {}", err),
-                    ),
-                }
+        let (status, html) = match send_and_read_text(self.client.get(&url)).await {
+            Ok(result) => result,
+            Err(WebRequestError::Request(err)) => {
+                return ToolResult::err_text(
+                    "request_error",
+                    format!("search request failed: {}", err),
+                );
             }
-            Err(err) => {
-                ToolResult::err_text("request_error", format!("search request failed: {}", err))
+            Err(WebRequestError::ReadBody(err)) => {
+                return ToolResult::err_text(
+                    "read_body_error",
+                    format!("failed to read response: {}", err),
+                );
             }
+        };
+
+        if !status.is_success() {
+            return ToolResult::err_text(
+                "search_failed",
+                format!("search failed: status={status}"),
+            );
         }
+
+        let results = parse_ddg_results(&html);
+        let output = WebSearchOutput {
+            query: query.to_string(),
+            count: results.len(),
+            results,
+        };
+        ToolResult::ok_json_serializable("ok", &output)
     }
 }
 

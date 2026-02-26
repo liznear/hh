@@ -135,14 +135,14 @@ impl OpenAiCompatibleProvider {
 
     async fn complete_stream_inner<F>(
         &self,
-        req: ProviderRequest,
+        req: &ProviderRequest,
         mut on_event: F,
     ) -> anyhow::Result<ProviderResponse>
     where
         F: FnMut(ProviderStreamEvent) + Send,
     {
         let response = self
-            .send_request(&req, true, "provider stream request failed")
+            .send_request(req, true, "provider stream request failed")
             .await?;
 
         let mut assistant = String::new();
@@ -213,6 +213,20 @@ impl OpenAiCompatibleProvider {
     }
 }
 
+fn emit_response_stream_events<F>(response: &ProviderResponse, on_event: &mut F)
+where
+    F: FnMut(ProviderStreamEvent) + Send,
+{
+    if let Some(thinking) = &response.thinking {
+        on_event(ProviderStreamEvent::ThinkingDelta(thinking.clone()));
+    }
+    if !response.assistant_message.content.is_empty() {
+        on_event(ProviderStreamEvent::AssistantDelta(
+            response.assistant_message.content.clone(),
+        ));
+    }
+}
+
 enum StreamLine {
     Done,
     Payload(Value),
@@ -271,19 +285,11 @@ impl Provider for OpenAiCompatibleProvider {
     where
         F: FnMut(ProviderStreamEvent) + Send,
     {
-        let stream_req = req.clone();
-        match self.complete_stream_inner(stream_req, &mut on_event).await {
+        match self.complete_stream_inner(&req, &mut on_event).await {
             Ok(response) => Ok(response),
             Err(_) => {
                 let response = self.complete(req).await?;
-                if let Some(thinking) = &response.thinking {
-                    on_event(ProviderStreamEvent::ThinkingDelta(thinking.clone()));
-                }
-                if !response.assistant_message.content.is_empty() {
-                    on_event(ProviderStreamEvent::AssistantDelta(
-                        response.assistant_message.content.clone(),
-                    ));
-                }
+                emit_response_stream_events(&response, &mut on_event);
                 Ok(response)
             }
         }

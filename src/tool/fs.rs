@@ -1,8 +1,8 @@
+use crate::tool::diff::build_unified_line_diff;
 use crate::tool::{Tool, ToolResult, ToolSchema};
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Value, json};
-use similar::{ChangeTag, TextDiff};
 use std::path::{Component, Path, PathBuf};
 
 pub struct FsRead;
@@ -86,9 +86,9 @@ impl Tool for FsRead {
                     lines: content.lines().count(),
                     content,
                 };
-                tool_ok_json(&output)
+                ToolResult::ok_json_serializable("ok", &output)
             }
-            Err(err) => tool_err(err),
+            Err(err) => ToolResult::error(err.to_string()),
         }
     }
 }
@@ -132,20 +132,22 @@ impl Tool for FsWrite {
 
         let target = match resolve_workspace_target(&self.workspace_root, &path) {
             Ok(path) => path,
-            Err(err) => return tool_err(err),
+            Err(err) => return ToolResult::error(err),
         };
 
         if let Some(parent) = target.parent()
             && let Err(err) = std::fs::create_dir_all(parent)
         {
-            return tool_err(err);
+            return ToolResult::error(err.to_string());
         }
 
         let before = if target.exists() {
             match std::fs::read_to_string(&target) {
                 Ok(text) => text,
                 Err(err) => {
-                    return tool_err(format!("failed to read existing file before write: {err}"));
+                    return ToolResult::error(format!(
+                        "failed to read existing file before write: {err}"
+                    ));
                 }
             }
         } else {
@@ -154,35 +156,20 @@ impl Tool for FsWrite {
 
         match std::fs::write(target, content) {
             Ok(_) => {
-                let diff = TextDiff::from_lines(before.as_str(), content);
-                let mut added_lines = 0;
-                let mut removed_lines = 0;
-                for change in diff.iter_all_changes() {
-                    match change.tag() {
-                        ChangeTag::Insert => added_lines += 1,
-                        ChangeTag::Delete => removed_lines += 1,
-                        ChangeTag::Equal => {}
-                    }
-                }
-
-                let unified = diff
-                    .unified_diff()
-                    .context_radius(3)
-                    .header(&format!("a/{}", raw_path), &format!("b/{}", raw_path))
-                    .to_string();
+                let diff = build_unified_line_diff(before.as_str(), content, &raw_path);
                 let output = FileWriteOutput {
                     path: raw_path,
                     applied: before != content,
                     summary: FileWriteSummary {
-                        added_lines,
-                        removed_lines,
+                        added_lines: diff.added_lines,
+                        removed_lines: diff.removed_lines,
                     },
-                    diff: unified,
+                    diff: diff.unified,
                 };
 
-                tool_ok_json(&output)
+                ToolResult::ok_json_serializable("ok", &output)
             }
-            Err(err) => tool_err(err),
+            Err(err) => ToolResult::error(err.to_string()),
         }
     }
 }
@@ -216,9 +203,9 @@ impl Tool for FsList {
                     count: entries_list.len(),
                     entries: entries_list,
                 };
-                tool_ok_json(&output)
+                ToolResult::ok_json_serializable("ok", &output)
             }
-            Err(err) => tool_err(err),
+            Err(err) => ToolResult::error(err.to_string()),
         }
     }
 }
@@ -255,9 +242,9 @@ impl Tool for FsGlob {
                     count: matches.len(),
                     matches,
                 };
-                tool_ok_json(&output)
+                ToolResult::ok_json_serializable("ok", &output)
             }
-            Err(err) => tool_err(err),
+            Err(err) => ToolResult::error(err.to_string()),
         }
     }
 }
@@ -289,12 +276,12 @@ impl Tool for FsGrep {
             .unwrap_or_default();
         let re = match regex::Regex::new(pattern) {
             Ok(re) => re,
-            Err(err) => return tool_err(err),
+            Err(err) => return ToolResult::error(err.to_string()),
         };
 
         let mut results = Vec::new();
         if let Err(err) = walk_and_grep(&root, &re, &mut results) {
-            return tool_err(err);
+            return ToolResult::error(err.to_string());
         }
 
         let output = GrepOutput {
@@ -304,7 +291,7 @@ impl Tool for FsGrep {
             matches: results,
         };
 
-        tool_ok_json(&output)
+        ToolResult::ok_json_serializable("ok", &output)
     }
 }
 
@@ -351,17 +338,6 @@ pub(crate) fn resolve_workspace_target(
     }
 
     Ok(target)
-}
-
-fn tool_ok_json(output: &impl Serialize) -> ToolResult {
-    match serde_json::to_value(output) {
-        Ok(value) => ToolResult::ok_json("ok", value),
-        Err(err) => tool_err(format!("failed to serialize output: {err}")),
-    }
-}
-
-fn tool_err(err: impl ToString) -> ToolResult {
-    ToolResult::err_text("error", err.to_string())
 }
 
 fn walk_and_grep(root: &Path, re: &regex::Regex, results: &mut Vec<String>) -> std::io::Result<()> {

@@ -70,21 +70,21 @@ impl Tool for TodoWriteTool {
     async fn execute(&self, args: Value) -> ToolResult {
         let parsed: TodoWriteArgs = match serde_json::from_value(args) {
             Ok(value) => value,
-            Err(err) => return tool_err(format!("invalid todo_write args: {err}")),
+            Err(err) => return ToolResult::error(format!("invalid todo_write args: {err}")),
         };
 
         for item in &parsed.todos {
             if item.content.trim().is_empty() {
-                return tool_err("todo content must not be empty");
+                return ToolResult::error("todo content must not be empty");
             }
             if !matches!(
                 item.status.as_str(),
                 "pending" | "in_progress" | "completed" | "cancelled"
             ) {
-                return tool_err(format!("invalid todo status: {}", item.status));
+                return ToolResult::error(format!("invalid todo status: {}", item.status));
             }
             if !matches!(item.priority.as_str(), "high" | "medium" | "low") {
-                return tool_err(format!("invalid todo priority: {}", item.priority));
+                return ToolResult::error(format!("invalid todo priority: {}", item.priority));
             }
         }
 
@@ -110,19 +110,10 @@ impl Tool for TodoWriteTool {
             counts,
         };
 
-        tool_ok_json(&output)
+        ToolResult::ok_json_typed_serializable(
+            "todo list updated",
+            "application/vnd.hh.todo+json",
+            &output,
+        )
     }
-}
-
-fn tool_ok_json(output: &impl Serialize) -> ToolResult {
-    match serde_json::to_value(output) {
-        Ok(value) => {
-            ToolResult::ok_json_typed("todo list updated", "application/vnd.hh.todo+json", value)
-        }
-        Err(err) => tool_err(format!("failed to serialize output: {err}")),
-    }
-}
-
-fn tool_err(err: impl ToString) -> ToolResult {
-    ToolResult::err_text("error", err.to_string())
 }

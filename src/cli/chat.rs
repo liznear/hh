@@ -219,8 +219,7 @@ where
         if app.input.is_empty() {
             app.should_quit = true;
         } else {
-            app.clear_input();
-            app.update_command_filtering();
+            mutate_input(app, ChatApp::clear_input);
         }
         return Ok(());
     }
@@ -234,47 +233,20 @@ where
                     _ => {}
                 }
             } else {
-                app.insert_char(c);
-                app.update_command_filtering();
+                mutate_input(app, |app| app.insert_char(c));
             }
         }
         KeyCode::Backspace => {
-            app.backspace();
-            app.update_command_filtering();
+            mutate_input(app, ChatApp::backspace);
         }
         KeyCode::Enter if key_event.modifiers.contains(KeyModifiers::SHIFT) => {
-            app.insert_char('\n');
-            app.update_command_filtering();
+            mutate_input(app, |app| app.insert_char('\n'));
         }
         KeyCode::Enter => {
-            let selected_name = if !app.filtered_commands.is_empty() {
-                Some(
-                    app.filtered_commands[app.selected_command_index]
-                        .name
-                        .clone(),
-                )
-            } else {
-                None
-            };
-
-            if let Some(name) = selected_name {
-                if app.input == name {
-                    let input = app.submit_input();
-                    app.update_command_filtering();
-                    handle_submitted_input(input, app, settings, cwd, event_sender);
-                } else {
-                    app.set_input(name);
-                    app.update_command_filtering();
-                }
-            } else {
-                let input = app.submit_input();
-                app.update_command_filtering();
-                handle_submitted_input(input, app, settings, cwd, event_sender);
-            }
+            handle_enter_key(app, settings, cwd, event_sender);
         }
         KeyCode::Esc => {
-            app.clear_input();
-            app.update_command_filtering();
+            mutate_input(app, ChatApp::clear_input);
         }
         KeyCode::Up => {
             if !app.filtered_commands.is_empty() {
@@ -328,6 +300,44 @@ where
 fn scroll_down_once(app: &mut ChatApp, width: u16, height: u16) {
     let (total_lines, visible_height) = scroll_bounds(app, width, height);
     app.scroll_down(total_lines, visible_height);
+}
+
+fn mutate_input(app: &mut ChatApp, mutator: impl FnOnce(&mut ChatApp)) {
+    mutator(app);
+    app.update_command_filtering();
+}
+
+fn selected_command_name(app: &ChatApp) -> Option<String> {
+    app.filtered_commands
+        .get(app.selected_command_index)
+        .map(|command| command.name.clone())
+}
+
+fn submit_and_handle(
+    app: &mut ChatApp,
+    settings: &Settings,
+    cwd: &Path,
+    event_sender: &TuiEventSender,
+) {
+    let input = app.submit_input();
+    app.update_command_filtering();
+    handle_submitted_input(input, app, settings, cwd, event_sender);
+}
+
+fn handle_enter_key(
+    app: &mut ChatApp,
+    settings: &Settings,
+    cwd: &Path,
+    event_sender: &TuiEventSender,
+) {
+    if let Some(name) = selected_command_name(app)
+        && app.input != name
+    {
+        mutate_input(app, |app| app.set_input(name));
+        return;
+    }
+
+    submit_and_handle(app, settings, cwd, event_sender);
 }
 
 fn scroll_page_down(app: &mut ChatApp, width: u16, height: u16) {
@@ -593,16 +603,11 @@ fn handle_slash_command(
     match input.as_str() {
         "/new" => {
             app.start_new_session(build_session_name(cwd));
-            app.mark_dirty();
-            app.set_processing(false);
+            finish_idle(app);
         }
         "/compact" => {
             let Some(session_id) = app.session_id.clone() else {
-                app.messages.push(tui::ChatMessage::Assistant(
-                    "No active session to compact yet.".to_string(),
-                ));
-                app.mark_dirty();
-                app.set_processing(false);
+                finish_with_assistant(app, "No active session to compact yet.");
                 return;
             };
 
@@ -643,11 +648,7 @@ fn handle_slash_command(
         "/resume" => {
             let sessions = SessionStore::list(&settings.session.root, cwd).unwrap_or_default();
             if sessions.is_empty() {
-                app.messages.push(tui::ChatMessage::Assistant(
-                    "No previous sessions found.".to_string(),
-                ));
-                app.mark_dirty();
-                app.set_processing(false);
+                finish_with_assistant(app, "No previous sessions found.");
             } else {
                 app.available_sessions = sessions;
                 app.is_picking_session = true;
@@ -657,20 +658,24 @@ fn handle_slash_command(
                     msg.push_str(&format!("[{}] {}\n", i + 1, s.title));
                 }
                 msg.push_str("\nEnter number to resume:");
-                app.messages.push(tui::ChatMessage::Assistant(msg));
-                app.mark_dirty();
-                app.set_processing(false);
+                finish_with_assistant(app, msg);
             }
         }
         _ => {
-            app.messages.push(tui::ChatMessage::Assistant(format!(
-                "Unknown command: {}",
-                input
-            )));
-            app.mark_dirty();
-            app.set_processing(false);
+            finish_with_assistant(app, format!("Unknown command: {}", input));
         }
     }
+}
+
+fn finish_with_assistant(app: &mut ChatApp, message: impl Into<String>) {
+    app.messages
+        .push(tui::ChatMessage::Assistant(message.into()));
+    finish_idle(app);
+}
+
+fn finish_idle(app: &mut ChatApp) {
+    app.mark_dirty();
+    app.set_processing(false);
 }
 
 async fn compact_session_with_llm(

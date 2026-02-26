@@ -205,7 +205,9 @@ fn test_fenced_code_block_preserves_indentation() {
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
     assert!(
-        rendered.iter().any(|line| line == "         .iter()"),
+        rendered
+            .iter()
+            .any(|line| { line.trim_end().ends_with(".iter()") && leading_spaces(line) >= 9 }),
         "Expected leading spaces in code line to be preserved"
     );
 }

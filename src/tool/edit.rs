@@ -1,9 +1,9 @@
+use crate::tool::diff::build_unified_line_diff;
 use crate::tool::fs::resolve_workspace_target;
 use crate::tool::{Tool, ToolResult, ToolSchema};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use similar::{ChangeTag, TextDiff};
 use std::path::PathBuf;
 
 pub struct EditTool {
@@ -63,30 +63,30 @@ impl Tool for EditTool {
     async fn execute(&self, args: Value) -> ToolResult {
         let parsed: EditArgs = match serde_json::from_value(args) {
             Ok(value) => value,
-            Err(err) => return tool_err(format!("invalid edit args: {err}")),
+            Err(err) => return ToolResult::error(format!("invalid edit args: {err}")),
         };
 
         if parsed.old_string.is_empty() {
-            return tool_err("old_string must not be empty");
+            return ToolResult::error("old_string must not be empty");
         }
 
         let input_path = PathBuf::from(&parsed.path);
         let target = match resolve_workspace_target(&self.workspace_root, &input_path) {
             Ok(path) => path,
-            Err(err) => return tool_err(err),
+            Err(err) => return ToolResult::error(err),
         };
 
         let before = match std::fs::read_to_string(&target) {
             Ok(content) => content,
-            Err(err) => return tool_err(format!("failed to read file: {err}")),
+            Err(err) => return ToolResult::error(format!("failed to read file: {err}")),
         };
 
         let matches = before.matches(&parsed.old_string).count();
         if matches == 0 {
-            return tool_err("old_string not found in file");
+            return ToolResult::error("old_string not found in file");
         }
         if !parsed.replace_all && matches > 1 {
-            return tool_err(
+            return ToolResult::error(
                 "old_string is not unique; set replace_all=true to replace all matches",
             );
         }
@@ -100,47 +100,21 @@ impl Tool for EditTool {
         let applied = before != after;
 
         if applied && let Err(err) = std::fs::write(&target, &after) {
-            return tool_err(format!("failed to write file: {err}"));
+            return ToolResult::error(format!("failed to write file: {err}"));
         }
 
-        let diff = TextDiff::from_lines(&before, &after);
-        let mut added_lines = 0;
-        let mut removed_lines = 0;
-        for change in diff.iter_all_changes() {
-            match change.tag() {
-                ChangeTag::Insert => added_lines += 1,
-                ChangeTag::Delete => removed_lines += 1,
-                ChangeTag::Equal => {}
-            }
-        }
-
-        let unified = diff
-            .unified_diff()
-            .context_radius(3)
-            .header(&format!("a/{}", parsed.path), &format!("b/{}", parsed.path))
-            .to_string();
+        let diff = build_unified_line_diff(&before, &after, &parsed.path);
 
         let output = EditOutput {
             path: parsed.path,
             applied,
             summary: EditSummary {
-                added_lines,
-                removed_lines,
+                added_lines: diff.added_lines,
+                removed_lines: diff.removed_lines,
             },
-            diff: unified,
+            diff: diff.unified,
         };
 
-        tool_ok_json(&output)
+        ToolResult::ok_json_serializable("ok", &output)
     }
-}
-
-fn tool_ok_json(output: &impl Serialize) -> ToolResult {
-    match serde_json::to_value(output) {
-        Ok(value) => ToolResult::ok_json("ok", value),
-        Err(err) => tool_err(format!("failed to serialize output: {err}")),
-    }
-}
-
-fn tool_err(err: impl ToString) -> ToolResult {
-    ToolResult::err_text("error", err.to_string())
 }

@@ -1,4 +1,5 @@
 pub mod bash;
+pub mod diff;
 pub mod edit;
 pub mod fs;
 pub mod registry;
@@ -28,10 +29,17 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
-    pub fn ok_text(summary: impl Into<String>, text: impl Into<String>) -> Self {
+    fn serialization_error(err: serde_json::Error) -> Self {
+        Self::err_text(
+            "serialization_error",
+            format!("failed to serialize output: {err}"),
+        )
+    }
+
+    fn text_result(is_error: bool, summary: impl Into<String>, text: impl Into<String>) -> Self {
         let output = text.into();
         Self {
-            is_error: false,
+            is_error,
             summary: summary.into(),
             content_type: "text/plain".to_string(),
             payload: Value::String(output.clone()),
@@ -39,36 +47,17 @@ impl ToolResult {
         }
     }
 
-    pub fn err_text(summary: impl Into<String>, text: impl Into<String>) -> Self {
-        let output = text.into();
-        Self {
-            is_error: true,
-            summary: summary.into(),
-            content_type: "text/plain".to_string(),
-            payload: Value::String(output.clone()),
-            output,
-        }
-    }
-
-    pub fn ok_json(summary: impl Into<String>, payload: Value) -> Self {
-        let output = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
-        Self {
-            is_error: false,
-            summary: summary.into(),
-            content_type: "application/json".to_string(),
-            payload,
-            output,
-        }
-    }
-
-    pub fn ok_json_typed(
+    fn json_result(
+        is_error: bool,
         summary: impl Into<String>,
         content_type: impl Into<String>,
         payload: Value,
+        fallback: impl Into<String>,
     ) -> Self {
-        let output = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+        let fallback = fallback.into();
+        let output = serde_json::to_string(&payload).unwrap_or_else(|_| fallback.to_string());
         Self {
-            is_error: false,
+            is_error,
             summary: summary.into(),
             content_type: content_type.into(),
             payload,
@@ -76,14 +65,55 @@ impl ToolResult {
         }
     }
 
+    pub fn ok_text(summary: impl Into<String>, text: impl Into<String>) -> Self {
+        Self::text_result(false, summary, text)
+    }
+
+    pub fn err_text(summary: impl Into<String>, text: impl Into<String>) -> Self {
+        Self::text_result(true, summary, text)
+    }
+
+    pub fn error(text: impl Into<String>) -> Self {
+        Self::err_text("error", text)
+    }
+
+    pub fn ok_json(summary: impl Into<String>, payload: Value) -> Self {
+        Self::json_result(false, summary, "application/json", payload, "{}")
+    }
+
+    pub fn ok_json_typed(
+        summary: impl Into<String>,
+        content_type: impl Into<String>,
+        payload: Value,
+    ) -> Self {
+        Self::json_result(false, summary, content_type, payload, "{}")
+    }
+
     pub fn err_json(summary: impl Into<String>, payload: Value) -> Self {
-        let output = serde_json::to_string(&payload).unwrap_or_else(|_| json!({}).to_string());
-        Self {
-            is_error: true,
-            summary: summary.into(),
-            content_type: "application/json".to_string(),
+        Self::json_result(
+            true,
+            summary,
+            "application/json",
             payload,
-            output,
+            json!({}).to_string(),
+        )
+    }
+
+    pub fn ok_json_serializable(summary: impl Into<String>, output: &impl Serialize) -> Self {
+        match serde_json::to_value(output) {
+            Ok(value) => Self::ok_json(summary, value),
+            Err(err) => Self::serialization_error(err),
+        }
+    }
+
+    pub fn ok_json_typed_serializable(
+        summary: impl Into<String>,
+        content_type: impl Into<String>,
+        output: &impl Serialize,
+    ) -> Self {
+        match serde_json::to_value(output) {
+            Ok(value) => Self::ok_json_typed(summary, content_type, value),
+            Err(err) => Self::serialization_error(err),
         }
     }
 }

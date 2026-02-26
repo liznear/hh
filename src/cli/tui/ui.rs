@@ -386,39 +386,29 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                     let symbol = if *error { "x" } else { "✓" };
                     let color = if *error { Color::Red } else { INPUT_ACCENT };
                     let wrapped = wrap_compact_text(&completed_label, available_width);
-                    for (i, line) in wrapped.iter().enumerate() {
-                        if i == 0 {
-                            lines.push(Line::from(vec![
-                                Span::raw(MESSAGE_INDENT),
-                                Span::styled(symbol, Style::default().fg(color).bold()),
-                                Span::raw(" "),
-                                Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
-                            ]));
-                        } else {
-                            lines.push(Line::from(vec![
-                                Span::raw(tool_done_continuation.clone()),
-                                Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
-                            ]));
-                        }
-                    }
+                    push_wrapped_tool_rows(
+                        &mut lines,
+                        &wrapped,
+                        vec![
+                            Span::raw(MESSAGE_INDENT),
+                            Span::styled(symbol, Style::default().fg(color).bold()),
+                            Span::raw(" "),
+                        ],
+                        vec![Span::raw(tool_done_continuation.clone())],
+                        Style::default().fg(TEXT_SECONDARY),
+                    );
                 } else {
                     let wrapped = wrap_compact_text(&label, available_width.saturating_sub(1)); // "->" is 2 chars + spaces
-                    for (i, line) in wrapped.iter().enumerate() {
-                        if i == 0 {
-                            lines.push(Line::from(vec![
-                                Span::styled(
-                                    tool_pending_prefix.clone(),
-                                    Style::default().fg(TEXT_MUTED),
-                                ),
-                                Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
-                            ]));
-                        } else {
-                            lines.push(Line::from(vec![
-                                Span::raw(tool_pending_continuation.clone()),
-                                Span::styled(line.clone(), Style::default().fg(TEXT_SECONDARY)),
-                            ]));
-                        }
-                    }
+                    push_wrapped_tool_rows(
+                        &mut lines,
+                        &wrapped,
+                        vec![Span::styled(
+                            tool_pending_prefix.clone(),
+                            Style::default().fg(TEXT_MUTED),
+                        )],
+                        vec![Span::raw(tool_pending_continuation.clone())],
+                        Style::default().fg(TEXT_SECONDARY),
+                    );
                 }
             }
             ChatMessage::Error(text) => {
@@ -552,6 +542,24 @@ fn wrap_compact_text(text: &str, width: usize) -> Vec<String> {
         return wrap_text(&truncated, width);
     }
     wrap_text(text, width)
+}
+
+fn push_wrapped_tool_rows(
+    lines: &mut Vec<Line<'static>>,
+    wrapped: &[String],
+    first_prefix: Vec<Span<'static>>,
+    continuation_prefix: Vec<Span<'static>>,
+    text_style: Style,
+) {
+    for (index, text) in wrapped.iter().enumerate() {
+        let mut row = if index == 0 {
+            first_prefix.clone()
+        } else {
+            continuation_prefix.clone()
+        };
+        row.push(Span::styled(text.clone(), text_style));
+        lines.push(Line::from(row));
+    }
 }
 
 fn render_input(f: &mut Frame, app: &ChatApp, area: Rect) {
