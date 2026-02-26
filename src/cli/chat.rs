@@ -367,12 +367,8 @@ fn prepare_image_file_paste(pasted: &str) -> Option<PreparedPaste> {
     let mut image_paths = Vec::with_capacity(non_empty_lines.len());
     let mut attachments = Vec::with_capacity(non_empty_lines.len());
     for line in &non_empty_lines {
-        let Some(path) = extract_image_path(line) else {
-            return None;
-        };
-        let Some(attachment) = read_image_file_attachment(&path) else {
-            return None;
-        };
+        let path = extract_image_path(line)?;
+        let attachment = read_image_file_attachment(&path)?;
         image_paths.push(path);
         attachments.push(attachment);
     }
