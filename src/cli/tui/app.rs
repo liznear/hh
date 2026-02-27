@@ -235,6 +235,10 @@ impl ChatApp {
             TuiEvent::AssistantDone => {
                 self.set_processing(false);
             }
+            TuiEvent::SessionTitle(title) => {
+                self.session_name = title.clone();
+                self.mark_dirty();
+            }
             TuiEvent::CompactionStart => {
                 self.messages.push(ChatMessage::CompactionPending);
                 self.mark_dirty();

@@ -134,9 +134,32 @@ pub async fn run_prompt_with_debug(
     let cwd_clone = cwd.to_path_buf();
     let sender_clone = event_sender.clone();
     let prompt_clone = prompt.clone();
+    let session_id = Uuid::new_v4().to_string();
 
-    let title = prompt.chars().take(50).collect::<String>();
+    let title = fallback_session_title(&prompt);
     let title_clone = title.clone();
+
+    {
+        let settings = settings.clone();
+        let cwd = cwd.to_path_buf();
+        let session_id = session_id.clone();
+        let model_ref = model_ref.clone();
+        let prompt = prompt.clone();
+        tokio::spawn(async move {
+            let generated = match generate_session_title(&settings, &model_ref, &prompt).await {
+                Ok(title) => title,
+                Err(_) => return,
+            };
+
+            let store =
+                match SessionStore::new(&settings.session.root, &cwd, Some(&session_id), None) {
+                    Ok(store) => store,
+                    Err(_) => return,
+                };
+
+            let _ = store.update_title(generated);
+        });
+    }
 
     let agent_handle = tokio::spawn(async move {
         let result = run_agent(
@@ -150,7 +173,7 @@ pub async fn run_prompt_with_debug(
             },
             model_ref,
             sender_clone.clone(),
-            None,
+            Some(session_id),
             Some(title_clone),
         )
         .await;
@@ -913,10 +936,8 @@ struct InteractiveChatRunner<'a> {
 }
 
 fn build_session_name(cwd: &std::path::Path) -> String {
-    cwd.file_name()
-        .and_then(|name| name.to_str())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| "Session".to_string())
+    let _ = cwd;
+    "New Session".to_string()
 }
 
 fn build_model_options(settings: &Settings) -> Vec<ModelOptionView> {
@@ -1017,12 +1038,40 @@ pub async fn run_single_prompt_with_events<E>(
 where
     E: AgentEvents,
 {
-    // For single prompt, we create a new session (or we could make it ephemeral if we wanted)
-    // Using prompt as title
-    let title = prompt.chars().take(50).collect::<String>();
     let default_model_ref = settings.selected_model_ref().to_string();
-    let loop_runner =
-        create_agent_loop(settings, cwd, &default_model_ref, events, None, Some(title))?;
+    let session_id = Uuid::new_v4().to_string();
+    let fallback_title = fallback_session_title(&prompt);
+
+    {
+        let settings = settings.clone();
+        let cwd = cwd.to_path_buf();
+        let session_id = session_id.clone();
+        let model_ref = default_model_ref.clone();
+        let prompt = prompt.clone();
+        tokio::spawn(async move {
+            let generated = match generate_session_title(&settings, &model_ref, &prompt).await {
+                Ok(title) => title,
+                Err(_) => return,
+            };
+
+            let store =
+                match SessionStore::new(&settings.session.root, &cwd, Some(&session_id), None) {
+                    Ok(store) => store,
+                    Err(_) => return,
+                };
+
+            let _ = store.update_title(generated);
+        });
+    }
+
+    let loop_runner = create_agent_loop(
+        settings,
+        cwd,
+        &default_model_ref,
+        events,
+        Some(session_id),
+        Some(fallback_title),
+    )?;
 
     loop_runner
         .run(
@@ -1421,11 +1470,7 @@ fn handle_chat_message(
     if !input.text.is_empty() || !input.attachments.is_empty() {
         let session_id = app.session_id.clone();
         let session_title = if session_id.is_none() {
-            if input.text.is_empty() {
-                Some("Image input".to_string())
-            } else {
-                Some(input.text.chars().take(30).collect::<String>())
-            }
+            Some(fallback_session_title(&input.text))
         } else {
             None
         };
@@ -1435,6 +1480,16 @@ fn handle_chat_message(
             app.session_id = Some(current_session_id.clone());
             if let Some(t) = &session_title {
                 app.session_name = t.clone();
+            }
+            if !input.text.trim().is_empty() {
+                spawn_session_title_generation_task(
+                    settings,
+                    cwd,
+                    current_session_id.clone(),
+                    app.selected_model_ref().to_string(),
+                    input.text.clone(),
+                    event_sender,
+                );
             }
         }
 
@@ -1456,6 +1511,146 @@ fn handle_chat_message(
         );
     } else {
         app.set_processing(false);
+    }
+}
+
+fn fallback_session_title(prompt: &str) -> String {
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() {
+        return "Image input".to_string();
+    }
+
+    trimmed
+        .split_whitespace()
+        .take(12)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_session_title(raw: &str, fallback: &str) -> String {
+    let cleaned = raw
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .trim_matches('"')
+        .trim_matches('`')
+        .trim()
+        .split_whitespace()
+        .take(12)
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if cleaned.is_empty() {
+        fallback.to_string()
+    } else {
+        cleaned
+    }
+}
+
+fn spawn_session_title_generation_task(
+    settings: &Settings,
+    cwd: &Path,
+    session_id: String,
+    model_ref: String,
+    prompt: String,
+    event_sender: &TuiEventSender,
+) {
+    let settings = settings.clone();
+    let cwd = cwd.to_path_buf();
+    let event_sender = event_sender.clone();
+    tokio::spawn(async move {
+        let fallback = fallback_session_title(&prompt);
+        let generated = match generate_session_title(&settings, &model_ref, &prompt).await {
+            Ok(title) => title,
+            Err(_) => return,
+        };
+
+        let store = match SessionStore::new(&settings.session.root, &cwd, Some(&session_id), None) {
+            Ok(store) => store,
+            Err(_) => return,
+        };
+
+        let title = normalize_session_title(&generated, &fallback);
+        if store.update_title(title.clone()).is_ok() {
+            event_sender.send(TuiEvent::SessionTitle(title));
+        }
+    });
+}
+
+async fn generate_session_title(
+    settings: &Settings,
+    model_ref: &str,
+    prompt: &str,
+) -> anyhow::Result<String> {
+    #[cfg(test)]
+    {
+        let _ = settings;
+        let _ = model_ref;
+        Ok(normalize_session_title(
+            "Generated test title",
+            &fallback_session_title(prompt),
+        ))
+    }
+
+    #[cfg(not(test))]
+    {
+        let selected = settings
+            .resolve_model_ref(model_ref)
+            .with_context(|| format!("model is not configured: {model_ref}"))?;
+
+        let provider = OpenAiCompatibleProvider::new(
+            selected.provider.base_url.clone(),
+            selected.model.id.clone(),
+            selected.provider.api_key_env.clone(),
+        );
+
+        let request = crate::core::ProviderRequest {
+            model: selected.model.id.clone(),
+            messages: vec![
+                Message {
+                    role: crate::core::Role::System,
+                    content: "Generate a concise session title for this prompt. Return only the title, no punctuation wrappers, and keep it to 12 words or fewer.".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                Message {
+                    role: crate::core::Role::User,
+                    content: prompt.to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+            ],
+            tools: Vec::new(),
+        };
+
+        let mut last_error: Option<anyhow::Error> = None;
+        for attempt in 1..=3 {
+            if attempt > 1 {
+                tokio::time::sleep(Duration::from_millis(350 * attempt as u64)).await;
+            }
+
+            match crate::core::Provider::complete_stream(&provider, request.clone(), |_| {}).await {
+                Ok(response) => {
+                    if !response.tool_calls.is_empty() {
+                        anyhow::bail!("Session title response unexpectedly requested tools");
+                    }
+
+                    let fallback = fallback_session_title(prompt);
+                    return Ok(normalize_session_title(
+                        &response.assistant_message.content,
+                        &fallback,
+                    ));
+                }
+                Err(err) => {
+                    last_error =
+                        Some(err.context(format!("title generation attempt {attempt}/3 failed")));
+                }
+            }
+        }
+
+        let err = last_error.unwrap_or_else(|| anyhow::anyhow!("unknown title request failure"));
+        return Err(err).context("Session title request failed");
     }
 }
 

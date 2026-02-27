@@ -19,6 +19,7 @@ pub enum TuiEvent {
     AssistantDelta(String),
     ContextUsage(usize),
     AssistantDone,
+    SessionTitle(String),
     CompactionStart,
     CompactionDone(String),
     Error(String),

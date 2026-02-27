@@ -286,14 +286,11 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
             Style::default().fg(ACCENT),
         )),
         Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                sidebar_label("Session"),
-                Style::default().fg(TEXT_SECONDARY).bold(),
-            ),
-            Span::raw(": "),
-            Span::styled(app.session_name.clone(), Style::default().fg(TEXT_PRIMARY)),
-        ]),
+        Line::from(Span::styled(
+            sidebar_prefixed(&app.session_name),
+            Style::default().fg(TEXT_PRIMARY).bold(),
+        )),
+        Line::from(""),
         Line::from(vec![
             Span::styled(
                 sidebar_label("Directory"),

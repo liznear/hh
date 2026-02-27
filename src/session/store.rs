@@ -61,6 +61,7 @@ impl SessionStore {
         };
 
         if !store.file.exists()
+            && !store.metadata_file.exists()
             && let Some(title) = title
         {
             let timestamp = now();
@@ -113,6 +114,26 @@ impl SessionStore {
             self.write_metadata(metadata)?;
         }
         Ok(())
+    }
+
+    pub fn update_title(&self, title: impl Into<String>) -> anyhow::Result<()> {
+        let title = title.into();
+        let timestamp = now();
+        let metadata = if self.metadata_file.exists() {
+            let file = fs::File::open(&self.metadata_file)?;
+            let mut metadata: SessionMetadata = serde_json::from_reader(file)?;
+            metadata.title = title;
+            metadata.last_updated_at = timestamp;
+            metadata
+        } else {
+            SessionMetadata {
+                id: self.id.clone(),
+                title,
+                created_at: timestamp,
+                last_updated_at: timestamp,
+            }
+        };
+        self.write_metadata(metadata)
     }
 
     pub fn append(&self, event: &SessionEvent) -> anyhow::Result<()> {
