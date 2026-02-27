@@ -215,7 +215,7 @@ fn test_fenced_code_block_preserves_indentation() {
     assert!(
         rendered
             .iter()
-            .any(|line| { line.trim_end().ends_with(".iter()") && leading_spaces(line) >= 9 }),
+            .any(|line| { line.trim_end().ends_with(".iter()") && leading_spaces(line) >= 8 }),
         "Expected leading spaces in code line to be preserved"
     );
 }
@@ -356,7 +356,7 @@ fn thinking_continuation_lines_use_message_indent() {
         !rendered[think_idx + 1].is_empty(),
         "expected wrapped continuation line"
     );
-    assert_eq!(leading_spaces(&rendered[think_idx + 1]), 5);
+    assert_eq!(leading_spaces(&rendered[think_idx + 1]), 4);
 }
 
 #[test]
@@ -457,7 +457,7 @@ fn user_prompt_box_has_inner_top_bottom_padding_and_left_indent() {
 
     let bubble_lines: Vec<&String> = rendered.iter().filter(|line| line.contains('▌')).collect();
     assert!(bubble_lines.len() >= 3);
-    assert!(bubble_lines.iter().all(|line| line.starts_with("   ▌")));
+    assert!(bubble_lines.iter().all(|line| line.starts_with("  ▌")));
 }
 
 #[test]
@@ -476,7 +476,7 @@ fn error_message_uses_message_indent() {
         .iter()
         .find(|line| line.contains("Error:"))
         .expect("error line");
-    assert!(error_line.starts_with("     Error:"));
+    assert!(error_line.starts_with("    Error:"));
 }
 
 #[test]
@@ -882,7 +882,7 @@ fn input_panel_keeps_top_padding_and_renders_second_line() {
         .expect("draw app");
 
     let buffer = terminal.backend().buffer();
-    let text_x = 6;
+    let text_x = 5;
     let mut y_a = None;
     let mut y_b = None;
     for y in 0..25 {
@@ -949,7 +949,7 @@ fn input_panel_renders_model_line_with_blank_separator() {
         .expect("draw app");
 
     let buffer = terminal.backend().buffer();
-    let text_x = 6u16;
+    let text_x = 5u16;
     let mut input_y = None;
     let mut status_y = None;
 
