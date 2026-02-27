@@ -1015,7 +1015,7 @@ fn render_processing_indicator(f: &mut Frame, app: &ChatApp, area: Rect) {
 
     let mut spans: Vec<Span<'static>> = vec![Span::raw(PROCESSING_INDENT)];
 
-    let bar_len = area.width.saturating_sub(22).clamp(6, 10) as usize;
+    let bar_len = area.width.saturating_sub(35).clamp(6, 10) as usize;
     let head = scanner_position(app.processing_step(85), bar_len, 6);
 
     for idx in 0..bar_len {
@@ -1032,6 +1032,11 @@ fn render_processing_indicator(f: &mut Frame, app: &ChatApp, area: Rect) {
         spans.push(Span::styled(glyph, style));
     }
 
+    spans.push(Span::raw(PROCESSING_STATUS_GAP));
+    spans.push(Span::styled(
+        app.processing_duration(),
+        Style::default().fg(TEXT_MUTED),
+    ));
     spans.push(Span::raw(PROCESSING_STATUS_GAP));
     spans.push(Span::styled(
         "esc interrupt",

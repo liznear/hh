@@ -384,6 +384,26 @@ impl ChatApp {
         (elapsed_ms / interval) as usize
     }
 
+    pub fn processing_duration(&self) -> String {
+        if !self.is_processing {
+            return String::new();
+        }
+
+        let elapsed_secs = self
+            .processing_started_at
+            .map(|started| started.elapsed().as_secs())
+            .unwrap_or_default();
+
+        let minutes = elapsed_secs / 60;
+        let seconds = elapsed_secs % 60;
+
+        if minutes == 0 {
+            format!("{}s", seconds)
+        } else {
+            format!("{}m {}s", minutes, seconds)
+        }
+    }
+
     fn append_thinking_delta(&mut self, delta: &str) {
         if delta.is_empty() {
             return;

@@ -857,6 +857,15 @@ fn processing_indicator_uses_block_spinner_glyphs() {
 
     assert!(full_text.contains("■"));
     assert!(full_text.contains("⬝"));
+    assert!(full_text.contains("0s"));
+    assert!(
+        full_text.find("0s").expect("find processing duration")
+            < full_text
+                .find("esc interrupt")
+                .expect("find interrupt hint")
+    );
+    assert!(!full_text.contains("00s"));
+    assert!(!full_text.contains("00m 00s"));
     assert!(full_text.contains("esc interrupt"));
 }
 
