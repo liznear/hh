@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::{Component, Path, PathBuf};
+use tokio::process::Command;
 
 pub struct FsRead;
 pub struct FsWrite {
@@ -53,7 +54,11 @@ struct GlobOutput {
 struct GrepOutput {
     path: String,
     pattern: String,
+    include: Option<String>,
     count: usize,
+    shown_count: usize,
+    truncated: bool,
+    has_errors: bool,
     matches: Vec<String>,
 }
 
@@ -261,9 +266,10 @@ impl Tool for FsGrep {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "pattern": {"type": "string"}
+                    "pattern": {"type": "string"},
+                    "include": {"type": "string"}
                 },
-                "required": ["path", "pattern"]
+                "required": ["pattern"]
             }),
         }
     }
@@ -274,20 +280,72 @@ impl Tool for FsGrep {
             .get("pattern")
             .and_then(|v| v.as_str())
             .unwrap_or_default();
-        let re = match regex::Regex::new(pattern) {
-            Ok(re) => re,
-            Err(err) => return ToolResult::error(err.to_string()),
+        let include = args
+            .get("include")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+
+        let mut command = Command::new("rg");
+        command
+            .arg("-nH")
+            .arg("--hidden")
+            .arg("--no-heading")
+            .arg("--no-messages")
+            .arg("--color")
+            .arg("never")
+            .arg("--regexp")
+            .arg(pattern);
+        if let Some(include) = include.as_deref() {
+            command.arg("--glob").arg(include);
+        }
+        command.arg(&root);
+
+        let output = match command.output().await {
+            Ok(output) => output,
+            Err(err) => {
+                return ToolResult::error(format!("failed to run rg: {err}"));
+            }
         };
 
-        let mut results = Vec::new();
-        if let Err(err) = walk_and_grep(&root, &re, &mut results) {
-            return ToolResult::error(err.to_string());
+        let all_results = if output.stdout.is_empty() {
+            Vec::new()
+        } else {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(ToOwned::to_owned)
+                .collect()
+        };
+
+        let code = output.status.code().unwrap_or_default();
+        if !output.status.success() {
+            if code != 1 && !(code == 2 && !all_results.is_empty()) {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                if stderr.is_empty() {
+                    return ToolResult::error(format!("rg exited with code {code}"));
+                }
+                return ToolResult::error(stderr);
+            }
         }
+
+        let has_errors = code == 2;
+        let total_count = all_results.len();
+        let limit = 100;
+        let truncated = total_count > limit;
+        let results = if truncated {
+            all_results.into_iter().take(limit).collect()
+        } else {
+            all_results
+        };
+        let shown_count = results.len();
 
         let output = GrepOutput {
             path: root.display().to_string(),
             pattern: pattern.to_string(),
-            count: results.len(),
+            include,
+            count: total_count,
+            shown_count,
+            truncated,
+            has_errors,
             matches: results,
         };
 
@@ -338,27 +396,4 @@ pub(crate) fn resolve_workspace_target(
     }
 
     Ok(target)
-}
-
-fn walk_and_grep(root: &Path, re: &regex::Regex, results: &mut Vec<String>) -> std::io::Result<()> {
-    if root.is_file() {
-        if let Ok(content) = std::fs::read_to_string(root) {
-            for (idx, line) in content.lines().enumerate() {
-                if re.is_match(line) {
-                    results.push(format!("{}:{}:{}", root.display(), idx + 1, line));
-                }
-            }
-        }
-        return Ok(());
-    }
-
-    for entry in std::fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() || path.is_file() {
-            let _ = walk_and_grep(&path, re, results);
-        }
-    }
-
-    Ok(())
 }
