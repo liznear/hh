@@ -17,6 +17,7 @@ pub enum TuiEvent {
         result: crate::tool::ToolResult,
     },
     AssistantDelta(String),
+    ContextUsage(usize),
     AssistantDone,
     CompactionStart,
     CompactionDone(String),
@@ -62,6 +63,10 @@ impl AgentEvents for TuiEventSender {
 
     fn on_assistant_delta(&self, delta: &str) {
         let _ = self.tx.send(TuiEvent::AssistantDelta(delta.to_string()));
+    }
+
+    fn on_context_usage(&self, tokens: usize) {
+        let _ = self.tx.send(TuiEvent::ContextUsage(tokens));
     }
 
     fn on_assistant_done(&self) {

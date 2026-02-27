@@ -45,6 +45,9 @@ const PROGRESS_TRACK: Color = Color::Rgb(203, 182, 248);
 const PROGRESS_TRAIL: Color = Color::Rgb(162, 120, 238);
 const PROGRESS_HEAD: Color = Color::Rgb(124, 72, 227);
 const THINKING_LABEL: Color = Color::Rgb(227, 152, 67);
+const CONTEXT_USAGE_YELLOW: Color = Color::Rgb(214, 168, 46);
+const CONTEXT_USAGE_ORANGE: Color = Color::Rgb(227, 136, 46);
+const CONTEXT_USAGE_RED: Color = Color::Rgb(196, 64, 64);
 const DIFF_ADD_FG: Color = Color::Rgb(25, 110, 61);
 const DIFF_ADD_BG: Color = Color::Rgb(226, 244, 235);
 const DIFF_REMOVE_FG: Color = Color::Rgb(152, 45, 45);
@@ -251,6 +254,15 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
     } else {
         (used.saturating_mul(100) / budget).min(999)
     };
+    let context_usage_color = if context_percent >= 60 {
+        CONTEXT_USAGE_RED
+    } else if context_percent >= 40 {
+        CONTEXT_USAGE_ORANGE
+    } else if context_percent >= 30 {
+        CONTEXT_USAGE_YELLOW
+    } else {
+        TEXT_PRIMARY
+    };
 
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(Span::styled(
@@ -304,7 +316,7 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
             Span::raw(": "),
             Span::styled(
                 format!("{} / {} ({}%)", used, budget, context_percent),
-                Style::default().fg(TEXT_PRIMARY),
+                Style::default().fg(context_usage_color),
             ),
         ]),
         Line::from(""),

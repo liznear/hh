@@ -132,6 +132,18 @@ fn context_usage_ignores_messages_before_compaction_boundary() {
 }
 
 #[test]
+fn context_usage_uses_provider_reported_tokens_when_available() {
+    let mut app = ChatApp::default();
+    app.messages
+        .push(ChatMessage::Assistant("local estimate".to_string()));
+
+    app.handle_event(&TuiEvent::ContextUsage(4321));
+
+    let (used, _) = app.context_usage();
+    assert_eq!(used, 4321);
+}
+
+#[test]
 fn test_duplicate_pending_tool_start_is_deduped() {
     let mut app = ChatApp::default();
     let args = json!({"command": "rm plan.md"});

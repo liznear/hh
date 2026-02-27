@@ -96,6 +96,7 @@ async fn agent_loop_stops_on_final_answer() {
             tool_calls: vec![],
             done: true,
             thinking: None,
+            context_tokens: None,
         }])),
         stream_events: vec![],
     };
@@ -154,6 +155,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
                 }],
                 done: false,
                 thinking: Some("considering".to_string()),
+                context_tokens: None,
             },
             ProviderResponse {
                 assistant_message: Message {
@@ -165,6 +167,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
                 tool_calls: vec![],
                 done: true,
                 thinking: None,
+                context_tokens: None,
             },
         ])),
         stream_events: vec![
@@ -230,6 +233,7 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
             tool_calls: vec![],
             done: true,
             thinking: Some("plan first".to_string()),
+            context_tokens: None,
         }])),
         stream_events: vec![],
     };
@@ -308,6 +312,7 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
                 tool_calls: vec![],
                 done: false,
                 thinking: None,
+                context_tokens: None,
             },
             ProviderResponse {
                 assistant_message: Message {
@@ -319,6 +324,7 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
                 tool_calls: vec![],
                 done: true,
                 thinking: None,
+                context_tokens: None,
             },
         ])),
         stream_events: vec![],
@@ -373,6 +379,7 @@ async fn agent_loop_respects_max_steps_when_set() {
             tool_calls: vec![],
             done: false,
             thinking: None,
+            context_tokens: None,
         }])),
         stream_events: vec![],
     };

@@ -14,6 +14,7 @@ pub trait AgentEvents: Send + Sync {
     fn on_tool_start(&self, _name: &str, _args: &Value) {}
     fn on_tool_end(&self, _name: &str, _result: &crate::tool::ToolResult) {}
     fn on_assistant_delta(&self, _delta: &str) {}
+    fn on_context_usage(&self, _tokens: usize) {}
     fn on_assistant_done(&self) {}
 }
 

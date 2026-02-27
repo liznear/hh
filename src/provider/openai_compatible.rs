@@ -114,6 +114,7 @@ impl OpenAiCompatibleProvider {
 
         let thinking = extract_thinking(message);
         let tool_calls = parse_tool_calls(message)?;
+        let context_tokens = parse_context_tokens(value);
 
         Ok(ProviderResponse {
             assistant_message: Message {
@@ -125,6 +126,7 @@ impl OpenAiCompatibleProvider {
             done: tool_calls.is_empty(),
             tool_calls,
             thinking,
+            context_tokens,
         })
     }
 
@@ -249,6 +251,7 @@ impl OpenAiCompatibleProvider {
         let mut thinking = String::new();
         let mut partial_calls: Vec<StreamedToolCall> = Vec::new();
         let mut stream_done = false;
+        let mut context_tokens = None;
 
         let mut buffer = String::new();
         let mut resp = response;
@@ -265,13 +268,18 @@ impl OpenAiCompatibleProvider {
                         stream_done = true;
                         break;
                     }
-                    Some(StreamLine::Payload(value)) => apply_stream_chunk(
-                        &value,
-                        &mut assistant,
-                        &mut thinking,
-                        &mut partial_calls,
-                        &mut on_event,
-                    ),
+                    Some(StreamLine::Payload(value)) => {
+                        if let Some(tokens) = parse_context_tokens(&value) {
+                            context_tokens = Some(tokens);
+                        }
+                        apply_stream_chunk(
+                            &value,
+                            &mut assistant,
+                            &mut thinking,
+                            &mut partial_calls,
+                            &mut on_event,
+                        )
+                    }
                     None => continue,
                 }
             }
@@ -279,13 +287,18 @@ impl OpenAiCompatibleProvider {
 
         if !stream_done {
             match parse_stream_line(buffer.trim()) {
-                Some(StreamLine::Payload(value)) => apply_stream_chunk(
-                    &value,
-                    &mut assistant,
-                    &mut thinking,
-                    &mut partial_calls,
-                    &mut on_event,
-                ),
+                Some(StreamLine::Payload(value)) => {
+                    if let Some(tokens) = parse_context_tokens(&value) {
+                        context_tokens = Some(tokens);
+                    }
+                    apply_stream_chunk(
+                        &value,
+                        &mut assistant,
+                        &mut thinking,
+                        &mut partial_calls,
+                        &mut on_event,
+                    )
+                }
                 Some(StreamLine::Done) | None => {}
             }
         }
@@ -310,6 +323,7 @@ impl OpenAiCompatibleProvider {
             } else {
                 Some(thinking)
             },
+            context_tokens,
         })
     }
 }
@@ -508,6 +522,16 @@ fn extract_thinking(message: &serde_json::Map<String, Value>) -> Option<String> 
             .filter(|v| !v.is_empty())
             .map(ToString::to_string)
     })
+}
+
+fn parse_context_tokens(payload: &Value) -> Option<usize> {
+    let usage = payload.get("usage")?.as_object()?;
+    usage
+        .get("prompt_tokens")
+        .or_else(|| usage.get("input_tokens"))
+        .or_else(|| usage.get("total_tokens"))
+        .and_then(|value| value.as_u64())
+        .map(|value| value as usize)
 }
 
 fn apply_stream_chunk<F>(

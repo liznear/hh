@@ -145,6 +145,7 @@ pub struct ChatApp {
     pub pending_attachments: Vec<MessageAttachment>,
     pub current_model_ref: String,
     pub available_models: Vec<ModelOptionView>,
+    pub last_context_tokens: Option<usize>,
     preferred_column: Option<usize>,
     // Text selection state
     pub text_selection: TextSelection,
@@ -191,6 +192,7 @@ impl ChatApp {
             pending_attachments: Vec::new(),
             current_model_ref: String::new(),
             available_models: Vec::new(),
+            last_context_tokens: None,
             preferred_column: None,
             text_selection: TextSelection::None,
             clipboard_notice: None,
@@ -226,6 +228,9 @@ impl ChatApp {
                 }
                 self.messages.push(ChatMessage::Assistant(delta.clone()));
                 self.mark_dirty();
+            }
+            TuiEvent::ContextUsage(tokens) => {
+                self.last_context_tokens = Some(*tokens);
             }
             TuiEvent::AssistantDone => {
                 self.set_processing(false);
@@ -330,6 +335,10 @@ impl ChatApp {
     }
 
     pub fn context_usage(&self) -> (usize, usize) {
+        if let Some(tokens) = self.last_context_tokens {
+            return (tokens, self.context_budget);
+        }
+
         let boundary = self
             .messages
             .iter()
@@ -429,6 +438,7 @@ impl ChatApp {
     pub fn start_new_session(&mut self, session_name: String) {
         self.messages.clear();
         self.todo_items.clear();
+        self.last_context_tokens = None;
         self.session_id = None;
         self.session_name = session_name;
         self.available_sessions.clear();
@@ -474,6 +484,7 @@ impl ChatApp {
             .find(|model| model.full_id == self.current_model_ref)
             .map(|model| model.max_context_size)
             .unwrap_or(DEFAULT_CONTEXT_LIMIT);
+        self.last_context_tokens = None;
     }
 
     pub fn selected_model_ref(&self) -> &str {
@@ -488,6 +499,7 @@ impl ChatApp {
             .find(|model| model.full_id == self.current_model_ref)
             .map(|model| model.max_context_size)
             .unwrap_or(DEFAULT_CONTEXT_LIMIT);
+        self.last_context_tokens = None;
     }
 
     pub fn insert_char(&mut self, ch: char) {

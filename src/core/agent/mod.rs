@@ -92,6 +92,10 @@ where
                 })
                 .await?;
 
+            if let Some(tokens) = response.context_tokens {
+                self.events.on_context_usage(tokens);
+            }
+
             if assistant_content.is_empty() {
                 assistant_content = response.assistant_message.content.clone();
                 if !assistant_content.is_empty() {

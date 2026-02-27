@@ -56,6 +56,7 @@ fn provider_response_supports_thinking_field() {
         }],
         done: false,
         thinking: Some("analyzing".to_string()),
+        context_tokens: None,
     };
 
     assert_eq!(response.thinking.as_deref(), Some("analyzing"));

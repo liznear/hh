@@ -1349,6 +1349,7 @@ fn handle_session_selection(
     let session = &app.available_sessions[idx - 1];
     app.session_id = Some(session.id.clone());
     app.session_name = session.title.clone();
+    app.last_context_tokens = None;
     app.is_picking_session = false;
 
     let store = SessionStore::new(&settings.session.root, cwd, Some(&session.id), None)

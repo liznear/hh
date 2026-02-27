@@ -49,6 +49,7 @@ pub struct ProviderResponse {
     pub tool_calls: Vec<ToolCall>,
     pub done: bool,
     pub thinking: Option<String>,
+    pub context_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
