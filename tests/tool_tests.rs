@@ -1,9 +1,31 @@
 use hh::tool::Tool;
+use hh::tool::ToolResult;
 use hh::tool::bash::BashTool;
 use hh::tool::edit::EditTool;
 use hh::tool::fs::{FsGrep, FsRead, FsWrite};
 use hh::tool::todo::{TodoReadTool, TodoWriteTool};
 use serde_json::json;
+
+/// Helper to parse JSON output from a tool result
+fn parse_json_output(result: ToolResult) -> serde_json::Value {
+    serde_json::from_str(&result.output).expect("json output")
+}
+
+/// Helper to check if a diff contains a given addition
+fn diff_contains_addition(output: &serde_json::Value, text: &str) -> bool {
+    output["diff"]
+        .as_str()
+        .unwrap_or_default()
+        .contains(&format!("+{text}"))
+}
+
+/// Helper to check if a diff contains a given removal
+fn diff_contains_removal(output: &serde_json::Value, text: &str) -> bool {
+    output["diff"]
+        .as_str()
+        .unwrap_or_default()
+        .contains(&format!("-{text}"))
+}
 
 #[tokio::test]
 async fn fs_write_respects_workspace_boundary() {
@@ -14,33 +36,17 @@ async fn fs_write_respects_workspace_boundary() {
         .execute(json!({"path": "a.txt", "content": "hello"}))
         .await;
     assert!(!ok.is_error);
-    let ok_output: serde_json::Value = serde_json::from_str(&ok.output).expect("write json output");
+    let ok_output = parse_json_output(ok);
     assert_eq!(ok_output["path"], "a.txt");
-    assert!(
-        ok_output["diff"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("+hello")
-    );
+    assert!(diff_contains_addition(&ok_output, "hello"));
 
     let overwrite = write_tool
         .execute(json!({"path": "a.txt", "content": "hello world"}))
         .await;
     assert!(!overwrite.is_error);
-    let overwrite_output: serde_json::Value =
-        serde_json::from_str(&overwrite.output).expect("overwrite json output");
-    assert!(
-        overwrite_output["diff"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("-hello")
-    );
-    assert!(
-        overwrite_output["diff"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("+hello world")
-    );
+    let overwrite_output = parse_json_output(overwrite);
+    assert!(diff_contains_removal(&overwrite_output, "hello"));
+    assert!(diff_contains_addition(&overwrite_output, "hello world"));
 
     let blocked = write_tool
         .execute(json!({"path": "/tmp/outside.txt", "content": "bad"}))
@@ -60,7 +66,7 @@ async fn fs_read_returns_file_content() {
         .await;
 
     assert!(!res.is_error);
-    let output: serde_json::Value = serde_json::from_str(&res.output).expect("json output");
+    let output = parse_json_output(res);
     assert_eq!(output["content"], "content");
     assert_eq!(output["bytes"], 7);
     assert_eq!(output["lines"], 1);
@@ -85,7 +91,7 @@ async fn fs_read_supports_line_range() {
         .await;
 
     assert!(!res.is_error);
-    let output: serde_json::Value = serde_json::from_str(&res.output).expect("json output");
+    let output = parse_json_output(res);
     assert_eq!(output["content"], "two\nthree\n");
     assert_eq!(output["lines"], 2);
     assert_eq!(output["start"], 1);
@@ -108,7 +114,7 @@ async fn fs_grep_includes_match_line_numbers() {
         .await;
 
     assert!(!res.is_error);
-    let output: serde_json::Value = serde_json::from_str(&res.output).expect("json output");
+    let output = parse_json_output(res);
     assert_eq!(output["count"], 1);
     assert_eq!(output["matches"][0]["line_number"], 2);
     assert_eq!(output["matches"][0]["line"], "beta");
@@ -119,7 +125,7 @@ async fn bash_tool_blocks_denylisted_command() {
     let bash = BashTool::new();
     let result = bash.execute(json!({"command": "rm -rf /"})).await;
     assert!(result.is_error);
-    let output: serde_json::Value = serde_json::from_str(&result.output).expect("json output");
+    let output = parse_json_output(result);
     assert_eq!(output["status"], "blocked");
     assert_eq!(output["ok"], false);
     assert!(
@@ -138,7 +144,7 @@ async fn bash_tool_reports_exit_code_and_streams() {
         .await;
 
     assert!(!result.is_error);
-    let output: serde_json::Value = serde_json::from_str(&result.output).expect("json output");
+    let output = parse_json_output(result);
     assert_eq!(output["status"], "success");
     assert_eq!(output["ok"], true);
     assert_eq!(output["exit_code"], 0);
@@ -159,7 +165,7 @@ async fn todo_write_set_updates_list() {
         .await;
 
     assert!(!result.is_error);
-    let output: serde_json::Value = serde_json::from_str(&result.output).expect("json output");
+    let output = parse_json_output(result);
     assert_eq!(output["counts"]["total"], 2);
     assert_eq!(output["counts"]["in_progress"], 1);
 }
@@ -184,7 +190,7 @@ async fn todo_read_returns_snapshot_shape() {
     let result = todo.execute(json!({})).await;
 
     assert!(!result.is_error);
-    let output: serde_json::Value = serde_json::from_str(&result.output).expect("json output");
+    let output = parse_json_output(result);
     assert_eq!(output["counts"]["total"], 0);
     assert_eq!(output["todos"], json!([]));
 }
@@ -208,14 +214,9 @@ async fn edit_applies_single_replacement() {
     let updated = std::fs::read_to_string(&path).expect("read updated");
     assert_eq!(updated, "hello rust\n");
 
-    let output: serde_json::Value = serde_json::from_str(&result.output).expect("json output");
+    let output = parse_json_output(result);
     assert_eq!(output["applied"], true);
-    assert!(
-        output["diff"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("+hello rust")
-    );
+    assert!(diff_contains_addition(&output, "hello rust"));
 }
 
 #[tokio::test]

@@ -107,37 +107,36 @@ impl Tool for FsRead {
             return ToolResult::error("end must be >= -1".to_string());
         }
 
-        match std::fs::read_to_string(path) {
-            Ok(content) => {
-                let line_chunks: Vec<&str> = content.split_inclusive('\n').collect();
-                let total_lines = line_chunks.len();
-                let start = usize::try_from(start).unwrap_or(0).min(total_lines);
-                let end = if end == -1 {
-                    total_lines
-                } else {
-                    usize::try_from(end).unwrap_or(total_lines).min(total_lines)
-                };
+        let content = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(err) => return ToolResult::error(err.to_string()),
+        };
 
-                if start > end {
-                    return ToolResult::error(
-                        "start must be less than or equal to end".to_string(),
-                    );
-                }
+        let line_chunks: Vec<&str> = content.split_inclusive('\n').collect();
+        let total_lines = line_chunks.len();
 
-                let content = line_chunks[start..end].join("");
-                let output = FileReadOutput {
-                    path: path.to_string(),
-                    bytes: content.len(),
-                    lines: end.saturating_sub(start),
-                    start,
-                    end,
-                    total_lines,
-                    content,
-                };
-                ToolResult::ok_json_serializable("ok", &output)
-            }
-            Err(err) => ToolResult::error(err.to_string()),
+        let start = usize::try_from(start).unwrap_or(0).min(total_lines);
+        let end = if end == -1 {
+            total_lines
+        } else {
+            usize::try_from(end).unwrap_or(total_lines).min(total_lines)
+        };
+
+        if start > end {
+            return ToolResult::error("start must be less than or equal to end".to_string());
         }
+
+        let content = line_chunks[start..end].join("");
+        let output = FileReadOutput {
+            path: path.to_string(),
+            bytes: content.len(),
+            lines: end.saturating_sub(start),
+            start,
+            end,
+            total_lines,
+            content,
+        };
+        ToolResult::ok_json_serializable("ok", &output)
     }
 }
 
@@ -351,16 +350,20 @@ impl Tool for FsGrep {
 
         let all_results = parse_rg_json_matches(&output.stdout);
 
-        let code = output.status.code().unwrap_or_default();
-        if !output.status.success() && code != 1 && (code != 2 || all_results.is_empty()) {
+        let exit_code = output.status.code().unwrap_or_default();
+        // rg: 0 = matches found, 1 = no matches (not an error), 2 = error
+        let has_errors = exit_code == 2;
+
+        // Treat code 1 (no matches) as success; only report actual errors
+        if exit_code != 0 && exit_code != 1 {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            if stderr.is_empty() {
-                return ToolResult::error(format!("rg exited with code {code}"));
-            }
-            return ToolResult::error(stderr);
+            return if stderr.is_empty() {
+                ToolResult::error(format!("rg exited with code {exit_code}"))
+            } else {
+                ToolResult::error(stderr)
+            };
         }
 
-        let has_errors = code == 2;
         let total_count = all_results.len();
         let limit = 100;
         let truncated = total_count > limit;
@@ -393,37 +396,41 @@ fn parse_rg_json_matches(stdout: &[u8]) -> Vec<GrepMatch> {
 
     String::from_utf8_lossy(stdout)
         .lines()
-        .filter_map(|line| {
-            let event: Value = serde_json::from_str(line).ok()?;
-            if event.get("type").and_then(|value| value.as_str()) != Some("match") {
-                return None;
-            }
-
-            let data = event.get("data")?;
-            let path = data
-                .get("path")
-                .and_then(|value| value.get("text"))
-                .and_then(|value| value.as_str())?
-                .to_string();
-            let line_number = data
-                .get("line_number")
-                .and_then(|value| value.as_u64())
-                .and_then(|value| usize::try_from(value).ok())?;
-            let line = data
-                .get("lines")
-                .and_then(|value| value.get("text"))
-                .and_then(|value| value.as_str())
-                .unwrap_or_default()
-                .trim_end_matches('\n')
-                .to_string();
-
-            Some(GrepMatch {
-                path,
-                line_number,
-                line,
-            })
-        })
+        .filter_map(parse_rg_match_line)
         .collect()
+}
+
+fn parse_rg_match_line(line: &str) -> Option<GrepMatch> {
+    let event: Value = serde_json::from_str(line).ok()?;
+    let event_type = event.get("type")?.as_str()?;
+
+    if event_type != "match" {
+        return None;
+    }
+
+    let data = event.get("data")?;
+    let path = extract_rg_field(data, "path", "text")?;
+    let line_number = data
+        .get("line_number")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| usize::try_from(v).ok())?;
+    let line = extract_rg_field(data, "lines", "text")
+        .unwrap_or_default()
+        .trim_end_matches('\n')
+        .to_string();
+
+    Some(GrepMatch {
+        path,
+        line_number,
+        line,
+    })
+}
+
+fn extract_rg_field(data: &Value, outer: &str, inner: &str) -> Option<String> {
+    data.get(outer)
+        .and_then(|v| v.get(inner))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 pub(crate) fn to_workspace_target(workspace_root: &Path, path: &Path) -> PathBuf {
