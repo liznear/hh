@@ -319,6 +319,7 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
     let directory_text =
         format_sidebar_directory(&app.working_directory, app.git_branch.as_deref());
     let mut lines: Vec<Line<'static>> = vec![
+        Line::from(""),
         Line::from(Span::styled(
             sidebar_prefixed(&app.session_name),
             Style::default().fg(TEXT_PRIMARY).bold(),
