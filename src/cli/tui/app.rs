@@ -744,8 +744,8 @@ impl ChatApp {
         let start_idx = start.line;
         let end_idx = end.line;
 
-        for line_idx in start_idx..=end_idx {
-            let line = &lines[line_idx];
+        for (offset, line) in lines[start_idx..=end_idx].iter().enumerate() {
+            let line_idx = start_idx + offset;
             let line_text = line
                 .spans
                 .iter()

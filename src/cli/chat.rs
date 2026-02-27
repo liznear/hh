@@ -718,12 +718,11 @@ fn copy_selection_to_clipboard(app: &ChatApp, terminal_width: u16) -> bool {
     let lines = app.get_lines(wrap_width);
     let selected_text = app.get_selected_text(&lines);
 
-    if !selected_text.is_empty() {
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            if clipboard.set_text(&selected_text).is_ok() {
-                return true;
-            }
-        }
+    if !selected_text.is_empty()
+        && let Ok(mut clipboard) = arboard::Clipboard::new()
+        && clipboard.set_text(&selected_text).is_ok()
+    {
+        return true;
     }
 
     false
@@ -829,24 +828,18 @@ fn handle_mouse_event(mouse: MouseEvent) -> Option<InputEvent> {
     match mouse.kind {
         MouseEventKind::ScrollUp => Some(InputEvent::ScrollUp),
         MouseEventKind::ScrollDown => Some(InputEvent::ScrollDown),
-        MouseEventKind::Down(button) if button == crossterm::event::MouseButton::Left => {
-            Some(InputEvent::MouseClick {
-                x: mouse.column,
-                y: mouse.row,
-            })
-        }
-        MouseEventKind::Drag(button) if button == crossterm::event::MouseButton::Left => {
-            Some(InputEvent::MouseDrag {
-                x: mouse.column,
-                y: mouse.row,
-            })
-        }
-        MouseEventKind::Up(button) if button == crossterm::event::MouseButton::Left => {
-            Some(InputEvent::MouseRelease {
-                x: mouse.column,
-                y: mouse.row,
-            })
-        }
+        MouseEventKind::Down(crossterm::event::MouseButton::Left) => Some(InputEvent::MouseClick {
+            x: mouse.column,
+            y: mouse.row,
+        }),
+        MouseEventKind::Drag(crossterm::event::MouseButton::Left) => Some(InputEvent::MouseDrag {
+            x: mouse.column,
+            y: mouse.row,
+        }),
+        MouseEventKind::Up(crossterm::event::MouseButton::Left) => Some(InputEvent::MouseRelease {
+            x: mouse.column,
+            y: mouse.row,
+        }),
         _ => None,
     }
 }
@@ -1024,8 +1017,7 @@ fn validate_image_input_model_support(
         .model
         .modalities
         .input
-        .iter()
-        .any(|modality| *modality == crate::config::settings::ModelModalityType::Image);
+        .contains(&crate::config::settings::ModelModalityType::Image);
 
     if supports_image_input {
         return Ok(());
@@ -1560,7 +1552,6 @@ fn normalize_session_title(raw: &str, fallback: &str) -> String {
         .trim()
         .trim_matches('"')
         .trim_matches('`')
-        .trim()
         .split_whitespace()
         .take(12)
         .collect::<Vec<_>>()
@@ -1675,7 +1666,7 @@ async fn generate_session_title(
         }
 
         let err = last_error.unwrap_or_else(|| anyhow::anyhow!("unknown title request failure"));
-        return Err(err).context("Session title request failed");
+        Err(err).context("Session title request failed")
     }
 }
 

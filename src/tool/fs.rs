@@ -317,14 +317,12 @@ impl Tool for FsGrep {
         };
 
         let code = output.status.code().unwrap_or_default();
-        if !output.status.success() {
-            if code != 1 && !(code == 2 && !all_results.is_empty()) {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                if stderr.is_empty() {
-                    return ToolResult::error(format!("rg exited with code {code}"));
-                }
-                return ToolResult::error(stderr);
+        if !output.status.success() && code != 1 && (code != 2 || all_results.is_empty()) {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if stderr.is_empty() {
+                return ToolResult::error(format!("rg exited with code {code}"));
             }
+            return ToolResult::error(stderr);
         }
 
         let has_errors = code == 2;

@@ -44,9 +44,10 @@ pub struct ModelMetadata {
     pub limits: ModelLimits,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelModalityType {
+    #[default]
     Text,
     Image,
     Audio,
@@ -62,12 +63,6 @@ impl std::fmt::Display for ModelModalityType {
             Self::Video => "video",
         };
         f.write_str(label)
-    }
-}
-
-impl Default for ModelModalityType {
-    fn default() -> Self {
-        Self::Text
     }
 }
 

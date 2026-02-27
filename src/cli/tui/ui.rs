@@ -534,6 +534,11 @@ fn build_message_lines_impl(app: &ChatApp, width: usize, layout: UiLayout) -> Ve
         pending_prefix: &tool_pending_prefix,
         pending_continuation: &tool_pending_continuation,
     };
+    let tool_context = ToolRenderContext {
+        available_width: width.saturating_sub(4).max(1),
+        style: tool_style,
+        layout,
+    };
 
     for msg in &app.messages {
         match msg {
@@ -561,16 +566,15 @@ fn build_message_lines_impl(app: &ChatApp, width: usize, layout: UiLayout) -> Ve
                 output,
                 is_error,
             } => {
-                let available_width = width.saturating_sub(4).max(1);
                 render_tool_call_message(
                     &mut lines,
-                    name,
-                    args,
-                    output.as_deref(),
-                    *is_error,
-                    available_width,
-                    tool_style,
-                    layout,
+                    ToolCallMessage {
+                        name,
+                        args,
+                        output: output.as_deref(),
+                        is_error: *is_error,
+                    },
+                    tool_context,
                 );
             }
             ChatMessage::Error(text) => {
@@ -735,78 +739,101 @@ struct ToolCallRenderStyle<'a> {
     pending_continuation: &'a str,
 }
 
+#[derive(Clone, Copy)]
+struct ToolRenderContext<'a> {
+    available_width: usize,
+    style: ToolCallRenderStyle<'a>,
+    layout: UiLayout,
+}
+
+#[derive(Clone, Copy)]
+struct ToolCallMessage<'a> {
+    name: &'a str,
+    args: &'a str,
+    output: Option<&'a str>,
+    is_error: Option<bool>,
+}
+
+#[derive(Clone, Copy)]
+struct CompletedToolCall<'a> {
+    name: &'a str,
+    label: &'a str,
+    output: Option<&'a str>,
+    is_error: bool,
+}
+
 fn render_tool_call_message(
     lines: &mut Vec<Line<'static>>,
-    name: &str,
-    args: &str,
-    output: Option<&str>,
-    is_error: Option<bool>,
-    available_width: usize,
-    style: ToolCallRenderStyle<'_>,
-    layout: UiLayout,
+    message: ToolCallMessage<'_>,
+    context: ToolRenderContext<'_>,
 ) {
-    let args_value: Value = serde_json::from_str(args).unwrap_or(Value::Null);
-    let label = render_tool_start(name, &args_value).line;
+    let args_value: Value = serde_json::from_str(message.args).unwrap_or(Value::Null);
+    let label = render_tool_start(message.name, &args_value).line;
 
-    match is_error {
+    match message.is_error {
         Some(error) => {
             if !error
-                && (name == "edit" || name == "write")
-                && let Some(tool_output) = output
-                && render_edit_diff_block(lines, name, tool_output, available_width, layout)
+                && (message.name == "edit" || message.name == "write")
+                && let Some(tool_output) = message.output
+                && render_edit_diff_block(
+                    lines,
+                    message.name,
+                    tool_output,
+                    context.available_width,
+                    context.layout,
+                )
             {
                 return;
             }
 
             render_completed_tool_call(
                 lines,
-                name,
-                &label,
-                output,
-                error,
-                available_width,
-                style.done_continuation,
-                layout,
+                CompletedToolCall {
+                    name: message.name,
+                    label: &label,
+                    output: message.output,
+                    is_error: error,
+                },
+                context,
             );
         }
         None => render_pending_tool_call(
             lines,
             &label,
-            available_width,
-            style.pending_prefix,
-            style.pending_continuation,
+            context.available_width,
+            context.style.pending_prefix,
+            context.style.pending_continuation,
         ),
     }
 }
 
 fn render_completed_tool_call(
     lines: &mut Vec<Line<'static>>,
-    name: &str,
-    label: &str,
-    output: Option<&str>,
-    is_error: bool,
-    available_width: usize,
-    tool_done_continuation: &str,
-    layout: UiLayout,
+    completed: CompletedToolCall<'_>,
+    context: ToolRenderContext<'_>,
 ) {
-    let completed_label = if is_error {
-        label.to_string()
+    let completed_label = if completed.is_error {
+        completed.label.to_string()
     } else {
-        append_tool_result_count(name, label, output)
+        append_tool_result_count(completed.name, completed.label, completed.output)
     };
-    let symbol = if is_error { "x" } else { "✓" };
-    let color = if is_error { Color::Red } else { INPUT_ACCENT };
-    let wrapped = wrap_compact_text(&completed_label, available_width);
+    let symbol = if completed.is_error { "x" } else { "✓" };
+    let color = if completed.is_error {
+        Color::Red
+    } else {
+        INPUT_ACCENT
+    };
+    let wrapped = wrap_compact_text(&completed_label, context.available_width);
 
     push_wrapped_tool_rows(
         lines,
         &wrapped,
         vec![
-            Span::raw(layout.message_indent()),
+            Span::raw(context.layout.message_indent()),
             Span::styled(symbol, Style::default().fg(color).bold()),
             Span::raw(" "),
         ],
-        vec![Span::raw(tool_done_continuation.to_string())],
+        vec![Span::raw(context.style.done_continuation.to_string())],
         Style::default().fg(TEXT_SECONDARY),
     );
 }
