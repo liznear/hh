@@ -14,18 +14,10 @@ use super::app::{ChatApp, ChatMessage, TodoItemView, TodoStatus};
 use super::markdown::markdown_to_lines_with_indent;
 use super::tool_presentation::render_tool_start;
 
-const SIDEBAR_WIDTH: u16 = 38;
-const LEFT_COLUMN_RIGHT_MARGIN: u16 = 2;
-const MAIN_OUTER_PADDING_X: u16 = 1;
-const MAIN_OUTER_PADDING_Y: u16 = 1;
 const MAX_TOOL_OUTPUT_LEN: usize = 200;
-const USER_BUBBLE_INDENT: usize = 2;
-const USER_BUBBLE_INNER_PADDING: usize = 1;
 const MIN_DIFF_COLUMN_WIDTH: usize = 24;
 const DIFF_LINE_NUMBER_WIDTH: usize = 4;
-const MESSAGE_INDENT: &str = "    ";
 const TOOL_PENDING_MARKER: &str = "-> ";
-const PROCESSING_INDENT: &str = MESSAGE_INDENT;
 const PROCESSING_STATUS_GAP: &str = "  ";
 const SIDEBAR_INDENT: &str = "  ";
 const SIDEBAR_LABEL_INDENT: &str = " ";
@@ -57,6 +49,58 @@ const MAX_RENDERED_DIFF_LINES: usize = 120;
 const MAX_RENDERED_DIFF_CHARS: usize = 8_000;
 const MAX_INPUT_LINES: usize = 5;
 
+#[derive(Clone, Copy)]
+pub(crate) struct UiLayout {
+    sidebar_width: u16,
+    left_column_right_margin: u16,
+    main_outer_padding_x: u16,
+    main_outer_padding_y: u16,
+    main_content_left_offset: usize,
+    user_bubble_inner_padding: usize,
+    message_indent_width: usize,
+    command_palette_left_padding: usize,
+}
+
+impl Default for UiLayout {
+    fn default() -> Self {
+        let main_content_left_offset = 2;
+        Self {
+            sidebar_width: 38,
+            left_column_right_margin: 2,
+            main_outer_padding_x: 1,
+            main_outer_padding_y: 1,
+            main_content_left_offset,
+            user_bubble_inner_padding: 1,
+            message_indent_width: main_content_left_offset + 2,
+            command_palette_left_padding: main_content_left_offset,
+        }
+    }
+}
+
+impl UiLayout {
+    #[cfg(test)]
+    pub(crate) const fn main_content_left_offset(&self) -> usize {
+        self.main_content_left_offset
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn message_indent_width(&self) -> usize {
+        self.message_indent_width
+    }
+
+    fn user_bubble_indent(&self) -> usize {
+        self.main_content_left_offset
+    }
+
+    fn message_indent(&self) -> String {
+        " ".repeat(self.message_indent_width)
+    }
+
+    fn message_child_indent(&self) -> String {
+        " ".repeat(self.message_indent_width + 2)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct EditToolOutput {
     path: String,
@@ -71,18 +115,23 @@ struct EditDiffSummary {
 }
 
 pub fn render_app(f: &mut Frame, app: &ChatApp) {
+    let layout = UiLayout::default();
     f.render_widget(
         Block::default().style(Style::default().bg(PAGE_BG)),
         f.area(),
     );
 
-    let app_area = inset_rect(f.area(), MAIN_OUTER_PADDING_X, MAIN_OUTER_PADDING_Y);
+    let app_area = inset_rect(
+        f.area(),
+        layout.main_outer_padding_x,
+        layout.main_outer_padding_y,
+    );
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(40),
-            Constraint::Length(LEFT_COLUMN_RIGHT_MARGIN),
-            Constraint::Length(SIDEBAR_WIDTH),
+            Constraint::Length(layout.left_column_right_margin),
+            Constraint::Length(layout.sidebar_width),
         ])
         .split(app_area);
 
@@ -95,7 +144,8 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
 
     let input_content_width = main_area
         .width
-        .saturating_sub(USER_BUBBLE_INDENT as u16 + 3) as usize;
+        .saturating_sub(layout.user_bubble_indent() as u16 + 3)
+        as usize;
     let input_line_count =
         input_line_count(&app.input, input_content_width).clamp(1, MAX_INPUT_LINES);
     let input_area_height = (input_line_count + 4) as u16;
@@ -112,23 +162,25 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
         .split(main_area);
 
     render_messages(f, app, main_chunks[0]);
-    render_processing_indicator(f, app, main_chunks[2]);
-    render_input(f, app, main_chunks[4]);
+    render_processing_indicator(f, app, main_chunks[2], layout);
+    render_input(f, app, main_chunks[4], layout);
 
     if !app.filtered_commands.is_empty() {
         let item_count = app.filtered_commands.len().min(5) as u16;
         let popup_height = item_count;
-        let input_left = main_chunks[4].x.saturating_add(USER_BUBBLE_INDENT as u16);
+        let input_left = main_chunks[4]
+            .x
+            .saturating_add(layout.user_bubble_indent() as u16);
         let input_width = main_chunks[4]
             .width
-            .saturating_sub(USER_BUBBLE_INDENT as u16);
+            .saturating_sub(layout.user_bubble_indent() as u16);
         let popup_area = Rect {
             x: input_left,
             y: main_chunks[4].y.saturating_sub(popup_height),
             width: input_width,
             height: popup_height,
         };
-        render_command_palette(f, app, popup_area);
+        render_command_palette(f, app, popup_area, layout);
     }
 
     if let Some(area) = sidebar_area {
@@ -184,7 +236,7 @@ fn render_clipboard_notice(f: &mut Frame, app: &ChatApp) {
     );
 }
 
-fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect) {
+fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
     f.render_widget(Clear, area);
     f.render_widget(
         Block::default().style(Style::default().bg(COMMAND_PALETTE_BG)),
@@ -202,7 +254,7 @@ fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect) {
         + 1;
 
     let content_width = area.width as usize;
-    let list_left_padding = 2usize;
+    let list_left_padding = layout.command_palette_left_padding;
     let left_padding = " ".repeat(list_left_padding);
     let description_width = content_width.saturating_sub(list_left_padding + name_width + 1);
 
@@ -467,13 +519,14 @@ fn char_slice(input: &str, start: usize, end: usize) -> String {
 
 /// Build message lines (used for caching and scroll bounds)
 pub fn build_message_lines(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
-    build_message_lines_impl(app, width)
+    build_message_lines_impl(app, width, UiLayout::default())
 }
 
-fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
+fn build_message_lines_impl(app: &ChatApp, width: usize, layout: UiLayout) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let tool_done_continuation = message_child_indent();
-    let tool_pending_prefix = format!("{MESSAGE_INDENT}{TOOL_PENDING_MARKER}");
+    let message_indent = layout.message_indent();
+    let tool_done_continuation = layout.message_child_indent();
+    let tool_pending_prefix = format!("{message_indent}{TOOL_PENDING_MARKER}");
     let tool_pending_continuation = " ".repeat(tool_pending_prefix.chars().count());
     let tool_style = ToolCallRenderStyle {
         done_continuation: &tool_done_continuation,
@@ -484,22 +537,22 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
     for msg in &app.messages {
         match msg {
             ChatMessage::User(text) => {
-                render_user_message_block(&mut lines, text, width);
+                render_user_message_block(&mut lines, text, width, layout);
             }
             ChatMessage::Assistant(text) => {
                 ensure_single_blank_line(&mut lines);
-                for line in parse_markdown_lines(text, width) {
+                for line in parse_markdown_lines(text, width, &message_indent) {
                     lines.push(line);
                 }
             }
             ChatMessage::CompactionPending => {
-                render_compaction_block(&mut lines, None, width);
+                render_compaction_block(&mut lines, None, width, &message_indent);
             }
             ChatMessage::Compaction(summary) => {
-                render_compaction_block(&mut lines, Some(summary), width);
+                render_compaction_block(&mut lines, Some(summary), width, &message_indent);
             }
             ChatMessage::Thinking(text) => {
-                render_thinking_block(&mut lines, text, width);
+                render_thinking_block(&mut lines, text, width, &message_indent);
             }
             ChatMessage::ToolCall {
                 name,
@@ -516,12 +569,13 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
                     *is_error,
                     available_width,
                     tool_style,
+                    layout,
                 );
             }
             ChatMessage::Error(text) => {
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::raw(MESSAGE_INDENT),
+                    Span::raw(message_indent.clone()),
                     Span::styled("Error:", Style::default().fg(Color::Red).bold()),
                     Span::raw(" "),
                     Span::styled(text.clone(), Style::default().fg(Color::Red)),
@@ -534,18 +588,18 @@ fn build_message_lines_impl(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
 }
 
 /// Parse markdown text into styled lines with wrapping
-fn parse_markdown_lines(text: &str, width: usize) -> Vec<Line<'static>> {
-    markdown_to_lines_with_indent(text, width, MESSAGE_INDENT)
+fn parse_markdown_lines(text: &str, width: usize, indent: &str) -> Vec<Line<'static>> {
+    markdown_to_lines_with_indent(text, width, indent)
 }
 
 fn parse_markdown_lines_unindented(text: &str, width: usize) -> Vec<Line<'static>> {
     markdown_to_lines_with_indent(text, width, "")
 }
 
-fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usize) {
+fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usize, indent: &str) {
     ensure_single_blank_line(lines);
 
-    let label = format!("{MESSAGE_INDENT}Thinking: ");
+    let label = format!("{indent}Thinking: ");
     let label_width = label.chars().count();
     let wrapped = parse_markdown_lines_unindented(text, width.saturating_sub(label_width).max(1));
 
@@ -558,7 +612,7 @@ fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usiz
         return;
     }
 
-    let continuation_indent = MESSAGE_INDENT.to_string();
+    let continuation_indent = indent.to_string();
     for (index, line) in wrapped.into_iter().enumerate() {
         let mut spans = Vec::with_capacity(line.spans.len() + 1);
         if index == 0 {
@@ -581,10 +635,14 @@ fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usiz
     lines.push(Line::from(""));
 }
 
-fn render_compaction_block(lines: &mut Vec<Line<'static>>, summary: Option<&str>, width: usize) {
+fn render_compaction_block(
+    lines: &mut Vec<Line<'static>>,
+    summary: Option<&str>,
+    width: usize,
+    indent: &str,
+) {
     ensure_single_blank_line(lines);
 
-    let indent = MESSAGE_INDENT;
     let label = " Compaction ";
     let available = width.saturating_sub(indent.chars().count());
     let total_rule = available.max(label.chars().count() + 4);
@@ -593,7 +651,7 @@ fn render_compaction_block(lines: &mut Vec<Line<'static>>, summary: Option<&str>
     let right = "-".repeat(total_rule.saturating_sub(side + label.chars().count()));
 
     lines.push(Line::from(vec![
-        Span::raw(indent),
+        Span::raw(indent.to_string()),
         Span::styled(left, Style::default().fg(TEXT_MUTED)),
         Span::styled(label, Style::default().fg(TEXT_MUTED)),
         Span::styled(right, Style::default().fg(TEXT_MUTED)),
@@ -603,7 +661,7 @@ fn render_compaction_block(lines: &mut Vec<Line<'static>>, summary: Option<&str>
     if let Some(summary) = summary
         && !summary.trim().is_empty()
     {
-        for line in parse_markdown_lines(summary, width) {
+        for line in parse_markdown_lines(summary, width, indent) {
             lines.push(line);
         }
     }
@@ -684,6 +742,7 @@ fn render_tool_call_message(
     is_error: Option<bool>,
     available_width: usize,
     style: ToolCallRenderStyle<'_>,
+    layout: UiLayout,
 ) {
     let args_value: Value = serde_json::from_str(args).unwrap_or(Value::Null);
     let label = render_tool_start(name, &args_value).line;
@@ -693,7 +752,7 @@ fn render_tool_call_message(
             if !error
                 && (name == "edit" || name == "write")
                 && let Some(tool_output) = output
-                && render_edit_diff_block(lines, name, tool_output, available_width)
+                && render_edit_diff_block(lines, name, tool_output, available_width, layout)
             {
                 return;
             }
@@ -706,6 +765,7 @@ fn render_tool_call_message(
                 error,
                 available_width,
                 style.done_continuation,
+                layout,
             );
         }
         None => render_pending_tool_call(
@@ -726,6 +786,7 @@ fn render_completed_tool_call(
     is_error: bool,
     available_width: usize,
     tool_done_continuation: &str,
+    layout: UiLayout,
 ) {
     let completed_label = if is_error {
         label.to_string()
@@ -740,7 +801,7 @@ fn render_completed_tool_call(
         lines,
         &wrapped,
         vec![
-            Span::raw(MESSAGE_INDENT),
+            Span::raw(layout.message_indent()),
             Span::styled(symbol, Style::default().fg(color).bold()),
             Span::raw(" "),
         ],
@@ -769,8 +830,8 @@ fn render_pending_tool_call(
     );
 }
 
-fn render_input(f: &mut Frame, app: &ChatApp, area: Rect) {
-    let left_border_x = area.x.saturating_add(USER_BUBBLE_INDENT as u16);
+fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
+    let left_border_x = area.x.saturating_add(layout.user_bubble_indent() as u16);
     f.render_widget(Block::default().style(Style::default().bg(PAGE_BG)), area);
     let input_panel_area = Rect {
         x: left_border_x,
@@ -846,7 +907,11 @@ fn render_input(f: &mut Frame, app: &ChatApp, area: Rect) {
     let status_y = content_y
         .saturating_add(content_height.saturating_sub(1))
         .min(area.bottom().saturating_sub(1));
-    let status = format!("{} {}", selected_provider_name(app), selected_model_name(app));
+    let status = format!(
+        "{} {}",
+        selected_provider_name(app),
+        selected_model_name(app)
+    );
     f.render_widget(
         Paragraph::new(status)
             .style(Style::default().fg(TEXT_MUTED).bg(INPUT_PANEL_BG))
@@ -1065,12 +1130,12 @@ fn input_line_count(input: &str, width: usize) -> usize {
     wrap_input_lines(input, width).len()
 }
 
-fn render_processing_indicator(f: &mut Frame, app: &ChatApp, area: Rect) {
+fn render_processing_indicator(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
     if !app.is_processing {
         return;
     }
 
-    let mut spans: Vec<Span<'static>> = vec![Span::raw(PROCESSING_INDENT)];
+    let mut spans: Vec<Span<'static>> = vec![Span::raw(layout.message_indent())];
 
     let bar_len = area.width.saturating_sub(35).clamp(6, 10) as usize;
     let head = scanner_position(app.processing_step(85), bar_len, 6);
@@ -1341,15 +1406,16 @@ fn render_edit_diff_block(
     tool_name: &str,
     output: &str,
     available_width: usize,
+    layout: UiLayout,
 ) -> bool {
     let parsed: EditToolOutput = match serde_json::from_str(output) {
         Ok(value) => value,
         Err(_) => return false,
     };
-    let child_indent = message_child_indent();
+    let child_indent = layout.message_child_indent();
 
     lines.push(Line::from(vec![
-        Span::raw(MESSAGE_INDENT),
+        Span::raw(layout.message_indent()),
         Span::styled("✓ ", Style::default().fg(INPUT_ACCENT).bold()),
         Span::styled(
             format!(
@@ -1365,7 +1431,7 @@ fn render_edit_diff_block(
 
     let (left_width, right_width) = diff_column_widths(available_width);
     if left_width < MIN_DIFF_COLUMN_WIDTH || right_width < MIN_DIFF_COLUMN_WIDTH {
-        return render_edit_diff_block_single_column(lines, &parsed.diff, available_width);
+        return render_edit_diff_block_single_column(lines, &parsed.diff, available_width, layout);
     }
 
     let mut rendered_chars = 0;
@@ -1385,7 +1451,7 @@ fn render_edit_diff_block(
         rendered_chars += line_chars;
         rendered_lines += 1;
 
-        render_side_by_side_diff_row(lines, &side_by_side, left_width, right_width);
+        render_side_by_side_diff_row(lines, &side_by_side, left_width, right_width, layout);
     }
 
     if truncated {
@@ -1405,10 +1471,11 @@ fn render_edit_diff_block_single_column(
     lines: &mut Vec<Line<'static>>,
     diff: &str,
     available_width: usize,
+    layout: UiLayout,
 ) -> bool {
     let mut rendered_chars = 0;
     let mut truncated = false;
-    let child_indent = message_child_indent();
+    let child_indent = layout.message_child_indent();
 
     for (rendered_lines, raw_line) in diff.lines().enumerate() {
         let line_chars = raw_line.chars().count();
@@ -1453,19 +1520,24 @@ fn render_edit_diff_block_single_column(
     true
 }
 
-fn render_user_message_block(lines: &mut Vec<Line<'static>>, text: &str, width: usize) {
-    let content_width = width.saturating_sub(USER_BUBBLE_INDENT + 1).max(1);
+fn render_user_message_block(
+    lines: &mut Vec<Line<'static>>,
+    text: &str,
+    width: usize,
+    layout: UiLayout,
+) {
+    let content_width = width.saturating_sub(layout.user_bubble_indent() + 1).max(1);
     let text_width = content_width
-        .saturating_sub(USER_BUBBLE_INNER_PADDING * 2)
+        .saturating_sub(layout.user_bubble_inner_padding * 2)
         .max(1);
     let wrapped = wrap_text(text, text_width);
 
     ensure_single_blank_line(lines);
-    lines.push(build_user_bubble_line("", content_width));
+    lines.push(build_user_bubble_line("", content_width, layout));
     for line in wrapped {
-        lines.push(build_user_bubble_line(&line, content_width));
+        lines.push(build_user_bubble_line(&line, content_width, layout));
     }
-    lines.push(build_user_bubble_line("", content_width));
+    lines.push(build_user_bubble_line("", content_width, layout));
     lines.push(Line::from(""));
 }
 
@@ -1485,19 +1557,19 @@ fn line_is_empty(line: &Line<'_>) -> bool {
     line.spans.iter().all(|span| span.content.is_empty())
 }
 
-fn build_user_bubble_line(content: &str, content_width: usize) -> Line<'static> {
+fn build_user_bubble_line(content: &str, content_width: usize, layout: UiLayout) -> Line<'static> {
     let trimmed = truncate_chars(
         content,
-        content_width.saturating_sub(USER_BUBBLE_INNER_PADDING * 2),
+        content_width.saturating_sub(layout.user_bubble_inner_padding * 2),
     );
-    let leading = " ".repeat(USER_BUBBLE_INNER_PADDING);
+    let leading = " ".repeat(layout.user_bubble_inner_padding);
     let trailing_len = content_width
-        .saturating_sub(USER_BUBBLE_INNER_PADDING * 2)
+        .saturating_sub(layout.user_bubble_inner_padding * 2)
         .saturating_sub(trimmed.chars().count());
-    let trailing = " ".repeat(trailing_len + USER_BUBBLE_INNER_PADDING);
+    let trailing = " ".repeat(trailing_len + layout.user_bubble_inner_padding);
 
     Line::from(vec![
-        Span::raw(" ".repeat(USER_BUBBLE_INDENT)),
+        Span::raw(" ".repeat(layout.user_bubble_indent())),
         Span::styled("▌", Style::default().fg(ACCENT).bg(INPUT_PANEL_BG)),
         Span::styled(
             format!("{}{}{}", leading, trimmed, trailing),
@@ -1724,6 +1796,7 @@ fn render_side_by_side_diff_row(
     row: &SideBySideDiffRow,
     left_width: usize,
     right_width: usize,
+    layout: UiLayout,
 ) {
     let left_text = render_diff_cell(row.left.as_ref(), left_width);
     let right_text = render_diff_cell(row.right.as_ref(), right_width);
@@ -1752,7 +1825,7 @@ fn render_side_by_side_diff_row(
     };
 
     lines.push(Line::from(vec![
-        Span::raw(message_child_indent()),
+        Span::raw(layout.message_child_indent()),
         Span::styled(left_text, left_style),
         Span::styled(" | ", Style::default().fg(DIFF_META_FG)),
         Span::styled(right_text, right_style),
@@ -1822,10 +1895,6 @@ fn sidebar_prefixed(text: &str) -> String {
 
 fn sidebar_label(text: &str) -> String {
     format!("{SIDEBAR_LABEL_INDENT}{text}")
-}
-
-fn message_child_indent() -> String {
-    " ".repeat(MESSAGE_INDENT.chars().count() + 2)
 }
 
 fn truncate_chars(input: &str, max_chars: usize) -> String {

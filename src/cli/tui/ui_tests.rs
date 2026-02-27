@@ -1,7 +1,7 @@
 use super::app::{ChatApp, ChatMessage, ModelOptionView, TodoItemView, TodoPriority, TodoStatus};
 use super::event::TuiEvent;
-use super::ui::{build_message_lines, render_app};
-use ratatui::{backend::TestBackend, style::Color, Terminal};
+use super::ui::{UiLayout, build_message_lines, render_app};
+use ratatui::{Terminal, backend::TestBackend, style::Color};
 use serde_json::json;
 
 fn line_text(line: &ratatui::text::Line<'_>) -> String {
@@ -13,6 +13,10 @@ fn line_text(line: &ratatui::text::Line<'_>) -> String {
 
 fn leading_spaces(text: &str) -> usize {
     text.chars().take_while(|c| *c == ' ').count()
+}
+
+fn test_layout() -> UiLayout {
+    UiLayout::default()
 }
 
 #[test]
@@ -87,13 +91,17 @@ fn compaction_renders_separator_and_preserves_previous_messages() {
     let lines = build_message_lines(&app, 100);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("Before compaction")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Before compaction"))
+    );
     assert!(rendered.iter().any(|line| line.contains("Compaction")));
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("Keep key requirements")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Keep key requirements"))
+    );
 }
 
 #[test]
@@ -211,11 +219,13 @@ fn test_fenced_code_block_preserves_indentation() {
 
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
+    let layout = test_layout();
 
     assert!(
-        rendered
-            .iter()
-            .any(|line| { line.trim_end().ends_with(".iter()") && leading_spaces(line) >= 8 }),
+        rendered.iter().any(|line| {
+            line.trim_end().ends_with(".iter()")
+                && leading_spaces(line) >= layout.message_indent_width() + 4
+        }),
         "Expected leading spaces in code line to be preserved"
     );
 }
@@ -346,6 +356,7 @@ fn thinking_continuation_lines_use_message_indent() {
         .iter()
         .map(line_text)
         .collect();
+    let layout = test_layout();
 
     let think_idx = rendered
         .iter()
@@ -356,7 +367,10 @@ fn thinking_continuation_lines_use_message_indent() {
         !rendered[think_idx + 1].is_empty(),
         "expected wrapped continuation line"
     );
-    assert_eq!(leading_spaces(&rendered[think_idx + 1]), 4);
+    assert_eq!(
+        leading_spaces(&rendered[think_idx + 1]),
+        layout.message_indent_width()
+    );
 }
 
 #[test]
@@ -457,7 +471,13 @@ fn user_prompt_box_has_inner_top_bottom_padding_and_left_indent() {
 
     let bubble_lines: Vec<&String> = rendered.iter().filter(|line| line.contains('▌')).collect();
     assert!(bubble_lines.len() >= 3);
-    assert!(bubble_lines.iter().all(|line| line.starts_with("  ▌")));
+    let layout = test_layout();
+    let bubble_prefix = format!("{}▌", " ".repeat(layout.main_content_left_offset()));
+    assert!(
+        bubble_lines
+            .iter()
+            .all(|line| line.starts_with(&bubble_prefix))
+    );
 }
 
 #[test]
@@ -476,7 +496,11 @@ fn error_message_uses_message_indent() {
         .iter()
         .find(|line| line.contains("Error:"))
         .expect("error line");
-    assert!(error_line.starts_with("    Error:"));
+    let layout = test_layout();
+    assert!(error_line.starts_with(&format!(
+        "{}Error:",
+        " ".repeat(layout.message_indent_width())
+    )));
 }
 
 #[test]
@@ -620,15 +644,21 @@ fn edit_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("src/main.rs  +1 -1")));
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("+") && line.contains("new")));
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("-") && line.contains("old")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("src/main.rs  +1 -1"))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("+") && line.contains("new"))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("-") && line.contains("old"))
+    );
 
     let added_span = lines
         .iter()
@@ -665,15 +695,21 @@ fn write_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("README.md  +2 -1")));
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("+") && line.contains("new")));
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("-") && line.contains("old")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("README.md  +2 -1"))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("+") && line.contains("new"))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("-") && line.contains("old"))
+    );
 }
 
 #[test]
@@ -698,9 +734,11 @@ fn edit_diff_header_includes_tool_name() {
         .iter()
         .map(line_text)
         .collect();
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("Edit src/main.rs  +1 -1")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Edit src/main.rs  +1 -1"))
+    );
 }
 
 #[test]
@@ -725,9 +763,11 @@ fn side_by_side_diff_pairs_removed_and_added_lines() {
         .iter()
         .map(line_text)
         .collect();
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("old") && line.contains("|") && line.contains("new")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("old") && line.contains("|") && line.contains("new"))
+    );
 }
 
 #[test]
@@ -882,23 +922,25 @@ fn input_panel_keeps_top_padding_and_renders_second_line() {
         .expect("draw app");
 
     let buffer = terminal.backend().buffer();
-    let text_x = 5;
-    let mut y_a = None;
-    let mut y_b = None;
-    for y in 0..25 {
-        let symbol = buffer[(text_x, y as u16)].symbol();
-        if symbol == "a" {
-            y_a = Some(y as u16);
-        }
-        if symbol == "b" {
-            y_b = Some(y as u16);
+    let mut pos_a = None;
+    let mut pos_b = None;
+    for y in 0..25u16 {
+        for x in 0..120u16 {
+            let symbol = buffer[(x, y)].symbol();
+            if symbol == "a" {
+                pos_a = Some((x, y));
+            }
+            if symbol == "b" {
+                pos_b = Some((x, y));
+            }
         }
     }
 
-    let y_a = y_a.expect("find first input line");
-    let y_b = y_b.expect("find second input line");
+    let (x_a, y_a) = pos_a.expect("find first input line");
+    let (x_b, y_b) = pos_b.expect("find second input line");
+    assert_eq!(x_a, x_b);
     assert_eq!(y_b, y_a + 1);
-    assert_eq!(buffer[(text_x, y_a - 1)].symbol(), " ");
+    assert_eq!(buffer[(x_a, y_a - 1)].symbol(), " ");
 }
 
 #[test]
@@ -949,29 +991,28 @@ fn input_panel_renders_model_line_with_blank_separator() {
         .expect("draw app");
 
     let buffer = terminal.backend().buffer();
-    let text_x = 5u16;
-    let mut input_y = None;
+    let mut input_pos = None;
     let mut status_y = None;
 
     for y in 0..25u16 {
-        let symbol = buffer[(text_x, y)].symbol();
-        if symbol == "h" {
-            input_y = Some(y);
+        let row_text = (0..120u16)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect::<String>();
+        if row_text.contains("OpenAI GPT-5") {
+            status_y = Some(y);
         }
-        if symbol == "O" {
-            let row_text = (text_x..90)
-                .map(|x| buffer[(x, y)].symbol())
-                .collect::<String>();
-            if row_text.contains("OpenAI GPT-5") {
-                status_y = Some(y);
+
+        for x in 0..120u16 {
+            if buffer[(x, y)].symbol() == "h" {
+                input_pos = Some((x, y));
             }
         }
     }
 
-    let input_y = input_y.expect("find input row");
+    let (input_x, input_y) = input_pos.expect("find input row");
     let status_y = status_y.expect("find model status row");
     assert_eq!(status_y, input_y + 2);
-    assert_eq!(buffer[(text_x, input_y + 1)].symbol(), " ");
+    assert_eq!(buffer[(input_x, input_y + 1)].symbol(), " ");
 }
 
 #[test]
