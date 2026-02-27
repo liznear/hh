@@ -52,6 +52,72 @@ pub enum ChatMessage {
 
 use crate::session::SessionMetadata;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionPosition {
+    pub line: usize,
+    pub column: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ClipboardNotice {
+    pub x: u16,
+    pub y: u16,
+    pub expires_at: Instant,
+}
+
+impl SelectionPosition {
+    pub fn new(line: usize, column: usize) -> Self {
+        Self { line, column }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextSelection {
+    None,
+    InProgress {
+        start: SelectionPosition,
+    },
+    Active {
+        start: SelectionPosition,
+        end: SelectionPosition,
+    },
+}
+
+impl TextSelection {
+    pub fn is_none(&self) -> bool {
+        matches!(self, TextSelection::None)
+    }
+
+    pub fn is_active(&self) -> bool {
+        matches!(self, TextSelection::Active { .. })
+    }
+
+    pub fn get_range(&self) -> Option<(SelectionPosition, SelectionPosition)> {
+        match self {
+            TextSelection::Active { start, end } => {
+                let (start_pos, end_pos) = if start.line < end.line
+                    || (start.line == end.line && start.column <= end.column)
+                {
+                    (*start, *end)
+                } else {
+                    (*end, *start)
+                };
+                Some((start_pos, end_pos))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn get_active_start(&self) -> Option<SelectionPosition> {
+        match self {
+            TextSelection::Active { start, .. } | TextSelection::InProgress { start } => {
+                Some(*start)
+            }
+            TextSelection::None => None,
+        }
+    }
+}
+
 pub struct ChatApp {
     pub messages: Vec<ChatMessage>,
     pub input: String,
@@ -77,6 +143,9 @@ pub struct ChatApp {
     pub selected_command_index: usize,
     pub pending_attachments: Vec<MessageAttachment>,
     preferred_column: Option<usize>,
+    // Text selection state
+    pub text_selection: TextSelection,
+    pub clipboard_notice: Option<ClipboardNotice>,
 }
 
 pub struct SubmittedInput {
@@ -111,6 +180,8 @@ impl ChatApp {
             selected_command_index: 0,
             pending_attachments: Vec::new(),
             preferred_column: None,
+            text_selection: TextSelection::None,
+            clipboard_notice: None,
         }
     }
 
@@ -503,8 +574,129 @@ impl ChatApp {
         self.cursor = line_col_to_cursor(&self.input, target_line, target_column);
         self.preferred_column = Some(target_column);
     }
-}
 
+    // Text selection methods
+    pub fn start_selection(&mut self, line: usize, column: usize) {
+        self.text_selection = TextSelection::InProgress {
+            start: SelectionPosition::new(line, column),
+        };
+    }
+
+    pub fn update_selection(&mut self, line: usize, column: usize) {
+        match &self.text_selection {
+            TextSelection::InProgress { start } => {
+                self.text_selection = TextSelection::Active {
+                    start: *start,
+                    end: SelectionPosition::new(line, column),
+                };
+            }
+            TextSelection::Active { start, .. } => {
+                self.text_selection = TextSelection::Active {
+                    start: *start,
+                    end: SelectionPosition::new(line, column),
+                };
+            }
+            TextSelection::None => {
+                self.start_selection(line, column);
+            }
+        }
+    }
+
+    pub fn end_selection(&mut self) {
+        if let TextSelection::InProgress { .. } = self.text_selection {
+            self.text_selection = TextSelection::None;
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.text_selection = TextSelection::None;
+    }
+
+    pub fn show_clipboard_notice(&mut self, x: u16, y: u16) {
+        self.clipboard_notice = Some(ClipboardNotice {
+            x,
+            y,
+            expires_at: Instant::now() + std::time::Duration::from_secs(1),
+        });
+    }
+
+    pub fn active_clipboard_notice(&self) -> Option<ClipboardNotice> {
+        self.clipboard_notice
+            .filter(|notice| Instant::now() <= notice.expires_at)
+    }
+
+    /// Get selected text from the lines
+    pub fn get_selected_text(&self, lines: &[Line<'static>]) -> String {
+        if !self.text_selection.is_active() {
+            return String::new();
+        }
+
+        let (start, end) = match self.text_selection.get_range() {
+            Some(range) => range,
+            None => return String::new(),
+        };
+
+        if start.line >= lines.len() || end.line >= lines.len() {
+            return String::new();
+        }
+
+        let mut selected_text = String::new();
+        let start_idx = start.line;
+        let end_idx = end.line;
+
+        for line_idx in start_idx..=end_idx {
+            let line = &lines[line_idx];
+            let line_text = line
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>();
+
+            let (start_col, end_col) = if line_idx == start_idx && line_idx == end_idx {
+                (start.column, end.column)
+            } else if line_idx == start_idx {
+                (start.column, line_text.chars().count())
+            } else if line_idx == end_idx {
+                (0, end.column)
+            } else {
+                (0, line_text.chars().count())
+            };
+
+            let chars: Vec<char> = line_text.chars().collect();
+            let clamped_start = start_col.min(chars.len());
+            let clamped_end = end_col.min(chars.len());
+            if clamped_start >= clamped_end {
+                continue;
+            }
+            let selected_line = chars[clamped_start..clamped_end].iter().collect::<String>();
+
+            selected_text.push_str(&selected_line);
+            if line_idx < end_idx {
+                selected_text.push('\n');
+            }
+        }
+
+        selected_text
+    }
+
+    /// Check if a point (line, column) is within the selection
+    pub fn is_point_selected(&self, line: usize, column: usize) -> bool {
+        let (start, end) = match self.text_selection.get_range() {
+            Some(range) => range,
+            None => return false,
+        };
+
+        if line > end.line || (line == end.line && column > end.column) {
+            return false;
+        }
+
+        if line < start.line || (line == start.line && column < start.column) {
+            return false;
+        }
+
+        true
+    }
+}
 impl TodoStatus {
     pub fn from_wire(status: &str) -> Option<Self> {
         match status {

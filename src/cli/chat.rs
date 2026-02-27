@@ -191,6 +191,9 @@ enum InputEvent {
     ScrollUp,
     ScrollDown,
     Refresh,
+    MouseClick { x: u16, y: u16 },
+    MouseDrag { x: u16, y: u16 },
+    MouseRelease { x: u16, y: u16 },
 }
 
 const INPUT_POLL_TIMEOUT: Duration = Duration::from_millis(16);
@@ -666,6 +669,90 @@ fn scroll_bounds(app: &ChatApp, width: u16, height: u16) -> (usize, usize) {
     (total_lines, visible_height)
 }
 
+/// Copy selected text to clipboard
+fn copy_selection_to_clipboard(app: &ChatApp, terminal_width: u16) -> bool {
+    let wrap_width = app.message_wrap_width(terminal_width);
+    let lines = app.get_lines(wrap_width);
+    let selected_text = app.get_selected_text(&lines);
+
+    if !selected_text.is_empty() {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            if clipboard.set_text(&selected_text).is_ok() {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Handle mouse click - start text selection
+fn handle_mouse_click(app: &mut ChatApp, x: u16, y: u16, terminal: &tui::Tui) {
+    if let Some((line, column)) = screen_to_message_coords(app, x, y, terminal) {
+        app.start_selection(line, column);
+    }
+}
+
+/// Handle mouse drag - update text selection
+fn handle_mouse_drag(app: &mut ChatApp, x: u16, y: u16, terminal: &tui::Tui) {
+    if let Some((line, column)) = screen_to_message_coords(app, x, y, terminal) {
+        app.update_selection(line, column);
+    }
+}
+
+/// Handle mouse release - end text selection
+fn handle_mouse_release(app: &mut ChatApp, _x: u16, _y: u16, _terminal: &tui::Tui) {
+    if let Some((line, column)) = screen_to_message_coords(app, _x, _y, _terminal) {
+        app.update_selection(line, column);
+    }
+    if app.text_selection.is_active()
+        && let Ok(size) = _terminal.size()
+    {
+        if copy_selection_to_clipboard(app, size.width) {
+            app.show_clipboard_notice(_x, _y);
+        }
+        app.clear_selection();
+    }
+    app.end_selection();
+}
+
+/// Convert screen coordinates to message line and column
+fn screen_to_message_coords(
+    app: &ChatApp,
+    x: u16,
+    y: u16,
+    terminal: &tui::Tui,
+) -> Option<(usize, usize)> {
+    const MAIN_OUTER_PADDING_X: u16 = 1;
+    const MAIN_OUTER_PADDING_Y: u16 = 1;
+
+    let size = terminal.size().ok()?;
+
+    // Simplified calculation - just check if it's roughly in the message area
+    // The message area is at the top, below it are processing indicator and input
+    let input_area_height = 6; // Approximate input area height
+    if y < MAIN_OUTER_PADDING_Y || y >= size.height.saturating_sub(input_area_height) {
+        return None;
+    }
+
+    let relative_y = (y - MAIN_OUTER_PADDING_Y) as usize;
+    let relative_x = x.saturating_sub(MAIN_OUTER_PADDING_X) as usize;
+
+    let wrap_width = app.message_wrap_width(size.width);
+    let total_lines = app.get_lines(wrap_width).len();
+    let visible_height = app.message_viewport_height(size.height);
+    let scroll_offset = if app.auto_scroll {
+        total_lines.saturating_sub(visible_height)
+    } else {
+        app.scroll_offset
+    };
+
+    let line = scroll_offset.saturating_add(relative_y);
+    let column = relative_x;
+
+    Some((line, column))
+}
+
 fn spawn_agent_task(
     settings: &Settings,
     cwd: &Path,
@@ -697,6 +784,24 @@ fn handle_mouse_event(mouse: MouseEvent) -> Option<InputEvent> {
     match mouse.kind {
         MouseEventKind::ScrollUp => Some(InputEvent::ScrollUp),
         MouseEventKind::ScrollDown => Some(InputEvent::ScrollDown),
+        MouseEventKind::Down(button) if button == crossterm::event::MouseButton::Left => {
+            Some(InputEvent::MouseClick {
+                x: mouse.column,
+                y: mouse.row,
+            })
+        }
+        MouseEventKind::Drag(button) if button == crossterm::event::MouseButton::Left => {
+            Some(InputEvent::MouseDrag {
+                x: mouse.column,
+                y: mouse.row,
+            })
+        }
+        MouseEventKind::Up(button) if button == crossterm::event::MouseButton::Left => {
+            Some(InputEvent::MouseRelease {
+                x: mouse.column,
+                y: mouse.row,
+            })
+        }
         _ => None,
     }
 }
@@ -752,6 +857,15 @@ async fn run_interactive_chat_loop(
                     InputEvent::Refresh => {
                         tui_guard.get().autoresize()?;
                         tui_guard.get().clear()?;
+                    }
+                    InputEvent::MouseClick { x, y } => {
+                        handle_mouse_click(app, x, y, tui_guard.get());
+                    }
+                    InputEvent::MouseDrag { x, y } => {
+                        handle_mouse_drag(app, x, y, tui_guard.get());
+                    }
+                    InputEvent::MouseRelease { x, y } => {
+                        handle_mouse_release(app, x, y, tui_guard.get());
                     }
                     }
                 }

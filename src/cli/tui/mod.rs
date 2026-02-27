@@ -12,7 +12,7 @@ pub use app::{ChatApp, ChatMessage, SubmittedInput};
 pub use commands::SlashCommand;
 pub use debug::DebugRenderer;
 pub use event::{TuiEvent, TuiEventSender};
-pub use terminal::{TuiGuard, restore_terminal, setup_terminal};
+pub use terminal::{Tui, TuiGuard, restore_terminal, setup_terminal};
 pub use ui::{build_message_lines, render_app};
 
 #[cfg(test)]

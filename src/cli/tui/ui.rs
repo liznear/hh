@@ -4,7 +4,7 @@ use ratatui::{
     prelude::Stylize,
     style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Clear, List, ListItem, Padding, Paragraph, Wrap},
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -39,6 +39,8 @@ const TEXT_SECONDARY: Color = Color::Rgb(98, 108, 124);
 const TEXT_MUTED: Color = Color::Rgb(125, 133, 147);
 const ACCENT: Color = Color::Rgb(55, 114, 255);
 const INPUT_ACCENT: Color = Color::Rgb(19, 164, 151);
+const SELECTION_BG: Color = Color::Rgb(55, 114, 255);
+const NOTICE_BG: Color = Color::Rgb(224, 227, 233);
 const PROGRESS_TRACK: Color = Color::Rgb(203, 182, 248);
 const PROGRESS_TRAIL: Color = Color::Rgb(162, 120, 238);
 const PROGRESS_HEAD: Color = Color::Rgb(124, 72, 227);
@@ -136,6 +138,47 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
         };
         render_sidebar(f, app, clipped_sidebar_area);
     }
+
+    render_clipboard_notice(f, app);
+}
+
+fn render_clipboard_notice(f: &mut Frame, app: &ChatApp) {
+    let Some(notice) = app.active_clipboard_notice() else {
+        return;
+    };
+
+    let label = "Copied";
+    let width = (label.len() as u16).saturating_add(4);
+    let height = 3u16;
+    let area = f.area();
+
+    if area.width < width || area.height < height {
+        return;
+    }
+
+    let max_x = area.right().saturating_sub(width);
+    let max_y = area.bottom().saturating_sub(height);
+    let x = notice.x.saturating_add(1).clamp(area.x, max_x);
+    let y = notice.y.saturating_sub(1).clamp(area.y, max_y);
+    let popup = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+
+    f.render_widget(Clear, popup);
+    let block = Block::default()
+        .style(Style::default().bg(NOTICE_BG).fg(TEXT_MUTED))
+        .padding(Padding::new(2, 2, 1, 1));
+    let content = block.inner(popup);
+    f.render_widget(block, popup);
+    f.render_widget(
+        Paragraph::new(label)
+            .style(Style::default().fg(TEXT_PRIMARY).bg(NOTICE_BG))
+            .wrap(Wrap { trim: true }),
+        content,
+    );
 }
 
 fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect) {
@@ -313,12 +356,111 @@ fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
         app.scroll_offset
     };
 
-    let text = Text::from(lines.to_vec());
+    let mut rendered_lines = lines.to_vec();
+    apply_selection_highlight(&mut rendered_lines, app);
+    let text = Text::from(rendered_lines);
     let paragraph = Paragraph::new(text)
         .style(Style::default().bg(PAGE_BG).fg(TEXT_PRIMARY))
         .scroll((scroll_offset as u16, 0));
 
     f.render_widget(paragraph, content);
+}
+
+fn apply_selection_highlight(lines: &mut [Line<'static>], app: &ChatApp) {
+    let Some((start, end)) = app.text_selection.get_range() else {
+        return;
+    };
+
+    for (line_idx, line) in lines.iter_mut().enumerate() {
+        if line_idx < start.line || line_idx > end.line {
+            continue;
+        }
+
+        let line_len = line_char_count(line);
+        let start_col = if line_idx == start.line {
+            start.column
+        } else {
+            0
+        };
+        let end_col = if line_idx == end.line {
+            end.column
+        } else {
+            line_len
+        };
+
+        let clamped_start = start_col.min(line_len);
+        let clamped_end = end_col.min(line_len);
+        if clamped_start >= clamped_end {
+            continue;
+        }
+
+        highlight_line_range(line, clamped_start, clamped_end);
+    }
+}
+
+fn highlight_line_range(line: &mut Line<'static>, start: usize, end: usize) {
+    let original_spans = std::mem::take(&mut line.spans);
+    let mut highlighted = Vec::with_capacity(original_spans.len() + 2);
+    let mut cursor = 0usize;
+
+    for span in original_spans {
+        let content = span.content.as_ref();
+        let span_len = content.chars().count();
+        let span_start = cursor;
+        let span_end = span_start + span_len;
+
+        if span_len == 0 || end <= span_start || start >= span_end {
+            highlighted.push(span);
+            cursor = span_end;
+            continue;
+        }
+
+        let local_start = start.saturating_sub(span_start).min(span_len);
+        let local_end = end.saturating_sub(span_start).min(span_len);
+
+        if local_start > 0 {
+            highlighted.push(Span::styled(
+                char_slice(content, 0, local_start),
+                span.style,
+            ));
+        }
+
+        if local_start < local_end {
+            let selected_style = span
+                .style
+                .patch(Style::default().bg(SELECTION_BG).fg(Color::White));
+            highlighted.push(Span::styled(
+                char_slice(content, local_start, local_end),
+                selected_style,
+            ));
+        }
+
+        if local_end < span_len {
+            highlighted.push(Span::styled(
+                char_slice(content, local_end, span_len),
+                span.style,
+            ));
+        }
+
+        cursor = span_end;
+    }
+
+    line.spans = highlighted;
+}
+
+fn line_char_count(line: &Line<'static>) -> usize {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref().chars().count())
+        .sum()
+}
+
+fn char_slice(input: &str, start: usize, end: usize) -> String {
+    input
+        .chars()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .collect()
 }
 
 /// Build message lines (used for caching and scroll bounds)
