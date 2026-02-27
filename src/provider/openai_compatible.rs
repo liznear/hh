@@ -57,7 +57,6 @@ impl OpenAiCompatibleProvider {
         } else {
             req.model.as_str()
         };
-        let model = select_model_for_request(self.base_url.as_str(), requested_model, req);
 
         let tools = if include_tools {
             req.tools
@@ -84,7 +83,7 @@ impl OpenAiCompatibleProvider {
             .collect::<Vec<_>>();
 
         let mut body = json!({
-            "model": model,
+            "model": requested_model,
             "messages": messages,
             "stream": stream,
         });
@@ -413,21 +412,6 @@ fn should_retry_for_image_payload(status: reqwest::StatusCode, body: &str) -> bo
         || lower.contains("invalid parameter")
         || lower.contains("image_url")
         || lower.contains("invalid type")
-}
-
-fn select_model_for_request(
-    base_url: &str,
-    requested_model: &str,
-    req: &ProviderRequest,
-) -> String {
-    if has_image_attachments(req)
-        && base_url.contains("api.z.ai")
-        && requested_model.starts_with("glm-")
-        && !requested_model.contains('v')
-    {
-        return "glm-4.6v".to_string();
-    }
-    requested_model.to_string()
 }
 
 fn role_to_wire(role: &Role) -> &'static str {

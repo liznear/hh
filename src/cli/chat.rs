@@ -956,6 +956,8 @@ async fn run_agent(
     session_id: Option<String>,
     session_title: Option<String>,
 ) -> anyhow::Result<()> {
+    validate_image_input_model_support(&settings, &model_ref, &prompt)?;
+
     let loop_runner =
         create_agent_loop(settings, cwd, &model_ref, events, session_id, session_title)?;
 
@@ -967,6 +969,35 @@ async fn run_agent(
         .await?;
 
     Ok(())
+}
+
+fn validate_image_input_model_support(
+    settings: &Settings,
+    model_ref: &str,
+    prompt: &Message,
+) -> anyhow::Result<()> {
+    if prompt.attachments.is_empty() {
+        return Ok(());
+    }
+
+    let selected = settings
+        .resolve_model_ref(model_ref)
+        .with_context(|| format!("unknown model reference: {model_ref}"))?;
+    let supports_image_input = selected
+        .model
+        .modalities
+        .input
+        .iter()
+        .any(|modality| *modality == crate::config::settings::ModelModalityType::Image);
+
+    if supports_image_input {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "Model `{model_ref}` does not support image input (input modalities: {}).",
+        format_modalities(&selected.model.modalities.input)
+    )
 }
 
 pub async fn run_single_prompt(
