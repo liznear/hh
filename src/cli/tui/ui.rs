@@ -268,27 +268,6 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
         format_sidebar_directory(&app.working_directory, app.git_branch.as_deref());
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(Span::styled(
-            sidebar_prefixed("/ / / / / / / /"),
-            Style::default().fg(ACCENT),
-        )),
-        Line::from(Span::styled(
-            sidebar_prefixed("HH"),
-            Style::default().fg(INPUT_ACCENT).bold(),
-        )),
-        Line::from(Span::styled(
-            sidebar_prefixed("H H"),
-            Style::default().fg(ACCENT).bold(),
-        )),
-        Line::from(Span::styled(
-            sidebar_prefixed("HHH"),
-            Style::default().fg(INPUT_ACCENT).bold(),
-        )),
-        Line::from(Span::styled(
-            sidebar_prefixed("/ / / / / / / /"),
-            Style::default().fg(ACCENT),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
             sidebar_prefixed(&app.session_name),
             Style::default().fg(TEXT_PRIMARY).bold(),
         )),
