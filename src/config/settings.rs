@@ -14,6 +14,10 @@ pub struct Settings {
     pub tools: ToolSettings,
     pub permission: PermissionSettings,
     pub session: SessionSettings,
+    #[serde(default)]
+    pub selected_agent: Option<String>,
+    #[serde(default)]
+    pub agents: BTreeMap<String, AgentSpecificSettings>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -380,6 +384,51 @@ impl Default for SessionSettings {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         Self {
             root: home.join(".local/state/hh/sessions"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentSpecificSettings {
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+impl Settings {
+    pub fn apply_agent_settings(&mut self, agent: &crate::agent::AgentConfig) {
+        // Apply agent system prompt if specified
+        if let Some(prompt) = &agent.system_prompt {
+            self.agent.system_prompt = Some(prompt.clone());
+        }
+
+        // Apply agent model or use global override
+        let model_to_use = agent
+            .model
+            .as_ref()
+            .or_else(|| self.agents.get(&agent.name).and_then(|s| s.model.as_ref()))
+            .or_else(|| Some(&self.models.default));
+
+        if let Some(model) = model_to_use {
+            self.models.default = model.clone();
+        }
+
+        // Apply permission overrides
+        for (capability, policy) in &agent.permission_overrides {
+            match capability.as_str() {
+                "read" => self.permission.read = policy.clone(),
+                "list" => self.permission.list = policy.clone(),
+                "glob" => self.permission.glob = policy.clone(),
+                "grep" => self.permission.grep = policy.clone(),
+                "write" => self.permission.write = policy.clone(),
+                "edit" => self.permission.edit = policy.clone(),
+                "todo_write" => self.permission.todo_write = policy.clone(),
+                "todo_read" => self.permission.todo_read = policy.clone(),
+                "bash" => self.permission.bash = policy.clone(),
+                "web" => self.permission.web = policy.clone(),
+                _ => {
+                    self.permission.capabilities.insert(capability.clone(), policy.clone());
+                }
+            }
         }
     }
 }

@@ -19,6 +19,9 @@ pub enum Commands {
         /// Limit autonomous turns; unlimited when omitted
         #[arg(long, value_parser = parse_positive_usize)]
         max_turns: Option<usize>,
+        /// Select agent to use
+        #[arg(long)]
+        agent: Option<String>,
     },
     /// Replay debug frames from a directory
     Replay {
@@ -40,7 +43,12 @@ pub enum Commands {
         /// Limit autonomous turns; unlimited when omitted
         #[arg(long, value_parser = parse_positive_usize)]
         max_turns: Option<usize>,
+        /// Select agent to use
+        #[arg(long)]
+        agent: Option<String>,
     },
+    /// List available agents
+    Agents,
     /// List available tools
     Tools,
     /// Manage configuration

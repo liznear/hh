@@ -8,10 +8,11 @@ use crossterm::event::{
 };
 use tokio::sync::mpsc;
 
+use crate::cli::agent_init;
 use crate::cli::render;
 use crate::cli::tui::{
-    self, ChatApp, DebugRenderer, ModelOptionView, ScopedTuiEvent, SubmittedInput, TuiEvent,
-    TuiEventSender,
+    self, ChatApp, DebugRenderer, ModelOptionView, ScopedTuiEvent,
+    SubmittedInput, TuiEvent, TuiEventSender,
 };
 use crate::config::Settings;
 use crate::core::agent::{AgentEvents, AgentLoop, NoopEvents};
@@ -33,6 +34,11 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
         settings.selected_model_ref().to_string(),
         build_model_options(&settings),
     );
+    
+    // Initialize agents
+    let (agent_views, selected_agent) = agent_init::initialize_agents(&settings)?;
+    app.set_agents(agent_views, selected_agent);
+    
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
@@ -72,6 +78,11 @@ pub async fn run_chat_with_debug(
         settings.selected_model_ref().to_string(),
         build_model_options(&settings),
     );
+    
+    // Initialize agents
+    let (agent_views, selected_agent) = agent_init::initialize_agents(&settings)?;
+    app.set_agents(agent_views, selected_agent);
+    
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
@@ -114,6 +125,11 @@ pub async fn run_prompt_with_debug(
         settings.selected_model_ref().to_string(),
         build_model_options(&settings),
     );
+    
+    // Initialize agents
+    let (agent_views, selected_agent) = agent_init::initialize_agents(&settings)?;
+    app.set_agents(agent_views, selected_agent);
+    
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
@@ -319,6 +335,9 @@ where
         }
         KeyCode::Enter => {
             handle_enter_key(app, settings, cwd, event_sender);
+        }
+        KeyCode::Tab => {
+            app.cycle_agent();
         }
         KeyCode::Esc => {
             mutate_input(app, ChatApp::clear_input);

@@ -1,3 +1,4 @@
+use crate::agent::{AgentLoader, AgentRegistry};
 use crate::config::settings::Settings;
 use anyhow::Context;
 use std::{env, fs, path::PathBuf};
@@ -11,7 +12,7 @@ pub fn project_config_path(cwd: &std::path::Path) -> PathBuf {
     cwd.join(".hh/config.json")
 }
 
-pub fn load_settings(cwd: &std::path::Path) -> anyhow::Result<Settings> {
+pub fn load_settings(cwd: &std::path::Path, agent_name: Option<String>) -> anyhow::Result<Settings> {
     let mut settings = Settings::default();
 
     merge_settings_file(&mut settings, &global_config_path())?;
@@ -27,6 +28,18 @@ pub fn load_settings(cwd: &std::path::Path) -> anyhow::Result<Settings> {
         provider.api_key_env = value;
     });
     override_optional_from_env(&mut settings.agent.system_prompt, "HH_SYSTEM_PROMPT");
+
+    // Apply agent settings if specified
+    if let Some(name) = agent_name {
+        settings.selected_agent = Some(name.clone());
+        let loader = AgentLoader::new()?;
+        let agents = loader.load_agents()?;
+        let registry = AgentRegistry::new(agents);
+        
+        if let Some(agent) = registry.get_agent(&name) {
+            settings.apply_agent_settings(agent);
+        }
+    }
 
     Ok(settings)
 }

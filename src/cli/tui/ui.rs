@@ -935,13 +935,11 @@ fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
     let status_y = content_y
         .saturating_add(content_height.saturating_sub(1))
         .min(area.bottom().saturating_sub(1));
-    let status = format!(
-        "{} {}",
-        selected_provider_name(app),
-        selected_model_name(app)
-    );
+    
+    // Build status line with agent name, provider, and model
+    let status_lines = build_status_line(app);
     f.render_widget(
-        Paragraph::new(status)
+        Paragraph::new(status_lines)
             .style(Style::default().fg(TEXT_MUTED).bg(INPUT_PANEL_BG))
             .wrap(Wrap { trim: false }),
         Rect {
@@ -991,6 +989,35 @@ fn selected_model_name(app: &ChatApp) -> String {
                 .map(|(_, model)| model.to_string())
                 .unwrap_or_else(|| app.selected_model_ref().to_string())
         })
+}
+
+fn build_status_line(app: &ChatApp) -> Line<'static> {
+    let provider_name = selected_provider_name(app);
+    let model_name = selected_model_name(app);
+
+    if let Some(agent) = app.selected_agent() {
+        // Parse agent color, default to TEXT_PRIMARY
+        let agent_color = agent
+            .color
+            .as_ref()
+            .and_then(|c| crate::agent::parse_color(c))
+            .unwrap_or(TEXT_PRIMARY);
+
+        Line::from(vec![
+            Span::styled(agent.display_name.clone(), Style::default().fg(agent_color)),
+            Span::raw(" "),
+            Span::styled(provider_name, Style::default().fg(TEXT_MUTED)),
+            Span::raw(" "),
+            Span::styled(model_name, Style::default().fg(TEXT_MUTED)),
+        ])
+    } else {
+        // No agent selected, show only provider and model
+        Line::from(vec![
+            Span::styled(provider_name, Style::default().fg(TEXT_MUTED)),
+            Span::raw(" "),
+            Span::styled(model_name, Style::default().fg(TEXT_MUTED)),
+        ])
+    }
 }
 
 #[derive(Clone)]

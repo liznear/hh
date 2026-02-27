@@ -1,3 +1,4 @@
+pub mod agent_init;
 pub mod chat;
 pub mod commands;
 pub mod render;
@@ -12,10 +13,10 @@ use clap::Parser;
 pub async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
-    let settings = load_settings(&cwd)?;
 
     match cli.command {
-        Commands::Chat { debug, max_turns } => {
+        Commands::Chat { debug, max_turns, agent } => {
+            let settings = load_settings(&cwd, agent)?;
             let settings = apply_max_turns(settings, max_turns);
             if let Some(debug_path) = debug {
                 // Interactive mode with debug dumping
@@ -36,7 +37,9 @@ pub async fn run() -> anyhow::Result<()> {
             prompt,
             debug,
             max_turns,
+            agent,
         } => {
+            let settings = load_settings(&cwd, agent)?;
             let settings = apply_max_turns(settings, max_turns);
             if let Some(debug_path) = debug {
                 chat::run_prompt_with_debug(settings, &cwd, debug_path, prompt).await
@@ -48,6 +51,7 @@ pub async fn run() -> anyhow::Result<()> {
             }
         }
         Commands::Tools => {
+            let settings = load_settings(&cwd, None)?;
             let registry = crate::tool::registry::ToolRegistry::new(&settings, &cwd);
             for name in registry.names() {
                 println!("{}", name);
@@ -61,11 +65,28 @@ pub async fn run() -> anyhow::Result<()> {
                 Ok(())
             }
             ConfigCommand::Show => {
+                let settings = load_settings(&cwd, None)?;
                 let txt = serde_json::to_string_pretty(&settings)?;
                 println!("{}", txt);
                 Ok(())
             }
         },
+        Commands::Agents => {
+            let loader = crate::agent::AgentLoader::new()?;
+            let agents = loader.load_agents()?;
+            let registry = crate::agent::AgentRegistry::new(agents);
+            
+            println!("Available agents:");
+            for agent in registry.list_agents() {
+                let mode = if agent.mode == crate::agent::AgentMode::Primary {
+                    "primary"
+                } else {
+                    "subagent"
+                };
+                println!("  {} ({}) - {} - {}", agent.name, agent.display_name, mode, agent.description);
+            }
+            Ok(())
+        }
     }
 }
 

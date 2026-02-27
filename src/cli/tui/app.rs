@@ -153,6 +153,17 @@ pub struct ChatApp {
     // Text selection state
     pub text_selection: TextSelection,
     pub clipboard_notice: Option<ClipboardNotice>,
+    // Agent state
+    pub current_agent_name: Option<String>,
+    pub available_agents: Vec<AgentOptionView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentOptionView {
+    pub name: String,
+    pub display_name: String,
+    pub color: Option<String>,
+    pub mode: String,
 }
 
 pub struct SubmittedInput {
@@ -203,7 +214,51 @@ impl ChatApp {
             preferred_column: None,
             text_selection: TextSelection::None,
             clipboard_notice: None,
+            current_agent_name: None,
+            available_agents: Vec::new(),
         }
+    }
+
+    pub fn set_agents(&mut self, agents: Vec<AgentOptionView>, selected: Option<String>) {
+        self.available_agents = agents;
+        self.current_agent_name = selected;
+    }
+
+    pub fn cycle_agent(&mut self) {
+        if self.available_agents.is_empty() {
+            return;
+        }
+
+        // Only cycle through primary agents
+        let primary_agents: Vec<_> = self.available_agents
+            .iter()
+            .filter(|a| a.mode == "primary")
+            .collect();
+
+        if primary_agents.is_empty() {
+            return;
+        }
+
+        let current = self.current_agent_name.as_deref();
+
+        if let Some(current_name) = current {
+            // Find current agent index among primary agents
+            if let Some(pos) = primary_agents.iter().position(|a| a.name == current_name) {
+                // Move to next primary agent
+                let next_pos = (pos + 1) % primary_agents.len();
+                self.current_agent_name = Some(primary_agents[next_pos].name.clone());
+                return;
+            }
+        }
+
+        // If no current agent or not found, select first primary agent
+        self.current_agent_name = Some(primary_agents[0].name.clone());
+    }
+
+    pub fn selected_agent(&self) -> Option<&AgentOptionView> {
+        self.current_agent_name
+            .as_ref()
+            .and_then(|name| self.available_agents.iter().find(|a| a.name == *name))
     }
 
     pub fn handle_event(&mut self, event: &TuiEvent) {
