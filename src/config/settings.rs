@@ -6,7 +6,10 @@ use crate::core::system_prompt::default_system_prompt;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
-    pub provider: ProviderSettings,
+    #[serde(default)]
+    pub models: ModelSettings,
+    #[serde(default)]
+    pub providers: BTreeMap<String, ProviderConfig>,
     pub agent: AgentSettings,
     pub tools: ToolSettings,
     pub permission: PermissionSettings,
@@ -14,26 +17,269 @@ pub struct Settings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderSettings {
-    pub base_url: String,
-    pub model: String,
-    pub api_key_env: String,
+pub struct ModelSettings {
+    #[serde(default = "default_model_ref")]
+    pub default: String,
 }
 
-impl Default for ProviderSettings {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConfig {
+    #[serde(default)]
+    pub display_name: String,
+    pub base_url: String,
+    pub api_key_env: String,
+    #[serde(default)]
+    pub models: BTreeMap<String, ModelMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelMetadata {
+    #[serde(default, alias = "provider_model_id")]
+    pub id: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub modalities: ModelModalities,
+    #[serde(default)]
+    pub limits: ModelLimits,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelModalityType {
+    Text,
+    Image,
+    Audio,
+    Video,
+}
+
+impl std::fmt::Display for ModelModalityType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::Text => "text",
+            Self::Image => "image",
+            Self::Audio => "audio",
+            Self::Video => "video",
+        };
+        f.write_str(label)
+    }
+}
+
+impl Default for ModelModalityType {
+    fn default() -> Self {
+        Self::Text
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelModalities {
+    #[serde(default = "default_input_modalities")]
+    pub input: Vec<ModelModalityType>,
+    #[serde(default = "default_output_modalities")]
+    pub output: Vec<ModelModalityType>,
+}
+
+impl Default for ModelModalities {
     fn default() -> Self {
         Self {
-            base_url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-4.1-mini".to_string(),
-            api_key_env: "OPENAI_API_KEY".to_string(),
+            input: default_input_modalities(),
+            output: default_output_modalities(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelLimits {
+    #[serde(default = "default_model_context_limit")]
+    pub context: usize,
+    #[serde(default = "default_model_output_limit")]
+    pub output: usize,
+}
+
+impl Default for ModelLimits {
+    fn default() -> Self {
+        Self {
+            context: default_model_context_limit(),
+            output: default_model_output_limit(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedModel<'a> {
+    pub provider_id: String,
+    pub model_id: String,
+    pub provider: &'a ProviderConfig,
+    pub model: &'a ModelMetadata,
+}
+
+impl<'a> ResolvedModel<'a> {
+    pub fn full_id(&self) -> String {
+        format!("{}/{}", self.provider_id, self.model_id)
+    }
+}
+
+impl Settings {
+    pub fn selected_model_ref(&self) -> &str {
+        self.models.default.as_str()
+    }
+
+    pub fn selected_model(&self) -> Option<ResolvedModel<'_>> {
+        self.resolve_model_ref(self.models.default.as_str())
+    }
+
+    pub fn resolve_model_ref(&self, model_ref: &str) -> Option<ResolvedModel<'_>> {
+        let (provider_id, model_id) = split_model_ref(model_ref)?;
+        let provider = self.providers.get(provider_id)?;
+        let model = provider.models.get(model_id)?;
+        Some(ResolvedModel {
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+            provider,
+            model,
+        })
+    }
+
+    pub fn model_refs(&self) -> Vec<String> {
+        let mut refs = Vec::new();
+        for (provider_id, provider) in &self.providers {
+            for model_id in provider.models.keys() {
+                refs.push(format!("{provider_id}/{model_id}"));
+            }
+        }
+        refs
+    }
+
+    pub fn normalize_models(&mut self) {
+        if self.models.default.trim().is_empty() {
+            self.models.default = default_model_ref();
+        }
+
+        if self.providers.is_empty() {
+            self.providers = default_providers();
+        }
+
+        if !self.models.default.contains('/')
+            && let Some(provider_id) = self.providers.keys().next().cloned()
+        {
+            self.models.default = format!("{provider_id}/{}", self.models.default);
+        }
+
+        if let Some((provider_id, model_id)) = split_model_ref(self.models.default.as_str())
+            && let Some(provider) = self.providers.get_mut(provider_id)
+            && !provider.models.contains_key(model_id)
+        {
+            provider.models.insert(
+                model_id.to_string(),
+                ModelMetadata {
+                    id: model_id.to_string(),
+                    display_name: model_id.to_string(),
+                    modalities: ModelModalities::default(),
+                    limits: ModelLimits::default(),
+                },
+            );
+        }
+
+        for provider in self.providers.values_mut() {
+            for (model_id, model) in &mut provider.models {
+                if model.id.trim().is_empty() {
+                    model.id = model_id.clone();
+                }
+            }
+        }
+
+        if self.selected_model().is_none()
+            && let Some((provider_id, provider)) = self.providers.iter().next()
+            && let Some((model_id, _)) = provider.models.iter().next()
+        {
+            self.models.default = format!("{provider_id}/{model_id}");
+        }
+    }
+}
+
+impl Default for ModelSettings {
+    fn default() -> Self {
+        Self {
+            default: default_model_ref(),
+        }
+    }
+}
+
+fn default_provider_id() -> String {
+    "openai".to_string()
+}
+
+fn default_provider_model() -> String {
+    "gpt-4.1-mini".to_string()
+}
+
+fn default_model_ref() -> String {
+    format!("{}/{}", default_provider_id(), default_provider_model())
+}
+
+fn default_provider_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+
+fn default_api_key_env() -> String {
+    "OPENAI_API_KEY".to_string()
+}
+
+fn default_provider_display_name() -> String {
+    "OpenAI".to_string()
+}
+
+fn default_providers() -> BTreeMap<String, ProviderConfig> {
+    let mut providers = BTreeMap::new();
+    providers.insert(
+        default_provider_id(),
+        ProviderConfig {
+            display_name: default_provider_display_name(),
+            base_url: default_provider_base_url(),
+            api_key_env: default_api_key_env(),
+            models: BTreeMap::from([(
+                default_provider_model(),
+                ModelMetadata {
+                    id: default_provider_model(),
+                    display_name: "GPT-4.1 mini".to_string(),
+                    modalities: ModelModalities::default(),
+                    limits: ModelLimits::default(),
+                },
+            )]),
+        },
+    );
+    providers
+}
+
+fn split_model_ref(model_ref: &str) -> Option<(&str, &str)> {
+    let (provider_id, model_id) = model_ref.split_once('/')?;
+    let provider_id = provider_id.trim();
+    let model_id = model_id.trim();
+    if provider_id.is_empty() || model_id.is_empty() {
+        return None;
+    }
+    Some((provider_id, model_id))
+}
+
+fn default_input_modalities() -> Vec<ModelModalityType> {
+    vec![ModelModalityType::Text, ModelModalityType::Image]
+}
+
+fn default_output_modalities() -> Vec<ModelModalityType> {
+    vec![ModelModalityType::Text]
+}
+
+fn default_model_context_limit() -> usize {
+    128_000
+}
+
+fn default_model_output_limit() -> usize {
+    128_000
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSettings {
     pub max_steps: usize,
-    pub token_budget: usize,
     #[serde(default = "default_sub_agent_max_depth")]
     pub sub_agent_max_depth: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44,7 +290,6 @@ impl Default for AgentSettings {
     fn default() -> Self {
         Self {
             max_steps: 0,
-            token_budget: 32_000,
             sub_agent_max_depth: default_sub_agent_max_depth(),
             system_prompt: None,
         }

@@ -16,6 +16,7 @@ impl SlashCommand {
 pub fn get_default_commands() -> Vec<SlashCommand> {
     vec![
         SlashCommand::new("/new", "Start a new session"),
+        SlashCommand::new("/model", "List or switch active model"),
         SlashCommand::new("/compact", "Compact context for this session"),
         SlashCommand::new("/quit", "Exit the application"),
         SlashCommand::new("/resume", "Resume a previous session"),

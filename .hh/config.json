@@ -1,0 +1,50 @@
+{
+  "models": {
+    "default": "zai/glm-4.7"
+  },
+  "providers": {
+    "zai": {
+      "display_name": "Z.ai",
+      "base_url": "https://api.z.ai/api/coding/paas/v4",
+      "api_key_env": "ZAI_API_KEY",
+      "models": {
+        "glm-4.7": {
+          "id": "glm-4.7",
+          "display_name": "GLM-4.7",
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          },
+          "limits": {
+            "context": 200000,
+            "output": 128000
+          }
+        }
+      }
+    }
+  },
+  "agent": {
+    "max_steps": 0,
+    "sub_agent_max_depth": 2
+  },
+  "tools": {
+    "fs": true,
+    "bash": true,
+    "web": true
+  },
+  "permission": {
+    "read": "allow",
+    "list": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "write": "ask",
+    "edit": "ask",
+    "todo_write": "allow",
+    "bash": "ask",
+    "web": "ask",
+    "capabilities": {}
+  },
+  "session": {
+    "root": "~/.local/state/hh/sessions"
+  }
+}

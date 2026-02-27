@@ -9,7 +9,9 @@ use crossterm::event::{
 use tokio::sync::mpsc;
 
 use crate::cli::render;
-use crate::cli::tui::{self, ChatApp, DebugRenderer, SubmittedInput, TuiEvent, TuiEventSender};
+use crate::cli::tui::{
+    self, ChatApp, DebugRenderer, ModelOptionView, SubmittedInput, TuiEvent, TuiEventSender,
+};
 use crate::config::Settings;
 use crate::core::agent::{AgentEvents, AgentLoop, NoopEvents};
 use crate::core::{Message, MessageAttachment, Role};
@@ -25,7 +27,11 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
     let mut tui_guard = tui::TuiGuard::new(terminal);
 
     // Create app state and event channel
-    let mut app = ChatApp::new(build_session_name(cwd), cwd, settings.agent.token_budget);
+    let mut app = ChatApp::new(build_session_name(cwd), cwd);
+    app.configure_models(
+        settings.selected_model_ref().to_string(),
+        build_model_options(&settings),
+    );
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
@@ -60,7 +66,11 @@ pub async fn run_chat_with_debug(
     let mut debug_renderer = DebugRenderer::new(debug_dir.clone())?;
 
     // Create app state and event channel
-    let mut app = ChatApp::new(build_session_name(cwd), cwd, settings.agent.token_budget);
+    let mut app = ChatApp::new(build_session_name(cwd), cwd);
+    app.configure_models(
+        settings.selected_model_ref().to_string(),
+        build_model_options(&settings),
+    );
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
@@ -98,7 +108,11 @@ pub async fn run_prompt_with_debug(
     let mut renderer = DebugRenderer::new(output_dir.clone())?;
 
     // Create app state and event channel
-    let mut app = ChatApp::new(build_session_name(cwd), cwd, settings.agent.token_budget);
+    let mut app = ChatApp::new(build_session_name(cwd), cwd);
+    app.configure_models(
+        settings.selected_model_ref().to_string(),
+        build_model_options(&settings),
+    );
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
@@ -116,6 +130,7 @@ pub async fn run_prompt_with_debug(
 
     // Run agent in background
     let settings_clone = settings.clone();
+    let model_ref = settings.selected_model_ref().to_string();
     let cwd_clone = cwd.to_path_buf();
     let sender_clone = event_sender.clone();
     let prompt_clone = prompt.clone();
@@ -133,6 +148,7 @@ pub async fn run_prompt_with_debug(
                 attachments: Vec::new(),
                 tool_call_id: None,
             },
+            model_ref,
             sender_clone.clone(),
             None,
             Some(title_clone),
@@ -757,6 +773,7 @@ fn spawn_agent_task(
     settings: &Settings,
     cwd: &Path,
     input: Message,
+    model_ref: String,
     event_sender: &TuiEventSender,
     session_id: Option<String>,
     session_title: Option<String>,
@@ -769,6 +786,7 @@ fn spawn_agent_task(
             settings,
             &cwd,
             input,
+            model_ref,
             sender.clone(),
             session_id,
             session_title,
@@ -901,15 +919,45 @@ fn build_session_name(cwd: &std::path::Path) -> String {
         .unwrap_or_else(|| "Session".to_string())
 }
 
+fn build_model_options(settings: &Settings) -> Vec<ModelOptionView> {
+    settings
+        .model_refs()
+        .into_iter()
+        .filter_map(|model_ref| {
+            settings
+                .resolve_model_ref(&model_ref)
+                .map(|resolved| ModelOptionView {
+                    full_id: model_ref,
+                    modality: format!(
+                        "{} -> {}",
+                        format_modalities(&resolved.model.modalities.input),
+                        format_modalities(&resolved.model.modalities.output)
+                    ),
+                    max_context_size: resolved.model.limits.context,
+                })
+        })
+        .collect()
+}
+
+fn format_modalities(modalities: &[crate::config::settings::ModelModalityType]) -> String {
+    modalities
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 async fn run_agent(
     settings: Settings,
     cwd: &std::path::Path,
     prompt: Message,
+    model_ref: String,
     events: impl AgentEvents + 'static,
     session_id: Option<String>,
     session_title: Option<String>,
 ) -> anyhow::Result<()> {
-    let loop_runner = create_agent_loop(settings, cwd, events, session_id, session_title)?;
+    let loop_runner =
+        create_agent_loop(settings, cwd, &model_ref, events, session_id, session_title)?;
 
     loop_runner
         .run(prompt, |_tool_name| {
@@ -941,7 +989,9 @@ where
     // For single prompt, we create a new session (or we could make it ephemeral if we wanted)
     // Using prompt as title
     let title = prompt.chars().take(50).collect::<String>();
-    let loop_runner = create_agent_loop(settings, cwd, events, None, Some(title))?;
+    let default_model_ref = settings.selected_model_ref().to_string();
+    let loop_runner =
+        create_agent_loop(settings, cwd, &default_model_ref, events, None, Some(title))?;
 
     loop_runner
         .run(
@@ -964,6 +1014,7 @@ where
 fn create_agent_loop<E>(
     settings: Settings,
     cwd: &std::path::Path,
+    model_ref: &str,
     events: E,
     session_id: Option<String>,
     session_title: Option<String>,
@@ -973,10 +1024,13 @@ fn create_agent_loop<E>(
 where
     E: AgentEvents,
 {
+    let selected = settings
+        .resolve_model_ref(model_ref)
+        .with_context(|| format!("unknown model reference: {model_ref}"))?;
     let provider = OpenAiCompatibleProvider::new(
-        settings.provider.base_url.clone(),
-        settings.provider.model.clone(),
-        settings.provider.api_key_env.clone(),
+        selected.provider.base_url.clone(),
+        selected.model.id.clone(),
+        selected.provider.api_key_env.clone(),
     );
 
     let tool_registry = ToolRegistry::new(&settings, cwd);
@@ -995,7 +1049,7 @@ where
         tools: tool_registry,
         approvals: permissions,
         max_steps: settings.agent.max_steps,
-        model: settings.provider.model,
+        model: selected.model.id.clone(),
         system_prompt: settings.agent.resolved_system_prompt(),
         session,
         events,
@@ -1038,16 +1092,53 @@ fn handle_slash_command(
     cwd: &Path,
     event_sender: &TuiEventSender,
 ) {
-    match input.as_str() {
+    let mut parts = input.split_whitespace();
+    let command = parts.next().unwrap_or_default();
+
+    match command {
         "/new" => {
             app.start_new_session(build_session_name(cwd));
             finish_idle(app);
+        }
+        "/model" => {
+            if let Some(model_ref) = parts.next() {
+                if let Some(model) = settings.resolve_model_ref(model_ref) {
+                    app.set_selected_model(model_ref);
+                    finish_with_assistant(
+                        app,
+                        format!(
+                            "Switched to {} ({} -> {}, context: {}, output: {})",
+                            model_ref,
+                            format_modalities(&model.model.modalities.input),
+                            format_modalities(&model.model.modalities.output),
+                            model.model.limits.context,
+                            model.model.limits.output
+                        ),
+                    );
+                } else {
+                    finish_with_assistant(app, format!("Unknown model: {model_ref}"));
+                }
+            } else {
+                let mut text = format!(
+                    "Current model: {}\n\nAvailable models:\n",
+                    app.selected_model_ref()
+                );
+                for option in &app.available_models {
+                    text.push_str(&format!(
+                        "- {} ({}, context: {} tokens)\n",
+                        option.full_id, option.modality, option.max_context_size
+                    ));
+                }
+                text.push_str("\nUse /model <provider-id/model-id> to switch.");
+                finish_with_assistant(app, text);
+            }
         }
         "/compact" => {
             let Some(session_id) = app.session_id.clone() else {
                 finish_with_assistant(app, "No active session to compact yet.");
                 return;
             };
+            let model_ref = app.selected_model_ref().to_string();
 
             app.handle_event(&TuiEvent::CompactionStart);
 
@@ -1056,7 +1147,7 @@ fn handle_slash_command(
                 let cwd = cwd.to_path_buf();
                 let sender = event_sender.clone();
                 handle.spawn(async move {
-                    match compact_session_with_llm(settings, &cwd, &session_id).await {
+                    match compact_session_with_llm(settings, &cwd, &session_id, &model_ref).await {
                         Ok(summary) => sender.send(TuiEvent::CompactionDone(summary)),
                         Err(e) => sender.send(TuiEvent::Error(format!("Failed to compact: {e}"))),
                     }
@@ -1067,7 +1158,12 @@ fn handle_slash_command(
                     .build()
                     .context("Failed to create runtime for compaction")
                     .and_then(|rt| {
-                        rt.block_on(compact_session_with_llm(settings.clone(), cwd, &session_id))
+                        rt.block_on(compact_session_with_llm(
+                            settings.clone(),
+                            cwd,
+                            &session_id,
+                            &model_ref,
+                        ))
                     });
 
                 match result {
@@ -1120,6 +1216,7 @@ async fn compact_session_with_llm(
     settings: Settings,
     cwd: &Path,
     session_id: &str,
+    model_ref: &str,
 ) -> anyhow::Result<String> {
     let store = SessionStore::new(&settings.session.root, cwd, Some(session_id), None)
         .context("Failed to load session store")?;
@@ -1131,7 +1228,7 @@ async fn compact_session_with_llm(
         return Ok("No prior context to compact yet.".to_string());
     }
 
-    let summary = generate_compaction_summary(&settings, messages).await?;
+    let summary = generate_compaction_summary(&settings, messages, model_ref).await?;
     store
         .append(&SessionEvent::Compact {
             id: event_id(),
@@ -1145,11 +1242,13 @@ async fn compact_session_with_llm(
 async fn generate_compaction_summary(
     settings: &Settings,
     messages: Vec<Message>,
+    model_ref: &str,
 ) -> anyhow::Result<String> {
     #[cfg(test)]
     {
         let _ = settings;
         let _ = messages;
+        let _ = model_ref;
         Ok("Compacted context summary for tests.".to_string())
     }
 
@@ -1170,16 +1269,20 @@ async fn generate_compaction_summary(
             tool_call_id: None,
         });
 
+        let selected = settings
+            .resolve_model_ref(model_ref)
+            .with_context(|| format!("model is not configured: {model_ref}"))?;
+
         let provider = OpenAiCompatibleProvider::new(
-            settings.provider.base_url.clone(),
-            settings.provider.model.clone(),
-            settings.provider.api_key_env.clone(),
+            selected.provider.base_url.clone(),
+            selected.model.id.clone(),
+            selected.provider.api_key_env.clone(),
         );
 
         let response = crate::core::Provider::complete(
             &provider,
             crate::core::ProviderRequest {
-                model: settings.provider.model.clone(),
+                model: selected.model.id.clone(),
                 messages: prompt_messages,
                 tools: Vec::new(),
             },
@@ -1314,6 +1417,7 @@ fn handle_chat_message(
             settings,
             cwd,
             message,
+            app.selected_model_ref().to_string(),
             event_sender,
             Some(current_session_id),
             session_title,
@@ -1326,23 +1430,47 @@ fn handle_chat_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::settings::{AgentSettings, ProviderSettings, SessionSettings};
+    use crate::config::settings::{
+        AgentSettings, ModelLimits, ModelMetadata, ModelModalities, ModelModalityType,
+        ModelSettings, ProviderConfig, SessionSettings,
+    };
     use crate::core::{Message, Role};
     use crossterm::event::KeyEvent;
+    use std::collections::BTreeMap;
     use tempfile::tempdir;
 
     fn create_dummy_settings(root: &Path) -> Settings {
         Settings {
+            models: ModelSettings {
+                default: "test/test-model".to_string(),
+            },
+            providers: BTreeMap::from([(
+                "test".to_string(),
+                ProviderConfig {
+                    display_name: "Test Provider".to_string(),
+                    base_url: "http://localhost:1234".to_string(),
+                    api_key_env: "TEST_KEY".to_string(),
+                    models: BTreeMap::from([(
+                        "test-model".to_string(),
+                        ModelMetadata {
+                            id: "provider-test-model".to_string(),
+                            display_name: "Test Model".to_string(),
+                            modalities: ModelModalities {
+                                input: vec![ModelModalityType::Text],
+                                output: vec![ModelModalityType::Text],
+                            },
+                            limits: ModelLimits {
+                                context: 64_000,
+                                output: 8_000,
+                            },
+                        },
+                    )]),
+                },
+            )]),
             agent: AgentSettings {
                 max_steps: 10,
-                token_budget: 1000,
                 sub_agent_max_depth: 2,
                 system_prompt: None,
-            },
-            provider: ProviderSettings {
-                base_url: "http://localhost:1234".to_string(),
-                model: "test-model".to_string(),
-                api_key_env: "TEST_KEY".to_string(),
             },
             session: SessionSettings {
                 root: root.to_path_buf(),
@@ -1369,7 +1497,7 @@ mod tests {
         .unwrap();
 
         // Setup ChatApp
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
         let (tx, _rx) = mpsc::unbounded_channel();
         let event_sender = TuiEventSender::new(tx);
 
@@ -1415,7 +1543,7 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let event_sender = TuiEventSender::new(tx);
 
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
         app.session_id = Some("existing-session".to_string());
         app.session_name = "Existing Session".to_string();
         app.messages
@@ -1459,7 +1587,7 @@ mod tests {
             })
             .unwrap();
 
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
         app.session_id = Some(session_id.to_string());
         app.session_name = "Compact Session".to_string();
         app.messages
@@ -1504,7 +1632,7 @@ mod tests {
         let cwd = temp_dir.path();
         let (tx, _rx) = mpsc::unbounded_channel();
         let event_sender = TuiEventSender::new(tx);
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
         app.set_input("hello".to_string());
 
         handle_key_event(
@@ -1529,7 +1657,7 @@ mod tests {
         let cwd = temp_dir.path();
         let (tx, _rx) = mpsc::unbounded_channel();
         let event_sender = TuiEventSender::new(tx);
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
         app.set_input("hello".to_string());
 
         handle_key_event(
@@ -1564,7 +1692,7 @@ mod tests {
         let cwd = temp_dir.path();
         let (tx, _rx) = mpsc::unbounded_channel();
         let event_sender = TuiEventSender::new(tx);
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
         app.set_input("hello".to_string());
 
         handle_key_event(
@@ -1589,7 +1717,7 @@ mod tests {
         let cwd = temp_dir.path();
         let (tx, _rx) = mpsc::unbounded_channel();
         let event_sender = TuiEventSender::new(tx);
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
 
         handle_key_event(
             KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
@@ -1611,7 +1739,7 @@ mod tests {
         let cwd = temp_dir.path();
         let (tx, _rx) = mpsc::unbounded_channel();
         let event_sender = TuiEventSender::new(tx);
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
         app.set_input("abc\ndefg\nxy".to_string());
 
         handle_key_event(
@@ -1666,7 +1794,7 @@ mod tests {
         let cwd = temp_dir.path();
         let (tx, _rx) = mpsc::unbounded_channel();
         let event_sender = TuiEventSender::new(tx);
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
         app.set_input("ab\ncd\nef".to_string());
 
         // End of first line.
@@ -1750,7 +1878,7 @@ mod tests {
         let cwd = temp_dir.path();
         let (tx, _rx) = mpsc::unbounded_channel();
         let event_sender = TuiEventSender::new(tx);
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
         app.set_input("ab\ncd".to_string());
         app.cursor = 2;
 
@@ -1850,7 +1978,7 @@ mod tests {
     fn test_apply_paste_inserts_content_at_cursor() {
         let temp_dir = tempdir().unwrap();
         let cwd = temp_dir.path();
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
         app.set_input("abcXYZ".to_string());
         app.cursor = 3;
 
@@ -1870,7 +1998,7 @@ mod tests {
         let cwd = temp_dir.path();
         let (tx, _rx) = mpsc::unbounded_channel();
         let event_sender = TuiEventSender::new(tx);
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
         app.set_input("abc".to_string());
 
         handle_key_event(
@@ -1890,7 +2018,7 @@ mod tests {
     fn test_scroll_up_from_auto_scroll_moves_immediately() {
         let temp_dir = tempdir().unwrap();
         let cwd = temp_dir.path();
-        let mut app = ChatApp::new("Session".to_string(), cwd, 1000);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
 
         for i in 0..120 {
             app.messages

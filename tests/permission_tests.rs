@@ -27,16 +27,16 @@ fn default_permission_matrix_matches_policy() {
 
 #[test]
 fn permission_settings_backfill_new_tool_defaults() {
-    let parsed: PermissionSettings = toml::from_str(
-        r#"
-read = "allow"
-list = "allow"
-glob = "allow"
-grep = "allow"
-write = "ask"
-bash = "ask"
-web = "ask"
-"#,
+    let parsed: PermissionSettings = serde_json::from_str(
+        r#"{
+            "read": "allow",
+            "list": "allow",
+            "glob": "allow",
+            "grep": "allow",
+            "write": "ask",
+            "bash": "ask",
+            "web": "ask"
+        }"#,
     )
     .expect("parse permission settings");
 

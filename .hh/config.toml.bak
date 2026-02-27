@@ -1,7 +1,14 @@
 [provider]
+default_model = "zai/glm-4.7"
+
+[provider.providers.zai]
 base_url = "https://api.z.ai/api/coding/paas/v4"
-model = "glm-4.7"
 api_key_env = "ZAI_API_KEY"
+
+[[provider.providers.zai.models]]
+id = "glm-4.7"
+modality = "text"
+max_context_size = 128000
 
 [agent]
 max_steps = 0

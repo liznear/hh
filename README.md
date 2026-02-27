@@ -51,6 +51,7 @@ hh config show
 When running `hh chat`, the following slash commands are available:
 
 - `/new` - Start a new session
+- `/model` - List models or switch to `/model <provider-id/model-id>`
 - `/resume` - Resume a previous session from a list
 - `/compact` - Summarize conversation history to save context
 - `/quit` - Exit the application
@@ -71,18 +72,19 @@ When running `hh chat`, the following slash commands are available:
 
 ## Configuration
 
-Happy Harness uses TOML configuration files to manage settings:
+Happy Harness uses JSON configuration files to manage settings:
 
 ### Initialize Configuration
 
 ```bash
-hh config init  # Creates .hh/config.toml in current directory
+hh config init  # Creates .hh/config.json in current directory
 ```
 
 ### Configuration Structure
 
-- `provider` - LLM provider settings (base_url, model, api_key_env)
-- `agent` - Agent behavior (max_steps, token_budget, sub_agent_max_depth, system_prompt)
+- `models.default` - Global default model reference (`provider-id/model-id`)
+- `providers` - Provider registry (per-provider display name, base_url, api_key_env, and `models` map keyed by HH model id)
+- `agent` - Agent behavior (max_steps, sub_agent_max_depth, system_prompt)
 - `tools` - Tool enablement flags (fs, bash, web)
 - `permission` - Per-tool permission policy (allow/ask/deny)
 - `session` - Session storage root directory

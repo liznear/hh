@@ -61,7 +61,7 @@ pub async fn run() -> anyhow::Result<()> {
                 Ok(())
             }
             ConfigCommand::Show => {
-                let txt = toml::to_string_pretty(&settings)?;
+                let txt = serde_json::to_string_pretty(&settings)?;
                 println!("{}", txt);
                 Ok(())
             }

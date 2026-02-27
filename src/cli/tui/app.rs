@@ -11,6 +11,7 @@ use crate::core::MessageAttachment;
 
 const SIDEBAR_WIDTH: u16 = 38;
 const LEFT_COLUMN_RIGHT_MARGIN: u16 = 2;
+const DEFAULT_CONTEXT_LIMIT: usize = 128_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TodoItemView {
@@ -142,6 +143,8 @@ pub struct ChatApp {
     pub filtered_commands: Vec<SlashCommand>,
     pub selected_command_index: usize,
     pub pending_attachments: Vec<MessageAttachment>,
+    pub current_model_ref: String,
+    pub available_models: Vec<ModelOptionView>,
     preferred_column: Option<usize>,
     // Text selection state
     pub text_selection: TextSelection,
@@ -153,8 +156,15 @@ pub struct SubmittedInput {
     pub attachments: Vec<MessageAttachment>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelOptionView {
+    pub full_id: String,
+    pub modality: String,
+    pub max_context_size: usize,
+}
+
 impl ChatApp {
-    pub fn new(session_name: String, cwd: &Path, context_budget: usize) -> Self {
+    pub fn new(session_name: String, cwd: &Path) -> Self {
         let commands = get_default_commands();
         Self {
             messages: Vec::new(),
@@ -167,7 +177,7 @@ impl ChatApp {
             session_id: None,
             session_name,
             working_directory: cwd.display().to_string(),
-            context_budget,
+            context_budget: DEFAULT_CONTEXT_LIMIT,
             processing_started_at: None,
             todo_items: Vec::new(),
             cached_lines: RefCell::new(Vec::new()),
@@ -179,6 +189,8 @@ impl ChatApp {
             filtered_commands: Vec::new(),
             selected_command_index: 0,
             pending_attachments: Vec::new(),
+            current_model_ref: String::new(),
+            available_models: Vec::new(),
             preferred_column: None,
             text_selection: TextSelection::None,
             clipboard_notice: None,
@@ -447,6 +459,35 @@ impl ChatApp {
 
     pub fn mark_dirty(&self) {
         *self.needs_rebuild.borrow_mut() = true;
+    }
+
+    pub fn configure_models(
+        &mut self,
+        current_model_ref: String,
+        available_models: Vec<ModelOptionView>,
+    ) {
+        self.current_model_ref = current_model_ref;
+        self.available_models = available_models;
+        self.context_budget = self
+            .available_models
+            .iter()
+            .find(|model| model.full_id == self.current_model_ref)
+            .map(|model| model.max_context_size)
+            .unwrap_or(DEFAULT_CONTEXT_LIMIT);
+    }
+
+    pub fn selected_model_ref(&self) -> &str {
+        self.current_model_ref.as_str()
+    }
+
+    pub fn set_selected_model(&mut self, model_ref: &str) {
+        self.current_model_ref = model_ref.to_string();
+        self.context_budget = self
+            .available_models
+            .iter()
+            .find(|model| model.full_id == self.current_model_ref)
+            .map(|model| model.max_context_size)
+            .unwrap_or(DEFAULT_CONTEXT_LIMIT);
     }
 
     pub fn insert_char(&mut self, ch: char) {
@@ -722,7 +763,7 @@ impl TodoPriority {
 
 impl Default for ChatApp {
     fn default() -> Self {
-        Self::new("Session".to_string(), Path::new("."), 32_000)
+        Self::new("Session".to_string(), Path::new("."))
     }
 }
 

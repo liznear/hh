@@ -115,7 +115,7 @@ async fn agent_loop_stops_on_final_answer() {
         approvals: PermissionMatcher::new(settings.clone(), &schemas),
         max_steps: 3,
         system_prompt: settings.agent.resolved_system_prompt(),
-        model: settings.provider.model,
+        model: settings.selected_model_ref().to_string(),
         session,
         events: NoopEvents,
     };
@@ -190,7 +190,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
         approvals: PermissionMatcher::new(settings.clone(), &schemas),
         max_steps: 4,
         system_prompt: settings.agent.resolved_system_prompt(),
-        model: settings.provider.model,
+        model: settings.selected_model_ref().to_string(),
         session,
         events: events.clone(),
     };
@@ -250,7 +250,7 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
         approvals: PermissionMatcher::new(settings.clone(), &schemas),
         max_steps: 3,
         system_prompt: settings.agent.resolved_system_prompt(),
-        model: settings.provider.model,
+        model: settings.selected_model_ref().to_string(),
         session,
         events: NoopEvents,
     };
@@ -339,7 +339,7 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
         approvals: PermissionMatcher::new(settings.clone(), &schemas),
         max_steps: 0,
         system_prompt: settings.agent.resolved_system_prompt(),
-        model: settings.provider.model,
+        model: settings.selected_model_ref().to_string(),
         session,
         events: NoopEvents,
     };
@@ -392,7 +392,7 @@ async fn agent_loop_respects_max_steps_when_set() {
         approvals: PermissionMatcher::new(settings.clone(), &schemas),
         max_steps: 1,
         system_prompt: settings.agent.resolved_system_prompt(),
-        model: settings.provider.model,
+        model: settings.selected_model_ref().to_string(),
         session,
         events: NoopEvents,
     };
