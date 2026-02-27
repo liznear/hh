@@ -130,6 +130,7 @@ pub struct ChatApp {
     pub auto_scroll: bool, // When true, follow new content
     pub session_id: Option<String>,
     pub session_name: String,
+    session_epoch: u64,
     pub working_directory: String,
     pub git_branch: Option<String>,
     pub context_budget: usize,
@@ -179,6 +180,7 @@ impl ChatApp {
             auto_scroll: true,
             session_id: None,
             session_name,
+            session_epoch: 0,
             working_directory: cwd.display().to_string(),
             git_branch: detect_git_branch(cwd),
             context_budget: DEFAULT_CONTEXT_LIMIT,
@@ -442,7 +444,16 @@ impl ChatApp {
         };
     }
 
+    pub fn session_epoch(&self) -> u64 {
+        self.session_epoch
+    }
+
+    pub fn bump_session_epoch(&mut self) {
+        self.session_epoch = self.session_epoch.wrapping_add(1);
+    }
+
     pub fn start_new_session(&mut self, session_name: String) {
+        self.bump_session_epoch();
         self.messages.clear();
         self.todo_items.clear();
         self.last_context_tokens = None;

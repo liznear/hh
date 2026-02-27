@@ -6,6 +6,12 @@ use tokio::sync::mpsc;
 use crate::core::agent::AgentEvents;
 
 #[derive(Debug, Clone)]
+pub struct ScopedTuiEvent {
+    pub session_epoch: u64,
+    pub event: TuiEvent,
+}
+
+#[derive(Debug, Clone)]
 pub enum TuiEvent {
     Thinking(String),
     ToolStart {
@@ -30,47 +36,61 @@ pub enum TuiEvent {
 /// Sends agent events to a channel for the TUI to consume
 #[derive(Clone)]
 pub struct TuiEventSender {
-    tx: Arc<mpsc::UnboundedSender<TuiEvent>>,
+    tx: Arc<mpsc::UnboundedSender<ScopedTuiEvent>>,
+    session_epoch: u64,
 }
 
 impl TuiEventSender {
-    pub fn new(tx: mpsc::UnboundedSender<TuiEvent>) -> Self {
-        Self { tx: Arc::new(tx) }
+    pub fn new(tx: mpsc::UnboundedSender<ScopedTuiEvent>) -> Self {
+        Self {
+            tx: Arc::new(tx),
+            session_epoch: 0,
+        }
+    }
+
+    pub fn scoped(&self, session_epoch: u64) -> Self {
+        Self {
+            tx: Arc::clone(&self.tx),
+            session_epoch,
+        }
     }
 
     pub fn send(&self, event: TuiEvent) {
-        let _ = self.tx.send(event);
+        let _ = self.tx.send(ScopedTuiEvent {
+            session_epoch: self.session_epoch,
+            event,
+        });
     }
 }
 
 impl AgentEvents for TuiEventSender {
     fn on_thinking(&self, text: &str) {
-        let _ = self.tx.send(TuiEvent::Thinking(text.to_string()));
+        self.send(TuiEvent::Thinking(text.to_string()));
     }
 
     fn on_tool_start(&self, name: &str, args: &Value) {
-        let _ = self.tx.send(TuiEvent::ToolStart {
+        self.send(TuiEvent::ToolStart {
             name: name.to_string(),
             args: args.clone(),
         });
     }
 
     fn on_tool_end(&self, name: &str, result: &crate::tool::ToolResult) {
-        let _ = self.tx.send(TuiEvent::ToolEnd {
+        self.send(TuiEvent::ToolEnd {
             name: name.to_string(),
             result: result.clone(),
         });
     }
 
     fn on_assistant_delta(&self, delta: &str) {
-        let _ = self.tx.send(TuiEvent::AssistantDelta(delta.to_string()));
+        self.send(TuiEvent::AssistantDelta(delta.to_string()));
     }
 
     fn on_context_usage(&self, tokens: usize) {
-        let _ = self.tx.send(TuiEvent::ContextUsage(tokens));
+        self.send(TuiEvent::ContextUsage(tokens));
     }
 
     fn on_assistant_done(&self) {
-        let _ = self.tx.send(TuiEvent::AssistantDone);
+        self.send(TuiEvent::AssistantDone);
     }
 }

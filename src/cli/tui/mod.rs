@@ -11,7 +11,7 @@ mod ui;
 pub use app::{ChatApp, ChatMessage, ModelOptionView, SubmittedInput};
 pub use commands::SlashCommand;
 pub use debug::DebugRenderer;
-pub use event::{TuiEvent, TuiEventSender};
+pub use event::{ScopedTuiEvent, TuiEvent, TuiEventSender};
 pub use terminal::{Tui, TuiGuard, restore_terminal, setup_terminal};
 pub use ui::{build_message_lines, render_app};
 

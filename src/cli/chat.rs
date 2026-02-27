@@ -10,7 +10,8 @@ use tokio::sync::mpsc;
 
 use crate::cli::render;
 use crate::cli::tui::{
-    self, ChatApp, DebugRenderer, ModelOptionView, SubmittedInput, TuiEvent, TuiEventSender,
+    self, ChatApp, DebugRenderer, ModelOptionView, ScopedTuiEvent, SubmittedInput, TuiEvent,
+    TuiEventSender,
 };
 use crate::config::Settings;
 use crate::core::agent::{AgentEvents, AgentLoop, NoopEvents};
@@ -32,7 +33,7 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
         settings.selected_model_ref().to_string(),
         build_model_options(&settings),
     );
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TuiEvent>();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
     run_interactive_chat_loop(
@@ -71,7 +72,7 @@ pub async fn run_chat_with_debug(
         settings.selected_model_ref().to_string(),
         build_model_options(&settings),
     );
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TuiEvent>();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
     run_interactive_chat_loop(
@@ -113,7 +114,7 @@ pub async fn run_prompt_with_debug(
         settings.selected_model_ref().to_string(),
         build_model_options(&settings),
     );
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TuiEvent>();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
     // Submit the prompt
@@ -189,8 +190,11 @@ pub async fn run_prompt_with_debug(
         tokio::select! {
             event = event_rx.recv() => {
                 if let Some(event) = event {
-                    let is_done_or_error = matches!(event, TuiEvent::AssistantDone | TuiEvent::Error(_));
-                    app.handle_event(&event);
+                    let is_done_or_error =
+                        matches!(&event.event, TuiEvent::AssistantDone | TuiEvent::Error(_));
+                    if event.session_epoch == app.session_epoch() {
+                        app.handle_event(&event.event);
+                    }
 
                     // Render after each event
                     renderer.render(&app)?;
@@ -912,8 +916,10 @@ async fn run_interactive_chat_loop(
                 }
             }
             event = runner.event_rx.recv() => {
-                if let Some(event) = event {
-                    app.handle_event(&event);
+                if let Some(event) = event
+                    && event.session_epoch == app.session_epoch()
+                {
+                    app.handle_event(&event.event);
                 }
             }
         }
@@ -930,7 +936,7 @@ struct InteractiveChatRunner<'a> {
     settings: &'a Settings,
     cwd: &'a Path,
     event_sender: &'a TuiEventSender,
-    event_rx: &'a mut mpsc::UnboundedReceiver<TuiEvent>,
+    event_rx: &'a mut mpsc::UnboundedReceiver<ScopedTuiEvent>,
     debug_renderer: Option<&'a mut DebugRenderer>,
     scroll_down_lines: usize,
 }
@@ -1172,6 +1178,7 @@ fn handle_slash_command(
     cwd: &Path,
     event_sender: &TuiEventSender,
 ) {
+    let scoped_sender = event_sender.scoped(app.session_epoch());
     let mut parts = input.split_whitespace();
     let command = parts.next().unwrap_or_default();
 
@@ -1225,7 +1232,7 @@ fn handle_slash_command(
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 let settings = settings.clone();
                 let cwd = cwd.to_path_buf();
-                let sender = event_sender.clone();
+                let sender = scoped_sender.clone();
                 handle.spawn(async move {
                     match compact_session_with_llm(settings, &cwd, &session_id, &model_ref).await {
                         Ok(summary) => sender.send(TuiEvent::CompactionDone(summary)),
@@ -1395,7 +1402,8 @@ fn handle_session_selection(
         anyhow::bail!("Invalid session index.");
     }
 
-    let session = &app.available_sessions[idx - 1];
+    let session = app.available_sessions[idx - 1].clone();
+    app.bump_session_epoch();
     app.session_id = Some(session.id.clone());
     app.session_name = session.title.clone();
     app.last_context_tokens = None;
@@ -1468,6 +1476,7 @@ fn handle_chat_message(
     event_sender: &TuiEventSender,
 ) {
     if !input.text.is_empty() || !input.attachments.is_empty() {
+        let scoped_sender = event_sender.scoped(app.session_epoch());
         let session_id = app.session_id.clone();
         let session_title = if session_id.is_none() {
             Some(fallback_session_title(&input.text))
@@ -1488,7 +1497,7 @@ fn handle_chat_message(
                     current_session_id.clone(),
                     app.selected_model_ref().to_string(),
                     input.text.clone(),
-                    event_sender,
+                    &scoped_sender,
                 );
             }
         }
@@ -1505,7 +1514,7 @@ fn handle_chat_message(
             cwd,
             message,
             app.selected_model_ref().to_string(),
-            event_sender,
+            &scoped_sender,
             Some(current_session_id),
             session_title,
         );
@@ -1784,6 +1793,37 @@ mod tests {
         assert!(app.session_id.is_none());
         assert_eq!(app.session_name, build_session_name(cwd));
         assert!(app.messages.is_empty());
+    }
+
+    #[test]
+    fn test_new_session_ignores_stale_scoped_events() {
+        let temp_dir = tempdir().unwrap();
+        let cwd = temp_dir.path();
+        let mut app = ChatApp::new("Session".to_string(), cwd);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+
+        let old_scope_sender = event_sender.scoped(app.session_epoch());
+        app.start_new_session("New Session".to_string());
+
+        old_scope_sender.send(TuiEvent::AssistantDelta("stale".to_string()));
+        let stale_event = rx.blocking_recv().unwrap();
+        if stale_event.session_epoch == app.session_epoch() {
+            app.handle_event(&stale_event.event);
+        }
+        assert!(app.messages.is_empty());
+
+        let current_scope_sender = event_sender.scoped(app.session_epoch());
+        current_scope_sender.send(TuiEvent::AssistantDelta("fresh".to_string()));
+        let fresh_event = rx.blocking_recv().unwrap();
+        if fresh_event.session_epoch == app.session_epoch() {
+            app.handle_event(&fresh_event.event);
+        }
+
+        assert!(matches!(
+            app.messages.first(),
+            Some(tui::ChatMessage::Assistant(text)) if text == "fresh"
+        ));
     }
 
     #[test]
