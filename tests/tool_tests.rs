@@ -1,7 +1,7 @@
 use hh::tool::Tool;
 use hh::tool::bash::BashTool;
 use hh::tool::edit::EditTool;
-use hh::tool::fs::{FsRead, FsWrite};
+use hh::tool::fs::{FsGrep, FsRead, FsWrite};
 use hh::tool::todo::{TodoReadTool, TodoWriteTool};
 use serde_json::json;
 
@@ -64,6 +64,54 @@ async fn fs_read_returns_file_content() {
     assert_eq!(output["content"], "content");
     assert_eq!(output["bytes"], 7);
     assert_eq!(output["lines"], 1);
+    assert_eq!(output["start"], 0);
+    assert_eq!(output["end"], 1);
+    assert_eq!(output["total_lines"], 1);
+}
+
+#[tokio::test]
+async fn fs_read_supports_line_range() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("note.txt");
+    std::fs::write(&path, "one\ntwo\nthree\n").expect("write file");
+
+    let read_tool = FsRead;
+    let res = read_tool
+        .execute(json!({
+            "path": path.display().to_string(),
+            "start": 1,
+            "end": 3
+        }))
+        .await;
+
+    assert!(!res.is_error);
+    let output: serde_json::Value = serde_json::from_str(&res.output).expect("json output");
+    assert_eq!(output["content"], "two\nthree\n");
+    assert_eq!(output["lines"], 2);
+    assert_eq!(output["start"], 1);
+    assert_eq!(output["end"], 3);
+    assert_eq!(output["total_lines"], 3);
+}
+
+#[tokio::test]
+async fn fs_grep_includes_match_line_numbers() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("note.txt");
+    std::fs::write(&path, "alpha\nbeta\ngamma\n").expect("write file");
+
+    let grep_tool = FsGrep;
+    let res = grep_tool
+        .execute(json!({
+            "path": temp.path().display().to_string(),
+            "pattern": "beta"
+        }))
+        .await;
+
+    assert!(!res.is_error);
+    let output: serde_json::Value = serde_json::from_str(&res.output).expect("json output");
+    assert_eq!(output["count"], 1);
+    assert_eq!(output["matches"][0]["line_number"], 2);
+    assert_eq!(output["matches"][0]["line"], "beta");
 }
 
 #[tokio::test]
