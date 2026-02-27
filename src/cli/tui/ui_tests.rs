@@ -518,6 +518,92 @@ fn sidebar_todo_rendering_shows_progress_and_status_markers() {
 }
 
 #[test]
+fn sidebar_omits_todo_section_when_empty() {
+    let app = ChatApp::default();
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let full_text = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(full_text.contains("Context"));
+    assert!(!full_text.contains("TODO"));
+}
+
+#[test]
+fn sidebar_modified_files_section_shows_aggregated_stats() {
+    let mut app = ChatApp::default();
+    app.messages.push(ChatMessage::ToolCall {
+        name: "edit".to_string(),
+        args: "{}".to_string(),
+        output: Some(
+            serde_json::json!({
+                "path": "src/cli/tui/ui.rs",
+                "applied": true,
+                "summary": {"added_lines": 2, "removed_lines": 1},
+                "diff": ""
+            })
+            .to_string(),
+        ),
+        is_error: Some(false),
+    });
+    app.messages.push(ChatMessage::ToolCall {
+        name: "write".to_string(),
+        args: "{}".to_string(),
+        output: Some(
+            serde_json::json!({
+                "path": "src/cli/tui/ui.rs",
+                "applied": true,
+                "summary": {"added_lines": 1, "removed_lines": 0},
+                "diff": ""
+            })
+            .to_string(),
+        ),
+        is_error: Some(false),
+    });
+    app.messages.push(ChatMessage::ToolCall {
+        name: "edit".to_string(),
+        args: "{}".to_string(),
+        output: Some(
+            serde_json::json!({
+                "path": "src/cli/tui/app.rs",
+                "applied": true,
+                "summary": {"added_lines": 4, "removed_lines": 0},
+                "diff": ""
+            })
+            .to_string(),
+        ),
+        is_error: Some(false),
+    });
+
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let full_text = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(full_text.contains("Modified Files"));
+    assert!(full_text.contains("src/cli/tui/ui.rs"));
+    assert!(full_text.contains("+3 -1"));
+    assert!(full_text.contains("src/cli/tui/app.rs"));
+    assert!(full_text.contains("+4"));
+}
+
+#[test]
 fn edit_tool_success_renders_diff_header_and_lines() {
     let mut app = ChatApp::default();
     let output = serde_json::json!({

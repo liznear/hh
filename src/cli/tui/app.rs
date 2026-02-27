@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::path::Path;
+use std::process::Command;
 use std::time::Instant;
 
 use ratatui::text::Line;
@@ -130,6 +131,7 @@ pub struct ChatApp {
     pub session_id: Option<String>,
     pub session_name: String,
     pub working_directory: String,
+    pub git_branch: Option<String>,
     pub context_budget: usize,
     processing_started_at: Option<Instant>,
     pub todo_items: Vec<TodoItemView>,
@@ -178,6 +180,7 @@ impl ChatApp {
             session_id: None,
             session_name,
             working_directory: cwd.display().to_string(),
+            git_branch: detect_git_branch(cwd),
             context_budget: DEFAULT_CONTEXT_LIMIT,
             processing_started_at: None,
             todo_items: Vec::new(),
@@ -781,6 +784,36 @@ impl Default for ChatApp {
     fn default() -> Self {
         Self::new("Session".to_string(), Path::new("."))
     }
+}
+
+fn detect_git_branch(cwd: &Path) -> Option<String> {
+    let branch = run_git_command(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if branch == "HEAD" {
+        return run_git_command(cwd, &["rev-parse", "--short", "HEAD"])
+            .map(|hash| format!("detached@{hash}"));
+    }
+    Some(branch)
+}
+
+fn run_git_command(cwd: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8(output.stdout).ok()?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(trimmed.to_string())
 }
 
 fn extract_todos(input: &str) -> Vec<TodoItemView> {
