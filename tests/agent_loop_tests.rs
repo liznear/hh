@@ -14,11 +14,13 @@ use std::sync::{Arc, Mutex};
 struct MockProvider {
     responses: Arc<Mutex<Vec<ProviderResponse>>>,
     stream_events: Vec<ProviderStreamEvent>,
+    requests: Arc<Mutex<Vec<ProviderRequest>>>,
 }
 
 #[async_trait]
 impl Provider for MockProvider {
     async fn complete(&self, _req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
+        self.requests.lock().expect("requests").push(_req);
         let mut lock = self.responses.lock().expect("lock");
         if lock.is_empty() {
             anyhow::bail!("no response queued")
@@ -99,6 +101,7 @@ async fn agent_loop_stops_on_final_answer() {
             context_tokens: None,
         }])),
         stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
     };
 
     let temp = tempfile::tempdir().expect("tempdir");
@@ -175,6 +178,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
             ProviderStreamEvent::AssistantDelta("hello ".to_string()),
             ProviderStreamEvent::AssistantDelta("world".to_string()),
         ],
+        requests: Arc::new(Mutex::new(Vec::new())),
     };
 
     let temp = tempfile::tempdir().expect("tempdir");
@@ -236,6 +240,7 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
             context_tokens: None,
         }])),
         stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
     };
 
     let temp = tempfile::tempdir().expect("tempdir");
@@ -328,6 +333,7 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
             },
         ])),
         stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
     };
 
     let temp = tempfile::tempdir().expect("tempdir");
@@ -382,6 +388,7 @@ async fn agent_loop_respects_max_steps_when_set() {
             context_tokens: None,
         }])),
         stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
     };
 
     let temp = tempfile::tempdir().expect("tempdir");
@@ -418,4 +425,91 @@ async fn agent_loop_respects_max_steps_when_set() {
         .expect_err("should hit max steps");
 
     assert!(err.to_string().contains("Reached max steps"));
+}
+
+#[tokio::test]
+async fn agent_loop_injects_runtime_todo_state_message() {
+    let provider = MockProvider {
+        responses: Arc::new(Mutex::new(vec![
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: String::new(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![ToolCall {
+                    id: "call-1".to_string(),
+                    name: "todo_write".to_string(),
+                    arguments: json!({
+                        "todos": [
+                            {"content": "Ship feature", "status": "pending", "priority": "high"}
+                        ]
+                    }),
+                }],
+                done: false,
+                thinking: None,
+                context_tokens: None,
+            },
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "done".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![],
+                done: true,
+                thinking: None,
+                context_tokens: None,
+            },
+        ])),
+        stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
+    };
+    let captured_requests = provider.requests.clone();
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("ws");
+    std::fs::create_dir_all(&cwd).expect("mkdir");
+
+    let settings = Settings::default();
+    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
+    let tools = ToolRegistry::new(&settings, &cwd);
+    let schemas = tools.schemas();
+
+    let agent = AgentLoop {
+        provider,
+        tools,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        max_steps: 4,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.selected_model_ref().to_string(),
+        session,
+        events: NoopEvents,
+    };
+
+    let out = agent
+        .run(
+            Message {
+                role: Role::User,
+                content: "plan and execute".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            |_tool| Ok(true),
+        )
+        .await
+        .expect("run");
+
+    assert_eq!(out, "done");
+
+    let requests = captured_requests.lock().expect("requests");
+    assert_eq!(requests.len(), 2);
+    let state_message = requests[1]
+        .messages
+        .iter()
+        .find(|msg| msg.role == Role::System && msg.content.contains("Runtime TODO state"))
+        .expect("runtime todo state message");
+    assert!(state_message.content.contains("Ship feature"));
 }

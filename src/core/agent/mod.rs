@@ -41,10 +41,29 @@ where
     where
         F: FnMut(&str) -> anyhow::Result<bool>,
     {
+        let replayed_events = self.session.replay_events()?;
         let mut state = AgentState {
             messages: self.session.replay_messages()?,
+            todo_items: Vec::new(),
             step: 0,
         };
+
+        let mut tool_name_by_call_id = std::collections::HashMap::new();
+        for event in replayed_events {
+            match event {
+                SessionEvent::ToolCall { call } => {
+                    tool_name_by_call_id.insert(call.id, call.name);
+                }
+                SessionEvent::ToolResult { id, result, .. } => {
+                    if let (Some(name), Some(tool_result)) =
+                        (tool_name_by_call_id.get(&id), result.as_ref())
+                    {
+                        state.apply_tool_result(name, tool_result);
+                    }
+                }
+                _ => {}
+            }
+        }
 
         if state
             .messages
@@ -70,9 +89,14 @@ where
                 anyhow::bail!("Reached max steps without final answer")
             }
 
+            let mut request_messages = state.messages.clone();
+            if let Some(state_message) = state.state_for_llm() {
+                request_messages.push(state_message);
+            }
+
             let req = ProviderRequest {
                 model: self.model.clone(),
-                messages: state.messages.clone(),
+                messages: request_messages,
                 tools: self.tools.schemas(),
             };
 
@@ -176,7 +200,7 @@ where
         let mut result = self.tools.execute(&call.name, call.arguments.clone()).await;
         result.output = sanitize_tool_output(&result.output);
         self.events.on_tool_end(&call.name, &result);
-        self.record_tool_result(call.id.clone(), result, state)
+        self.record_tool_result(call, result, state)
     }
 
     fn record_tool_error(
@@ -188,21 +212,25 @@ where
         self.events.on_tool_start(&call.name, &call.arguments);
         let result = ToolResult::err_text("denied", sanitize_tool_output(&output));
         self.events.on_tool_end(&call.name, &result);
-        self.record_tool_result(call.id.clone(), result, state)
+        self.record_tool_result(call, result, state)
     }
 
     fn record_tool_result(
         &self,
-        call_id: String,
+        call: &ToolCall,
         result: ToolResult,
         state: &mut AgentState,
     ) -> anyhow::Result<()> {
+        let call_id = call.id.clone();
         state.push(Message {
             role: Role::Tool,
             content: result.output.clone(),
             attachments: Vec::new(),
             tool_call_id: Some(call_id.clone()),
         });
+        if state.apply_tool_result(&call.name, &result) {
+            self.events.on_todo_items_changed(&state.todo_items);
+        }
         self.session.append(&SessionEvent::ToolResult {
             id: call_id,
             is_error: result.is_error,

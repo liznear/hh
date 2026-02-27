@@ -22,6 +22,7 @@ pub enum TuiEvent {
         name: String,
         result: crate::tool::ToolResult,
     },
+    TodoItemsChanged(Vec<crate::core::TodoItem>),
     AssistantDelta(String),
     ContextUsage(usize),
     AssistantDone,
@@ -80,6 +81,10 @@ impl AgentEvents for TuiEventSender {
             name: name.to_string(),
             result: result.clone(),
         });
+    }
+
+    fn on_todo_items_changed(&self, items: &[crate::core::TodoItem]) {
+        self.send(TuiEvent::TodoItemsChanged(items.to_vec()));
     }
 
     fn on_assistant_delta(&self, delta: &str) {

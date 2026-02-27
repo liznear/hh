@@ -227,6 +227,17 @@ impl ChatApp {
                 self.complete_tool_call(name, result);
                 self.mark_dirty();
             }
+            TuiEvent::TodoItemsChanged(items) => {
+                self.todo_items = items
+                    .iter()
+                    .map(|item| TodoItemView {
+                        content: item.content.clone(),
+                        status: TodoStatus::from_core(item.status.clone()),
+                        priority: TodoPriority::from_core(item.priority.clone()),
+                    })
+                    .collect();
+                self.mark_dirty();
+            }
             TuiEvent::AssistantDelta(delta) => {
                 if let Some(ChatMessage::Assistant(existing)) = self.messages.last_mut() {
                     existing.push_str(delta);
@@ -281,10 +292,6 @@ impl ChatApp {
         self.cursor = 0;
         self.preferred_column = None;
         if !input.is_empty() || !attachments.is_empty() {
-            let extracted_todos = extract_todos(&input);
-            if self.todo_items.is_empty() && !extracted_todos.is_empty() {
-                self.todo_items = extracted_todos;
-            }
             self.messages.push(ChatMessage::User(input.clone()));
             self.set_processing(true);
             self.auto_scroll = true; // Follow the new response
@@ -791,6 +798,15 @@ impl ChatApp {
     }
 }
 impl TodoStatus {
+    pub fn from_core(status: crate::core::TodoStatus) -> Self {
+        match status {
+            crate::core::TodoStatus::Pending => Self::Pending,
+            crate::core::TodoStatus::InProgress => Self::InProgress,
+            crate::core::TodoStatus::Completed => Self::Completed,
+            crate::core::TodoStatus::Cancelled => Self::Cancelled,
+        }
+    }
+
     pub fn from_wire(status: &str) -> Option<Self> {
         match status {
             "pending" => Some(Self::Pending),
@@ -803,6 +819,14 @@ impl TodoStatus {
 }
 
 impl TodoPriority {
+    pub fn from_core(priority: crate::core::TodoPriority) -> Self {
+        match priority {
+            crate::core::TodoPriority::High => Self::High,
+            crate::core::TodoPriority::Medium => Self::Medium,
+            crate::core::TodoPriority::Low => Self::Low,
+        }
+    }
+
     pub fn from_wire(priority: &str) -> Option<Self> {
         match priority {
             "high" => Some(Self::High),
@@ -847,56 +871,6 @@ fn run_git_command(cwd: &Path, args: &[&str]) -> Option<String> {
     }
 
     Some(trimmed.to_string())
-}
-
-fn extract_todos(input: &str) -> Vec<TodoItemView> {
-    let mut todos = Vec::new();
-    for line in input.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let item = trimmed
-            .strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix("* "))
-            .or_else(|| split_numbered_list(trimmed));
-
-        if let Some(todo) = item {
-            let normalized = todo.trim();
-            if !normalized.is_empty() {
-                todos.push(TodoItemView {
-                    content: normalized.to_string(),
-                    status: TodoStatus::Pending,
-                    priority: TodoPriority::Medium,
-                });
-            }
-        }
-    }
-    todos
-}
-
-fn split_numbered_list(line: &str) -> Option<&str> {
-    let chars = line.char_indices();
-    let mut end_digits = None;
-
-    for (idx, ch) in chars {
-        if ch.is_ascii_digit() {
-            end_digits = Some(idx + ch.len_utf8());
-            continue;
-        }
-        break;
-    }
-
-    let end = end_digits?;
-    let rest = line.get(end..)?;
-    if let Some(rest) = rest.strip_prefix('.') {
-        return rest.strip_prefix(' ');
-    }
-    if let Some(rest) = rest.strip_prefix(')') {
-        return rest.strip_prefix(' ');
-    }
-    None
 }
 
 fn current_line_bounds(input: &str, cursor: usize) -> (usize, usize) {

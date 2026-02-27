@@ -1425,6 +1425,7 @@ fn handle_session_selection(
     let events = store.replay_events().context("Failed to replay session")?;
 
     app.messages.clear();
+    app.todo_items.clear();
     for event in events {
         match event {
             SessionEvent::Message { message, .. } => {
@@ -1449,19 +1450,24 @@ fn handle_session_selection(
                 output,
                 result,
             } => {
-                let rendered_output = result.map(|value| value.output).unwrap_or(output);
-                for msg in app.messages.iter_mut().rev() {
-                    if let tui::ChatMessage::ToolCall {
-                        output: out,
-                        is_error: err,
-                        ..
-                    } = msg
-                        && out.is_none()
-                    {
-                        *out = Some(rendered_output.clone());
-                        *err = Some(is_error);
-                        break;
+                let pending_tool_name = app.messages.iter().rev().find_map(|msg| match msg {
+                    tui::ChatMessage::ToolCall { name, output, .. } if output.is_none() => {
+                        Some(name.clone())
                     }
+                    _ => None,
+                });
+                if let Some(name) = pending_tool_name {
+                    let replayed_result = result.unwrap_or_else(|| {
+                        if is_error {
+                            crate::tool::ToolResult::err_text("error", output)
+                        } else {
+                            crate::tool::ToolResult::ok_text("ok", output)
+                        }
+                    });
+                    app.handle_event(&tui::TuiEvent::ToolEnd {
+                        name,
+                        result: replayed_result,
+                    });
                 }
             }
             SessionEvent::Thinking { content, .. } => {
@@ -1779,6 +1785,98 @@ mod tests {
         // But we provided title "Test Session", so it should be listed.
         // Let's verify session_id is SOME value, and name is correct.
         assert_eq!(app.session_name, "Test Session");
+    }
+
+    #[test]
+    fn test_session_selection_restores_todos_from_todo_write_and_replaces_stale_items() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+
+        let session_id = "todo-session-id";
+        let store = SessionStore::new(
+            &settings.session.root,
+            cwd,
+            Some(session_id),
+            Some("Todo Session".to_string()),
+        )
+        .unwrap();
+
+        store
+            .append(&SessionEvent::ToolCall {
+                call: crate::core::ToolCall {
+                    id: "call-1".to_string(),
+                    name: "todo_write".to_string(),
+                    arguments: serde_json::json!({"todos": []}),
+                },
+            })
+            .unwrap();
+        store
+            .append(&SessionEvent::ToolResult {
+                id: "call-1".to_string(),
+                is_error: false,
+                output: "".to_string(),
+                result: Some(crate::tool::ToolResult::ok_json_typed(
+                    "todo list updated",
+                    "application/vnd.hh.todo+json",
+                    serde_json::json!({
+                        "todos": [
+                            {"content": "Resume pending", "status": "pending", "priority": "medium"},
+                            {"content": "Resume done", "status": "completed", "priority": "high"}
+                        ],
+                        "counts": {"total": 2, "pending": 1, "in_progress": 0, "completed": 1, "cancelled": 0}
+                    }),
+                )),
+            })
+            .unwrap();
+
+        let mut app = ChatApp::new("Session".to_string(), cwd);
+        app.handle_event(&TuiEvent::ToolStart {
+            name: "todo_write".to_string(),
+            args: serde_json::json!({"todos": []}),
+        });
+        app.handle_event(&TuiEvent::ToolEnd {
+            name: "todo_write".to_string(),
+            result: crate::tool::ToolResult::ok_json_typed(
+                "todo list updated",
+                "application/vnd.hh.todo+json",
+                serde_json::json!({
+                    "todos": [
+                        {"content": "Stale item", "status": "pending", "priority": "low"}
+                    ],
+                    "counts": {"total": 1, "pending": 1, "in_progress": 0, "completed": 0, "cancelled": 0}
+                }),
+            ),
+        });
+
+        app.available_sessions = vec![crate::session::SessionMetadata {
+            id: session_id.to_string(),
+            title: "Todo Session".to_string(),
+            created_at: 0,
+            last_updated_at: 0,
+        }];
+        app.is_picking_session = true;
+
+        handle_session_selection("1".to_string(), &mut app, &settings, cwd).unwrap();
+
+        let backend = ratatui::backend::TestBackend::new(120, 25);
+        let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| tui::render_app(frame, &app))
+            .expect("draw app");
+        let full_text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(full_text.contains("TODO"));
+        assert!(full_text.contains("1 / 2 done"));
+        assert!(full_text.contains("[ ] Resume pending"));
+        assert!(full_text.contains("[x] Resume done"));
+        assert!(!full_text.contains("Stale item"));
     }
 
     #[test]

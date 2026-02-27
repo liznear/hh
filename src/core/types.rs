@@ -36,6 +36,30 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoPriority {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TodoItem {
+    pub content: String,
+    pub status: TodoStatus,
+    pub priority: TodoPriority,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderRequest {
     pub model: String,

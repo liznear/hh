@@ -1016,6 +1016,16 @@ fn input_panel_renders_model_line_with_blank_separator() {
 }
 
 #[test]
+fn submitting_bulleted_input_does_not_seed_todos_without_tool_output() {
+    let mut app = ChatApp::default();
+    app.set_input("- Add one blank line above the session title in sidebar.".to_string());
+
+    let _ = app.submit_input();
+
+    assert!(app.todo_items.is_empty());
+}
+
+#[test]
 fn todo_write_tool_end_updates_todo_state_from_full_output() {
     let mut app = ChatApp::default();
     app.handle_event(&TuiEvent::ToolStart {

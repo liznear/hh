@@ -10,5 +10,5 @@ pub use traits::{
 };
 pub use types::{
     Message, MessageAttachment, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role,
-    SubAgentCall, SubAgentResult, ToolCall,
+    SubAgentCall, SubAgentResult, TodoItem, TodoPriority, TodoStatus, ToolCall,
 };

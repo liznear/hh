@@ -229,6 +229,10 @@ impl SessionReader for SessionStore {
     fn replay_messages(&self) -> anyhow::Result<Vec<Message>> {
         self.replay_messages()
     }
+
+    fn replay_events(&self) -> anyhow::Result<Vec<SessionEvent>> {
+        self.replay_events()
+    }
 }
 
 fn workspace_key(cwd: &Path) -> String {
