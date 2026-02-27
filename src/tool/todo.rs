@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub struct TodoWriteTool;
+pub struct TodoReadTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TodoItem {
@@ -30,6 +31,64 @@ struct TodoCounts {
 struct TodoWriteOutput {
     todos: Vec<TodoItem>,
     counts: TodoCounts,
+}
+
+impl TodoCounts {
+    fn from_todos(todos: &[TodoItem]) -> Self {
+        let mut counts = Self {
+            total: todos.len(),
+            pending: 0,
+            in_progress: 0,
+            completed: 0,
+            cancelled: 0,
+        };
+
+        for item in todos {
+            match item.status.as_str() {
+                "pending" => counts.pending += 1,
+                "in_progress" => counts.in_progress += 1,
+                "completed" => counts.completed += 1,
+                "cancelled" => counts.cancelled += 1,
+                _ => {}
+            }
+        }
+
+        counts
+    }
+}
+
+#[async_trait]
+impl Tool for TodoReadTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "todo_read".to_string(),
+            description: "Read canonical todo list state".to_string(),
+            capability: Some("todo_read".to_string()),
+            mutating: Some(false),
+            parameters: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    async fn execute(&self, args: Value) -> ToolResult {
+        if !args.is_object() {
+            return ToolResult::error("invalid todo_read args: expected object");
+        }
+
+        let output = TodoWriteOutput {
+            todos: Vec::new(),
+            counts: TodoCounts::from_todos(&[]),
+        };
+
+        ToolResult::ok_json_typed_serializable(
+            "todo list snapshot",
+            "application/vnd.hh.todo+json",
+            &output,
+        )
+    }
 }
 
 #[async_trait]
@@ -88,26 +147,10 @@ impl Tool for TodoWriteTool {
             }
         }
 
-        let mut counts = TodoCounts {
-            total: parsed.todos.len(),
-            pending: 0,
-            in_progress: 0,
-            completed: 0,
-            cancelled: 0,
-        };
-        for item in &parsed.todos {
-            match item.status.as_str() {
-                "pending" => counts.pending += 1,
-                "in_progress" => counts.in_progress += 1,
-                "completed" => counts.completed += 1,
-                "cancelled" => counts.cancelled += 1,
-                _ => {}
-            }
-        }
-
+        let todos = parsed.todos;
         let output = TodoWriteOutput {
-            todos: parsed.todos,
-            counts,
+            counts: TodoCounts::from_todos(&todos),
+            todos,
         };
 
         ToolResult::ok_json_typed_serializable(

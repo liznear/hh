@@ -337,6 +337,8 @@ pub struct PermissionSettings {
     pub edit: String,
     #[serde(default = "default_todo_write_permission")]
     pub todo_write: String,
+    #[serde(default = "default_todo_read_permission")]
+    pub todo_read: String,
     pub bash: String,
     pub web: String,
     #[serde(default)]
@@ -353,6 +355,7 @@ impl Default for PermissionSettings {
             write: "ask".to_string(),
             edit: default_edit_permission(),
             todo_write: default_todo_write_permission(),
+            todo_read: default_todo_read_permission(),
             bash: "ask".to_string(),
             web: "ask".to_string(),
             capabilities: BTreeMap::new(),
@@ -365,6 +368,10 @@ fn default_edit_permission() -> String {
 }
 
 fn default_todo_write_permission() -> String {
+    "allow".to_string()
+}
+
+fn default_todo_read_permission() -> String {
     "allow".to_string()
 }
 

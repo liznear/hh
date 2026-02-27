@@ -55,6 +55,7 @@ fn capability_policy<'a>(settings: &'a Settings, capability: &str) -> &'a str {
         "write" => &permission.write,
         "edit" => &permission.edit,
         "todo_write" => &permission.todo_write,
+        "todo_read" => &permission.todo_read,
         "bash" => &permission.bash,
         "web" => &permission.web,
         _ => "deny",

@@ -4,7 +4,7 @@ use crate::tool::bash::BashTool;
 use crate::tool::edit::EditTool;
 use crate::tool::fs::{FsGlob, FsGrep, FsList, FsRead, FsWrite};
 use crate::tool::skill::SkillTool;
-use crate::tool::todo::TodoWriteTool;
+use crate::tool::todo::{TodoReadTool, TodoWriteTool};
 use crate::tool::web::{WebFetchTool, WebSearchTool};
 use crate::tool::{Tool, ToolSchema};
 use async_trait::async_trait;
@@ -30,6 +30,7 @@ impl ToolRegistry {
             register(&mut tools, "list", FsList);
             register(&mut tools, "glob", FsGlob);
             register(&mut tools, "grep", FsGrep);
+            register(&mut tools, "todo_read", TodoReadTool);
             register(&mut tools, "todo_write", TodoWriteTool);
             register(
                 &mut tools,

@@ -18,6 +18,7 @@ fn default_permission_matrix_matches_policy() {
     assert_eq!(matcher.decision_for_tool("grep"), Decision::Allow);
     assert_eq!(matcher.decision_for_tool("write"), Decision::Ask);
     assert_eq!(matcher.decision_for_tool("edit"), Decision::Ask);
+    assert_eq!(matcher.decision_for_tool("todo_read"), Decision::Allow);
     assert_eq!(matcher.decision_for_tool("todo_write"), Decision::Allow);
     assert_eq!(matcher.decision_for_tool("bash"), Decision::Ask);
     assert_eq!(matcher.decision_for_tool("web_fetch"), Decision::Ask);
@@ -41,6 +42,7 @@ fn permission_settings_backfill_new_tool_defaults() {
     .expect("parse permission settings");
 
     assert_eq!(parsed.edit, "ask");
+    assert_eq!(parsed.todo_read, "allow");
     assert_eq!(parsed.todo_write, "allow");
     assert!(parsed.capabilities.is_empty());
 }

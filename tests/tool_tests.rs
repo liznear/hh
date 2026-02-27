@@ -2,7 +2,7 @@ use hh::tool::Tool;
 use hh::tool::bash::BashTool;
 use hh::tool::edit::EditTool;
 use hh::tool::fs::{FsRead, FsWrite};
-use hh::tool::todo::TodoWriteTool;
+use hh::tool::todo::{TodoReadTool, TodoWriteTool};
 use serde_json::json;
 
 #[tokio::test]
@@ -128,6 +128,17 @@ async fn todo_write_rejects_invalid_args() {
         .await;
 
     assert!(result.is_error);
+}
+
+#[tokio::test]
+async fn todo_read_returns_snapshot_shape() {
+    let todo = TodoReadTool;
+    let result = todo.execute(json!({})).await;
+
+    assert!(!result.is_error);
+    let output: serde_json::Value = serde_json::from_str(&result.output).expect("json output");
+    assert_eq!(output["counts"]["total"], 0);
+    assert_eq!(output["todos"], json!([]));
 }
 
 #[tokio::test]

@@ -67,6 +67,7 @@ When running `hh chat`, the following slash commands are available:
 - `bash` - Run shell commands
 - `web_search` - Search the web
 - `web_fetch` - Fetch content from URLs
+- `todo_read` - Read canonical todo list state
 - `todo_write` - Manage canonical todo list state
 - `diff` - Compute and display unified diffs between text
 

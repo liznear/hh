@@ -9,6 +9,7 @@ use crate::core::{
 use crate::safety::sanitize_tool_output;
 use crate::session::{SessionEvent, event_id};
 use crate::tool::ToolResult;
+use serde::Serialize;
 use state::AgentState;
 
 pub struct AgentLoop<P, E, T, A, S>
@@ -197,7 +198,11 @@ where
         state: &mut AgentState,
     ) -> anyhow::Result<()> {
         self.events.on_tool_start(&call.name, &call.arguments);
-        let mut result = self.tools.execute(&call.name, call.arguments.clone()).await;
+        let mut result = if call.name == "todo_read" {
+            todo_snapshot_result(&state.todo_items)
+        } else {
+            self.tools.execute(&call.name, call.arguments.clone()).await
+        };
         result.output = sanitize_tool_output(&result.output);
         self.events.on_tool_end(&call.name, &result);
         self.record_tool_result(call, result, state)
@@ -247,4 +252,49 @@ where
             message,
         })
     }
+}
+
+#[derive(Debug, Serialize)]
+struct TodoSnapshotCounts {
+    total: usize,
+    pending: usize,
+    in_progress: usize,
+    completed: usize,
+    cancelled: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct TodoSnapshotOutput {
+    todos: Vec<crate::core::TodoItem>,
+    counts: TodoSnapshotCounts,
+}
+
+fn todo_snapshot_result(items: &[crate::core::TodoItem]) -> ToolResult {
+    let mut counts = TodoSnapshotCounts {
+        total: items.len(),
+        pending: 0,
+        in_progress: 0,
+        completed: 0,
+        cancelled: 0,
+    };
+
+    for item in items {
+        match item.status {
+            crate::core::TodoStatus::Pending => counts.pending += 1,
+            crate::core::TodoStatus::InProgress => counts.in_progress += 1,
+            crate::core::TodoStatus::Completed => counts.completed += 1,
+            crate::core::TodoStatus::Cancelled => counts.cancelled += 1,
+        }
+    }
+
+    let output = TodoSnapshotOutput {
+        todos: items.to_vec(),
+        counts,
+    };
+
+    ToolResult::ok_json_typed_serializable(
+        "todo list snapshot",
+        "application/vnd.hh.todo+json",
+        &output,
+    )
 }

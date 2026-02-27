@@ -65,6 +65,10 @@ const TOOL_PRESENTATIONS: &[ToolPresentation] = &[
         render_start: render_web_search_start,
     },
     ToolPresentation {
+        tool_name: "todo_read",
+        render_start: render_todo_read_start,
+    },
+    ToolPresentation {
         tool_name: "todo_write",
         render_start: render_todo_write_start,
     },
@@ -131,6 +135,12 @@ fn render_todo_write_start(args: &Value) -> ToolCallStartView {
         .unwrap_or(0);
     ToolCallStartView {
         line: format!("Update TODO list ({count} items)"),
+    }
+}
+
+fn render_todo_read_start(_args: &Value) -> ToolCallStartView {
+    ToolCallStartView {
+        line: "Read TODO list".to_string(),
     }
 }
 

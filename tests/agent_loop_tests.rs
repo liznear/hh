@@ -513,3 +513,113 @@ async fn agent_loop_injects_runtime_todo_state_message() {
         .expect("runtime todo state message");
     assert!(state_message.content.contains("Ship feature"));
 }
+
+#[tokio::test]
+async fn agent_loop_todo_read_returns_current_runtime_snapshot() {
+    let provider = MockProvider {
+        responses: Arc::new(Mutex::new(vec![
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: String::new(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![ToolCall {
+                    id: "call-1".to_string(),
+                    name: "todo_write".to_string(),
+                    arguments: json!({
+                        "todos": [
+                            {"content": "Ship feature", "status": "pending", "priority": "high"}
+                        ]
+                    }),
+                }],
+                done: false,
+                thinking: None,
+                context_tokens: None,
+            },
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: String::new(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![ToolCall {
+                    id: "call-2".to_string(),
+                    name: "todo_read".to_string(),
+                    arguments: json!({}),
+                }],
+                done: false,
+                thinking: None,
+                context_tokens: None,
+            },
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "done".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![],
+                done: true,
+                thinking: None,
+                context_tokens: None,
+            },
+        ])),
+        stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("ws");
+    std::fs::create_dir_all(&cwd).expect("mkdir");
+
+    let settings = Settings::default();
+    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
+    let session_reader = session.clone();
+    let tools = ToolRegistry::new(&settings, &cwd);
+    let schemas = tools.schemas();
+
+    let agent = AgentLoop {
+        provider,
+        tools,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        max_steps: 4,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.selected_model_ref().to_string(),
+        session,
+        events: NoopEvents,
+    };
+
+    let out = agent
+        .run(
+            Message {
+                role: Role::User,
+                content: "manage todos".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            |_tool| Ok(true),
+        )
+        .await
+        .expect("run");
+
+    assert_eq!(out, "done");
+
+    let events = session_reader.replay_events().expect("replay events");
+    let snapshot = events
+        .into_iter()
+        .find_map(|event| match event {
+            SessionEvent::ToolResult {
+                id,
+                result: Some(result),
+                ..
+            } if id == "call-2" => Some(result.payload),
+            _ => None,
+        })
+        .expect("todo_read result payload");
+
+    assert_eq!(snapshot["counts"]["total"], 1);
+    assert_eq!(snapshot["todos"][0]["content"], "Ship feature");
+}

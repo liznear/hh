@@ -40,6 +40,7 @@
     "write": "ask",
     "edit": "ask",
     "todo_write": "allow",
+    "todo_read": "allow",
     "bash": "ask",
     "web": "ask",
     "capabilities": {}

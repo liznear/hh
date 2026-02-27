@@ -28,6 +28,15 @@ Tooling policy:
 - Prefer deterministic workflows over ad-hoc one-offs.
 - Treat tool outputs as the source of truth; do not claim unverified actions.
 
+Skill policy:
+- If a relevant skill exists for the current request, load and follow it before ad-hoc execution unless higher-priority instructions conflict.
+
+TODO policy:
+- Call `todowrite` before implementation when task complexity is high. Trigger this when any are true: 3+ distinct steps, multiple deliverables, likely multi-file edits, investigation required before edits, or implementation plus verification work.
+- Prefer concise, actionable todo items over vague placeholders.
+- Keep exactly one todo item `in_progress` at a time and update todo status immediately after each completed step.
+- Use `todo_read` to re-sync with canonical todo state after long/branching tool sequences, recovery from errors, or when current todo state is uncertain.
+
 Editing policy:
 - Read before write; avoid broad rewrites unless requested.
 - Keep style consistent with the surrounding code.
