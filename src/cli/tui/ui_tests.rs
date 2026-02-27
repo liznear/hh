@@ -1,7 +1,7 @@
-use super::app::{ChatApp, ChatMessage, TodoItemView, TodoPriority, TodoStatus};
+use super::app::{ChatApp, ChatMessage, ModelOptionView, TodoItemView, TodoPriority, TodoStatus};
 use super::event::TuiEvent;
 use super::ui::{build_message_lines, render_app};
-use ratatui::{Terminal, backend::TestBackend, style::Color};
+use ratatui::{backend::TestBackend, style::Color, Terminal};
 use serde_json::json;
 
 fn line_text(line: &ratatui::text::Line<'_>) -> String {
@@ -87,17 +87,13 @@ fn compaction_renders_separator_and_preserves_previous_messages() {
     let lines = build_message_lines(&app, 100);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("Before compaction"))
-    );
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("Before compaction")));
     assert!(rendered.iter().any(|line| line.contains("Compaction")));
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("Keep key requirements"))
-    );
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("Keep key requirements")));
 }
 
 #[test]
@@ -624,21 +620,15 @@ fn edit_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("src/main.rs  +1 -1"))
-    );
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("+") && line.contains("new"))
-    );
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("-") && line.contains("old"))
-    );
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("src/main.rs  +1 -1")));
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("+") && line.contains("new")));
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("-") && line.contains("old")));
 
     let added_span = lines
         .iter()
@@ -675,21 +665,15 @@ fn write_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("README.md  +2 -1"))
-    );
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("+") && line.contains("new"))
-    );
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("-") && line.contains("old"))
-    );
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("README.md  +2 -1")));
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("+") && line.contains("new")));
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("-") && line.contains("old")));
 }
 
 #[test]
@@ -714,11 +698,9 @@ fn edit_diff_header_includes_tool_name() {
         .iter()
         .map(line_text)
         .collect();
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("Edit src/main.rs  +1 -1"))
-    );
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("Edit src/main.rs  +1 -1")));
 }
 
 #[test]
@@ -743,11 +725,9 @@ fn side_by_side_diff_pairs_removed_and_added_lines() {
         .iter()
         .map(line_text)
         .collect();
-    assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains("old") && line.contains("|") && line.contains("new"))
-    );
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains("old") && line.contains("|") && line.contains("new")));
 }
 
 #[test]
@@ -945,6 +925,53 @@ fn input_panel_grows_up_to_five_lines() {
     assert!(full_text.contains("L4"));
     assert!(full_text.contains("L5"));
     assert!(full_text.contains("L6"));
+}
+
+#[test]
+fn input_panel_renders_model_line_with_blank_separator() {
+    let mut app = ChatApp::default();
+    app.set_input("hello".to_string());
+    app.configure_models(
+        "openai/gpt-5".to_string(),
+        vec![ModelOptionView {
+            full_id: "openai/gpt-5".to_string(),
+            provider_name: "OpenAI".to_string(),
+            model_name: "GPT-5".to_string(),
+            modality: "text -> text".to_string(),
+            max_context_size: 128_000,
+        }],
+    );
+
+    let backend = TestBackend::new(120, 25);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let text_x = 6u16;
+    let mut input_y = None;
+    let mut status_y = None;
+
+    for y in 0..25u16 {
+        let symbol = buffer[(text_x, y)].symbol();
+        if symbol == "h" {
+            input_y = Some(y);
+        }
+        if symbol == "O" {
+            let row_text = (text_x..90)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>();
+            if row_text.contains("OpenAI GPT-5") {
+                status_y = Some(y);
+            }
+        }
+    }
+
+    let input_y = input_y.expect("find input row");
+    let status_y = status_y.expect("find model status row");
+    assert_eq!(status_y, input_y + 2);
+    assert_eq!(buffer[(text_x, input_y + 1)].symbol(), " ");
 }
 
 #[test]

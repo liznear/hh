@@ -98,7 +98,7 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
         .saturating_sub(USER_BUBBLE_INDENT as u16 + 3) as usize;
     let input_line_count =
         input_line_count(&app.input, input_content_width).clamp(1, MAX_INPUT_LINES);
-    let input_area_height = (input_line_count + 2) as u16;
+    let input_area_height = (input_line_count + 4) as u16;
 
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -803,13 +803,14 @@ fn render_input(f: &mut Frame, app: &ChatApp, area: Rect) {
         .min(area.bottom().saturating_sub(1));
     let content_x = left_border_x.saturating_add(2);
     let content_height = area.height.saturating_sub(2).max(1);
+    let input_height = content_height.saturating_sub(2).max(1);
     let content_area = Rect {
         x: content_x,
         y: content_y,
         width: area
             .width
             .saturating_sub(content_x.saturating_sub(area.x) + 1),
-        height: content_height,
+        height: input_height,
     };
 
     let (input_value, cursor_row, cursor_col) = if app.input.is_empty() {
@@ -841,6 +842,62 @@ fn render_input(f: &mut Frame, app: &ChatApp, area: Rect) {
             content_area.y + cursor_row as u16,
         ));
     }
+
+    let status_y = content_y
+        .saturating_add(content_height.saturating_sub(1))
+        .min(area.bottom().saturating_sub(1));
+    let status = format!("{} {}", selected_provider_name(app), selected_model_name(app));
+    f.render_widget(
+        Paragraph::new(status)
+            .style(Style::default().fg(TEXT_MUTED).bg(INPUT_PANEL_BG))
+            .wrap(Wrap { trim: false }),
+        Rect {
+            x: content_x,
+            y: status_y,
+            width: area
+                .width
+                .saturating_sub(content_x.saturating_sub(area.x) + 1),
+            height: 1,
+        },
+    );
+}
+
+fn selected_provider_name(app: &ChatApp) -> String {
+    app.available_models
+        .iter()
+        .find(|model| model.full_id == app.selected_model_ref())
+        .map(|model| model.provider_name.clone())
+        .or_else(|| {
+            app.selected_model_ref()
+                .split_once('/')
+                .map(|(provider, _)| provider.to_string())
+        })
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| {
+            app.selected_model_ref()
+                .split_once('/')
+                .map(|(provider, _)| provider.to_string())
+                .unwrap_or_else(|| app.selected_model_ref().to_string())
+        })
+}
+
+fn selected_model_name(app: &ChatApp) -> String {
+    app.available_models
+        .iter()
+        .find(|model| model.full_id == app.selected_model_ref())
+        .map(|model| model.model_name.clone())
+        .or_else(|| {
+            app.selected_model_ref()
+                .split_once('/')
+                .map(|(_, model)| model.to_string())
+        })
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| {
+            app.selected_model_ref()
+                .split_once('/')
+                .map(|(_, model)| model.to_string())
+                .unwrap_or_else(|| app.selected_model_ref().to_string())
+        })
 }
 
 #[derive(Clone)]

@@ -163,6 +163,8 @@ pub struct SubmittedInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelOptionView {
     pub full_id: String,
+    pub provider_name: String,
+    pub model_name: String,
     pub modality: String,
     pub max_context_size: usize,
 }
