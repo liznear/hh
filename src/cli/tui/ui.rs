@@ -101,6 +101,7 @@ impl UiLayout {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AppLayoutRects {
+    pub main_messages: Option<Rect>,
     pub sidebar_content: Option<Rect>,
 }
 
@@ -1392,7 +1393,16 @@ pub(crate) fn compute_layout_rects(area: Rect, app: &ChatApp) -> AppLayoutRects 
         }
     });
 
-    AppLayoutRects { sidebar_content }
+    let main_messages = if main_chunks[0].height > 0 {
+        Some(main_chunks[0])
+    } else {
+        None
+    };
+
+    AppLayoutRects {
+        main_messages,
+        sidebar_content,
+    }
 }
 
 fn abbreviate_path(path: &str, max_chars: usize) -> String {

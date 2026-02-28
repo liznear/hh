@@ -808,7 +808,7 @@ fn screen_to_message_coords(
     Some((line, column))
 }
 
-fn handle_sidebar_scroll(
+fn handle_area_scroll(
     app: &mut ChatApp,
     terminal_size: Rect,
     x: u16,
@@ -817,24 +817,49 @@ fn handle_sidebar_scroll(
     down_steps: usize,
 ) -> bool {
     let layout_rects = tui::compute_layout_rects(terminal_size, app);
-    let Some(sidebar_content) = layout_rects.sidebar_content else {
-        return false;
-    };
-    if !point_in_rect(x, y, sidebar_content) {
-        return false;
+
+    // Check if mouse is in sidebar
+    if let Some(sidebar_content) = layout_rects.sidebar_content
+        && point_in_rect(x, y, sidebar_content)
+    {
+        let total_lines = tui::build_sidebar_lines(app, sidebar_content.width).len();
+        let visible_height = sidebar_content.height as usize;
+
+        // Only scroll if sidebar has scrollable content
+        if total_lines > visible_height {
+            if up_steps > 0 {
+                app.sidebar_scroll
+                    .scroll_up_steps(total_lines, visible_height, up_steps);
+            }
+            if down_steps > 0 {
+                app.sidebar_scroll
+                    .scroll_down_steps(total_lines, visible_height, down_steps);
+            }
+            return true;
+        }
+        // Sidebar not scrollable, don't scroll anything
+        return true;
     }
 
-    let total_lines = tui::build_sidebar_lines(app, sidebar_content.width).len();
-    let visible_height = sidebar_content.height as usize;
-    if up_steps > 0 {
-        app.sidebar_scroll
-            .scroll_up_steps(total_lines, visible_height, up_steps);
+    // Check if mouse is in main messages area
+    if let Some(main_messages) = layout_rects.main_messages
+        && point_in_rect(x, y, main_messages)
+    {
+        let (total_lines, visible_height) =
+            scroll_bounds(app, terminal_size.width, terminal_size.height);
+        if up_steps > 0 {
+            app.message_scroll
+                .scroll_up_steps(total_lines, visible_height, up_steps);
+        }
+        if down_steps > 0 {
+            app.message_scroll
+                .scroll_down_steps(total_lines, visible_height, down_steps);
+        }
+        return true;
     }
-    if down_steps > 0 {
-        app.sidebar_scroll
-            .scroll_down_steps(total_lines, visible_height, down_steps);
-    }
-    true
+
+    // Mouse not in a scrollable area
+    false
 }
 
 fn point_in_rect(x: u16, y: u16, rect: Rect) -> bool {
@@ -939,10 +964,7 @@ async fn run_interactive_chat_loop(
                             width: terminal_size.width,
                             height: terminal_size.height,
                         };
-                        if handle_sidebar_scroll(app, terminal_rect, x, y, 3, 0) {
-                            continue;
-                        }
-                        scroll_up_steps(app, terminal_size.width, terminal_size.height, 3);
+                        handle_area_scroll(app, terminal_rect, x, y, 3, 0);
                     }
                     InputEvent::ScrollDown { x, y } => {
                         let terminal_size = tui_guard.get().size()?;
@@ -952,21 +974,12 @@ async fn run_interactive_chat_loop(
                             width: terminal_size.width,
                             height: terminal_size.height,
                         };
-                        if handle_sidebar_scroll(
+                        handle_area_scroll(
                             app,
                             terminal_rect,
                             x,
                             y,
                             0,
-                            runner.scroll_down_lines,
-                        )
-                        {
-                            continue;
-                        }
-                        scroll_down_steps(
-                            app,
-                            terminal_size.width,
-                            terminal_size.height,
                             runner.scroll_down_lines,
                         );
                     }
@@ -2505,11 +2518,16 @@ mod tests {
             width: 120,
             height: 40,
         };
-        let sidebar_content = tui::compute_layout_rects(terminal_rect, &app)
+        let layout_rects = tui::compute_layout_rects(terminal_rect, &app);
+        let sidebar_content = layout_rects
             .sidebar_content
             .expect("sidebar should be visible");
+        let main_messages = layout_rects
+            .main_messages
+            .expect("main messages area should be visible");
 
-        let inside_scrolled = handle_sidebar_scroll(
+        // Test: scrolling in sidebar area scrolls sidebar
+        let inside_scrolled = handle_area_scroll(
             &mut app,
             terminal_rect,
             sidebar_content.x,
@@ -2520,10 +2538,21 @@ mod tests {
         assert!(inside_scrolled);
         assert!(app.sidebar_scroll.offset > 0);
 
-        let previous_offset = app.sidebar_scroll.offset;
-        let outside_scrolled = handle_sidebar_scroll(&mut app, terminal_rect, 1, 1, 0, 3);
-        assert!(!outside_scrolled);
-        assert_eq!(app.sidebar_scroll.offset, previous_offset);
+        let previous_sidebar_offset = app.sidebar_scroll.offset;
+        let previous_message_offset = app.message_scroll.offset;
+
+        // Test: scrolling in main messages area scrolls messages, not sidebar
+        let in_main_scrolled = handle_area_scroll(
+            &mut app,
+            terminal_rect,
+            main_messages.x,
+            main_messages.y,
+            0,
+            3,
+        );
+        assert!(in_main_scrolled);
+        assert!(app.message_scroll.offset > previous_message_offset);
+        assert_eq!(app.sidebar_scroll.offset, previous_sidebar_offset);
     }
 
     #[test]
