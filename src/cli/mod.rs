@@ -15,7 +15,11 @@ pub async fn run() -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
 
     match cli.command {
-        Commands::Chat { debug, max_turns, agent } => {
+        Commands::Chat {
+            debug,
+            max_turns,
+            agent,
+        } => {
             let settings = load_settings(&cwd, agent)?;
             let settings = apply_max_turns(settings, max_turns);
             if let Some(debug_path) = debug {
@@ -75,7 +79,7 @@ pub async fn run() -> anyhow::Result<()> {
             let loader = crate::agent::AgentLoader::new()?;
             let agents = loader.load_agents()?;
             let registry = crate::agent::AgentRegistry::new(agents);
-            
+
             println!("Available agents:");
             for agent in registry.list_agents() {
                 let mode = if agent.mode == crate::agent::AgentMode::Primary {
@@ -83,7 +87,10 @@ pub async fn run() -> anyhow::Result<()> {
                 } else {
                     "subagent"
                 };
-                println!("  {} ({}) - {} - {}", agent.name, agent.display_name, mode, agent.description);
+                println!(
+                    "  {} ({}) - {} - {}",
+                    agent.name, agent.display_name, mode, agent.description
+                );
             }
             Ok(())
         }

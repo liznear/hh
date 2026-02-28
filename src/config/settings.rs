@@ -426,7 +426,9 @@ impl Settings {
                 "bash" => self.permission.bash = policy.clone(),
                 "web" => self.permission.web = policy.clone(),
                 _ => {
-                    self.permission.capabilities.insert(capability.clone(), policy.clone());
+                    self.permission
+                        .capabilities
+                        .insert(capability.clone(), policy.clone());
                 }
             }
         }

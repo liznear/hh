@@ -45,7 +45,11 @@ impl AgentLoader {
         Ok(agents)
     }
 
-    fn load_agents_from_dir(&self, agents: &mut Vec<AgentConfig>, dir: &Path) -> anyhow::Result<()> {
+    fn load_agents_from_dir(
+        &self,
+        agents: &mut Vec<AgentConfig>,
+        dir: &Path,
+    ) -> anyhow::Result<()> {
         let pattern = dir.join("*.md").to_string_lossy().to_string();
 
         for entry in glob(&pattern).context("Failed to read glob pattern")? {
@@ -80,7 +84,10 @@ impl AgentLoader {
         Ok(Some(frontmatter.to_agent_config(name, body)))
     }
 
-    fn parse_frontmatter(&self, content: &str) -> anyhow::Result<(AgentFrontmatter, Option<String>)> {
+    fn parse_frontmatter(
+        &self,
+        content: &str,
+    ) -> anyhow::Result<(AgentFrontmatter, Option<String>)> {
         // Check for YAML frontmatter delimited by ---
         if !content.starts_with("---") {
             anyhow::bail!("Agent file must start with YAML frontmatter delimited by ---");
@@ -98,8 +105,8 @@ impl AgentLoader {
             None
         };
 
-        let frontmatter: AgentFrontmatter = serde_yaml::from_str(frontmatter_yaml)
-            .context("Failed to parse agent frontmatter")?;
+        let frontmatter: AgentFrontmatter =
+            serde_yaml::from_str(frontmatter_yaml).context("Failed to parse agent frontmatter")?;
 
         Ok((frontmatter, body))
     }
