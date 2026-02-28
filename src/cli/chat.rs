@@ -6,13 +6,14 @@ use base64::Engine;
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
 };
+use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 
 use crate::cli::agent_init;
 use crate::cli::render;
 use crate::cli::tui::{
-    self, ChatApp, DebugRenderer, ModelOptionView, ScopedTuiEvent,
-    SubmittedInput, TuiEvent, TuiEventSender,
+    self, ChatApp, DebugRenderer, ModelOptionView, ScopedTuiEvent, SubmittedInput, TuiEvent,
+    TuiEventSender,
 };
 use crate::config::Settings;
 use crate::core::agent::{AgentEvents, AgentLoop, NoopEvents};
@@ -34,11 +35,11 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
         settings.selected_model_ref().to_string(),
         build_model_options(&settings),
     );
-    
+
     // Initialize agents
     let (agent_views, selected_agent) = agent_init::initialize_agents(&settings)?;
     app.set_agents(agent_views, selected_agent);
-    
+
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
@@ -78,11 +79,11 @@ pub async fn run_chat_with_debug(
         settings.selected_model_ref().to_string(),
         build_model_options(&settings),
     );
-    
+
     // Initialize agents
     let (agent_views, selected_agent) = agent_init::initialize_agents(&settings)?;
     app.set_agents(agent_views, selected_agent);
-    
+
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
@@ -125,11 +126,11 @@ pub async fn run_prompt_with_debug(
         settings.selected_model_ref().to_string(),
         build_model_options(&settings),
     );
-    
+
     // Initialize agents
     let (agent_views, selected_agent) = agent_init::initialize_agents(&settings)?;
     app.set_agents(agent_views, selected_agent);
-    
+
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
 
@@ -247,8 +248,8 @@ pub async fn run_prompt_with_debug(
 enum InputEvent {
     Key(event::KeyEvent),
     Paste(String),
-    ScrollUp,
-    ScrollDown,
+    ScrollUp { x: u16, y: u16 },
+    ScrollDown { x: u16, y: u16 },
     Refresh,
     MouseClick { x: u16, y: u16 },
     MouseDrag { x: u16, y: u16 },
@@ -405,14 +406,8 @@ fn scroll_up_steps(app: &mut ChatApp, width: u16, height: u16, steps: usize) {
     }
 
     let (total_lines, visible_height) = scroll_bounds(app, width, height);
-    if app.auto_scroll {
-        app.scroll_offset = total_lines.saturating_sub(visible_height);
-        app.auto_scroll = false;
-    }
-
-    for _ in 0..steps {
-        app.scroll_up();
-    }
+    app.message_scroll
+        .scroll_up_steps(total_lines, visible_height, steps);
 }
 
 fn scroll_down_steps(app: &mut ChatApp, width: u16, height: u16, steps: usize) {
@@ -421,9 +416,8 @@ fn scroll_down_steps(app: &mut ChatApp, width: u16, height: u16, steps: usize) {
     }
 
     let (total_lines, visible_height) = scroll_bounds(app, width, height);
-    for _ in 0..steps {
-        app.scroll_down(total_lines, visible_height);
-    }
+    app.message_scroll
+        .scroll_down_steps(total_lines, visible_height, steps);
 }
 
 fn mutate_input(app: &mut ChatApp, mutator: impl FnOnce(&mut ChatApp)) {
@@ -717,9 +711,11 @@ fn handle_enter_key(
 
 fn scroll_page_down(app: &mut ChatApp, width: u16, height: u16) {
     let (total_lines, visible_height) = scroll_bounds(app, width, height);
-    for _ in 0..visible_height.saturating_sub(1) {
-        app.scroll_down(total_lines, visible_height);
-    }
+    app.message_scroll.scroll_down_steps(
+        total_lines,
+        visible_height,
+        visible_height.saturating_sub(1),
+    );
 }
 
 fn scroll_bounds(app: &ChatApp, width: u16, height: u16) -> (usize, usize) {
@@ -802,16 +798,47 @@ fn screen_to_message_coords(
     let wrap_width = app.message_wrap_width(size.width);
     let total_lines = app.get_lines(wrap_width).len();
     let visible_height = app.message_viewport_height(size.height);
-    let scroll_offset = if app.auto_scroll {
-        total_lines.saturating_sub(visible_height)
-    } else {
-        app.scroll_offset
-    };
+    let scroll_offset = app
+        .message_scroll
+        .effective_offset(total_lines, visible_height);
 
     let line = scroll_offset.saturating_add(relative_y);
     let column = relative_x;
 
     Some((line, column))
+}
+
+fn handle_sidebar_scroll(
+    app: &mut ChatApp,
+    terminal_size: Rect,
+    x: u16,
+    y: u16,
+    up_steps: usize,
+    down_steps: usize,
+) -> bool {
+    let layout_rects = tui::compute_layout_rects(terminal_size, app);
+    let Some(sidebar_content) = layout_rects.sidebar_content else {
+        return false;
+    };
+    if !point_in_rect(x, y, sidebar_content) {
+        return false;
+    }
+
+    let total_lines = tui::build_sidebar_lines(app, sidebar_content.width).len();
+    let visible_height = sidebar_content.height as usize;
+    if up_steps > 0 {
+        app.sidebar_scroll
+            .scroll_up_steps(total_lines, visible_height, up_steps);
+    }
+    if down_steps > 0 {
+        app.sidebar_scroll
+            .scroll_down_steps(total_lines, visible_height, down_steps);
+    }
+    true
+}
+
+fn point_in_rect(x: u16, y: u16, rect: Rect) -> bool {
+    x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()
 }
 
 fn spawn_agent_task(
@@ -845,8 +872,14 @@ fn spawn_agent_task(
 
 fn handle_mouse_event(mouse: MouseEvent) -> Option<InputEvent> {
     match mouse.kind {
-        MouseEventKind::ScrollUp => Some(InputEvent::ScrollUp),
-        MouseEventKind::ScrollDown => Some(InputEvent::ScrollDown),
+        MouseEventKind::ScrollUp => Some(InputEvent::ScrollUp {
+            x: mouse.column,
+            y: mouse.row,
+        }),
+        MouseEventKind::ScrollDown => Some(InputEvent::ScrollDown {
+            x: mouse.column,
+            y: mouse.row,
+        }),
         MouseEventKind::Down(crossterm::event::MouseButton::Left) => Some(InputEvent::MouseClick {
             x: mouse.column,
             y: mouse.row,
@@ -898,12 +931,38 @@ async fn run_interactive_chat_loop(
                     InputEvent::Paste(text) => {
                         apply_paste(app, text);
                     }
-                    InputEvent::ScrollUp => {
+                    InputEvent::ScrollUp { x, y } => {
                         let terminal_size = tui_guard.get().size()?;
+                        let terminal_rect = Rect {
+                            x: 0,
+                            y: 0,
+                            width: terminal_size.width,
+                            height: terminal_size.height,
+                        };
+                        if handle_sidebar_scroll(app, terminal_rect, x, y, 3, 0) {
+                            continue;
+                        }
                         scroll_up_steps(app, terminal_size.width, terminal_size.height, 3);
                     }
-                    InputEvent::ScrollDown => {
+                    InputEvent::ScrollDown { x, y } => {
                         let terminal_size = tui_guard.get().size()?;
+                        let terminal_rect = Rect {
+                            x: 0,
+                            y: 0,
+                            width: terminal_size.width,
+                            height: terminal_size.height,
+                        };
+                        if handle_sidebar_scroll(
+                            app,
+                            terminal_rect,
+                            x,
+                            y,
+                            0,
+                            runner.scroll_down_lines,
+                        )
+                        {
+                            continue;
+                        }
                         scroll_down_steps(
                             app,
                             terminal_size.width,
@@ -1697,7 +1756,7 @@ mod tests {
         ModelSettings, ProviderConfig, SessionSettings,
     };
     use crate::core::{Message, Role};
-    use crossterm::event::KeyEvent;
+    use crossterm::event::{KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use std::collections::BTreeMap;
     use tempfile::tempdir;
 
@@ -1739,6 +1798,8 @@ mod tests {
             },
             tools: Default::default(),
             permission: Default::default(),
+            selected_agent: None,
+            agents: BTreeMap::new(),
         }
     }
 
@@ -2400,6 +2461,72 @@ mod tests {
     }
 
     #[test]
+    fn test_mouse_wheel_event_keeps_cursor_coordinates() {
+        let event = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 77,
+            row: 14,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        let translated = handle_mouse_event(event);
+        assert!(matches!(
+            translated,
+            Some(InputEvent::ScrollDown { x: 77, y: 14 })
+        ));
+    }
+
+    #[test]
+    fn test_sidebar_wheel_scroll_only_applies_inside_sidebar_column() {
+        let temp_dir = tempdir().unwrap();
+        let cwd = temp_dir.path();
+        let mut app = ChatApp::new("Session".to_string(), cwd);
+
+        for idx in 0..120 {
+            app.messages.push(tui::ChatMessage::ToolCall {
+                name: "edit".to_string(),
+                args: "{}".to_string(),
+                output: Some(
+                    serde_json::json!({
+                        "path": format!("src/file-{idx}.rs"),
+                        "applied": true,
+                        "summary": {"added_lines": 1, "removed_lines": 0},
+                        "diff": ""
+                    })
+                    .to_string(),
+                ),
+                is_error: Some(false),
+            });
+        }
+
+        let terminal_rect = Rect {
+            x: 0,
+            y: 0,
+            width: 120,
+            height: 40,
+        };
+        let sidebar_content = tui::compute_layout_rects(terminal_rect, &app)
+            .sidebar_content
+            .expect("sidebar should be visible");
+
+        let inside_scrolled = handle_sidebar_scroll(
+            &mut app,
+            terminal_rect,
+            sidebar_content.x,
+            sidebar_content.y,
+            0,
+            3,
+        );
+        assert!(inside_scrolled);
+        assert!(app.sidebar_scroll.offset > 0);
+
+        let previous_offset = app.sidebar_scroll.offset;
+        let outside_scrolled = handle_sidebar_scroll(&mut app, terminal_rect, 1, 1, 0, 3);
+        assert!(!outside_scrolled);
+        assert_eq!(app.sidebar_scroll.offset, previous_offset);
+    }
+
+    #[test]
     fn test_scroll_up_from_auto_scroll_moves_immediately() {
         let temp_dir = tempdir().unwrap();
         let cwd = temp_dir.path();
@@ -2410,12 +2537,12 @@ mod tests {
                 .push(tui::ChatMessage::Assistant(format!("line {i}")));
         }
         app.mark_dirty();
-        app.auto_scroll = true;
-        app.scroll_offset = 0;
+        app.message_scroll.auto_follow = true;
+        app.message_scroll.offset = 0;
 
         scroll_up_steps(&mut app, 120, 30, 1);
 
-        assert!(!app.auto_scroll);
-        assert!(app.scroll_offset > 0);
+        assert!(!app.message_scroll.auto_follow);
+        assert!(app.message_scroll.offset > 0);
     }
 }

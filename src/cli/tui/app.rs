@@ -14,6 +14,60 @@ const SIDEBAR_WIDTH: u16 = 38;
 const LEFT_COLUMN_RIGHT_MARGIN: u16 = 2;
 const DEFAULT_CONTEXT_LIMIT: usize = 128_000;
 
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollState {
+    pub offset: usize,
+    pub auto_follow: bool,
+}
+
+impl ScrollState {
+    pub const fn new(auto_follow: bool) -> Self {
+        Self {
+            offset: 0,
+            auto_follow,
+        }
+    }
+
+    pub fn effective_offset(&self, total_lines: usize, visible_height: usize) -> usize {
+        let max_offset = total_lines.saturating_sub(visible_height);
+        if self.auto_follow {
+            max_offset
+        } else {
+            self.offset.min(max_offset)
+        }
+    }
+
+    pub fn scroll_up_steps(&mut self, total_lines: usize, visible_height: usize, steps: usize) {
+        if steps == 0 {
+            return;
+        }
+
+        if self.auto_follow {
+            self.offset = total_lines.saturating_sub(visible_height);
+            self.auto_follow = false;
+        }
+
+        self.offset = self.offset.saturating_sub(steps);
+        self.auto_follow = false;
+    }
+
+    pub fn scroll_down_steps(&mut self, total_lines: usize, visible_height: usize, steps: usize) {
+        if steps == 0 {
+            return;
+        }
+
+        let max_offset = total_lines.saturating_sub(visible_height);
+        self.offset = self.effective_offset(total_lines, visible_height);
+        self.offset = self.offset.saturating_add(steps).min(max_offset);
+        self.auto_follow = self.offset >= max_offset;
+    }
+
+    pub fn reset(&mut self, auto_follow: bool) {
+        self.offset = 0;
+        self.auto_follow = auto_follow;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TodoItemView {
     pub content: String,
@@ -124,10 +178,10 @@ pub struct ChatApp {
     pub messages: Vec<ChatMessage>,
     pub input: String,
     pub cursor: usize,
-    pub scroll_offset: usize,
+    pub message_scroll: ScrollState,
+    pub sidebar_scroll: ScrollState,
     pub should_quit: bool,
     pub is_processing: bool,
-    pub auto_scroll: bool, // When true, follow new content
     pub session_id: Option<String>,
     pub session_name: String,
     session_epoch: u64,
@@ -187,10 +241,10 @@ impl ChatApp {
             messages: Vec::new(),
             input: String::new(),
             cursor: 0,
-            scroll_offset: 0,
+            message_scroll: ScrollState::new(true),
+            sidebar_scroll: ScrollState::new(false),
             should_quit: false,
             is_processing: false,
-            auto_scroll: true,
             session_id: None,
             session_name,
             session_epoch: 0,
@@ -230,7 +284,8 @@ impl ChatApp {
         }
 
         // Only cycle through primary agents
-        let primary_agents: Vec<_> = self.available_agents
+        let primary_agents: Vec<_> = self
+            .available_agents
             .iter()
             .filter(|a| a.mode == "primary")
             .collect();
@@ -349,7 +404,7 @@ impl ChatApp {
         if !input.is_empty() || !attachments.is_empty() {
             self.messages.push(ChatMessage::User(input.clone()));
             self.set_processing(true);
-            self.auto_scroll = true; // Follow the new response
+            self.message_scroll.auto_follow = true; // Follow the new response
             self.mark_dirty();
         }
         SubmittedInput {
@@ -370,24 +425,6 @@ impl ChatApp {
             *self.needs_rebuild.borrow_mut() = false;
         }
         self.cached_lines.borrow()
-    }
-
-    pub fn scroll_up(&mut self) {
-        if self.scroll_offset > 0 {
-            self.scroll_offset -= 1;
-            self.auto_scroll = false; // User took control
-        }
-    }
-
-    pub fn scroll_down(&mut self, max_lines: usize, visible_height: usize) {
-        if self.scroll_offset < max_lines.saturating_sub(1) {
-            self.scroll_offset += 1;
-        }
-        // Re-enable auto-scroll when scrolled to bottom
-        let max_offset = max_lines.saturating_sub(visible_height);
-        if self.scroll_offset >= max_offset {
-            self.auto_scroll = true;
-        }
     }
 
     pub fn progress_panel_height(&self) -> u16 {
@@ -545,8 +582,8 @@ impl ChatApp {
         self.session_name = session_name;
         self.available_sessions.clear();
         self.is_picking_session = false;
-        self.scroll_offset = 0;
-        self.auto_scroll = true;
+        self.message_scroll.reset(true);
+        self.sidebar_scroll.reset(false);
         self.set_processing(false);
         self.mark_dirty();
     }

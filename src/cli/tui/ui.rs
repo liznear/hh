@@ -101,6 +101,11 @@ impl UiLayout {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AppLayoutRects {
+    pub sidebar_content: Option<Rect>,
+}
+
 #[derive(Debug, Deserialize)]
 struct EditToolOutput {
     path: String,
@@ -300,6 +305,21 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
     let content = inset_rect(inner, 2, 0);
     f.render_widget(block, area);
 
+    let lines = build_sidebar_lines(app, content.width);
+    let scroll_offset = app
+        .sidebar_scroll
+        .effective_offset(lines.len(), content.height as usize);
+
+    let sidebar = Paragraph::new(Text::from(lines))
+        .style(Style::default().bg(SIDEBAR_BG))
+        .wrap(Wrap { trim: true })
+        .scroll((scroll_offset as u16, 0));
+    f.render_widget(sidebar, content);
+}
+
+pub(crate) fn build_sidebar_lines(app: &ChatApp, content_width: u16) -> Vec<Line<'static>> {
+    let content_width = content_width.max(1);
+
     let (used, budget) = app.context_usage();
     let context_percent = if budget == 0 {
         0
@@ -328,7 +348,7 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
         Line::from(Span::styled(
             sidebar_prefixed(&abbreviate_path(
                 &directory_text,
-                content.width.saturating_sub(2) as usize,
+                content_width.saturating_sub(2) as usize,
             )),
             Style::default().fg(TEXT_PRIMARY),
         )),
@@ -353,7 +373,7 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
             sidebar_label("Modified Files"),
             Style::default().fg(TEXT_SECONDARY).bold(),
         ))];
-        append_modified_file_list(&mut modified_lines, &modified_files, content.width as usize);
+        append_modified_file_list(&mut modified_lines, &modified_files, content_width as usize);
         sections.push(modified_lines);
     }
 
@@ -384,10 +404,7 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
         }
     }
 
-    let sidebar = Paragraph::new(Text::from(lines))
-        .style(Style::default().bg(SIDEBAR_BG))
-        .wrap(Wrap { trim: true });
-    f.render_widget(sidebar, content);
+    lines
 }
 
 fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
@@ -405,11 +422,9 @@ fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
     let total_lines = lines.len();
 
     // Calculate scroll offset: auto-scroll to bottom if enabled, otherwise use manual offset
-    let scroll_offset = if app.auto_scroll || app.scroll_offset + visible_height > total_lines {
-        total_lines.saturating_sub(visible_height)
-    } else {
-        app.scroll_offset
-    };
+    let scroll_offset = app
+        .message_scroll
+        .effective_offset(total_lines, visible_height);
 
     let mut rendered_lines = lines.to_vec();
     apply_selection_highlight(&mut rendered_lines, app);
@@ -935,7 +950,7 @@ fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
     let status_y = content_y
         .saturating_add(content_height.saturating_sub(1))
         .min(area.bottom().saturating_sub(1));
-    
+
     // Build status line with agent name, provider, and model
     let status_lines = build_status_line(app);
     f.render_widget(
@@ -1251,6 +1266,72 @@ fn inset_rect(area: Rect, padding_x: u16, padding_y: u16) -> Rect {
         width: area.width.saturating_sub(padding_x.saturating_mul(2)),
         height: area.height.saturating_sub(padding_y.saturating_mul(2)),
     }
+}
+
+pub(crate) fn compute_layout_rects(area: Rect, app: &ChatApp) -> AppLayoutRects {
+    let layout = UiLayout::default();
+    let app_area = inset_rect(
+        area,
+        layout.main_outer_padding_x,
+        layout.main_outer_padding_y,
+    );
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(40),
+            Constraint::Length(layout.left_column_right_margin),
+            Constraint::Length(layout.sidebar_width),
+        ])
+        .split(app_area);
+
+    let main_area = columns[0];
+    let sidebar_area = if columns.len() > 2 {
+        Some(columns[2])
+    } else {
+        None
+    };
+
+    let input_content_width = main_area
+        .width
+        .saturating_sub(layout.user_bubble_indent() as u16 + 3)
+        as usize;
+    let input_line_count =
+        input_line_count(&app.input, input_content_width).clamp(1, MAX_INPUT_LINES);
+    let input_area_height = (input_line_count + 4) as u16;
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(input_area_height),
+        ])
+        .split(main_area);
+
+    let sidebar_content = sidebar_area.and_then(|sidebar_area| {
+        let sidebar_bottom = main_chunks[4].bottom();
+        let clipped_sidebar_area = Rect {
+            x: sidebar_area.x,
+            y: sidebar_area.y,
+            width: sidebar_area.width,
+            height: sidebar_bottom.saturating_sub(sidebar_area.y),
+        };
+        if clipped_sidebar_area.width == 0 || clipped_sidebar_area.height == 0 {
+            return None;
+        }
+
+        let block = Block::default().style(Style::default().bg(SIDEBAR_BG));
+        let inner = block.inner(clipped_sidebar_area);
+        let content = inset_rect(inner, 2, 0);
+        if content.width == 0 || content.height == 0 {
+            None
+        } else {
+            Some(content)
+        }
+    });
+
+    AppLayoutRects { sidebar_content }
 }
 
 fn abbreviate_path(path: &str, max_chars: usize) -> String {

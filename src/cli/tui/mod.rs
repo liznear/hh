@@ -14,6 +14,7 @@ pub use debug::DebugRenderer;
 pub use event::{ScopedTuiEvent, TuiEvent, TuiEventSender};
 pub use terminal::{Tui, TuiGuard, restore_terminal, setup_terminal};
 pub use ui::{build_message_lines, render_app};
+pub(crate) use ui::{build_sidebar_lines, compute_layout_rects};
 
 #[cfg(test)]
 mod ui_tests;
