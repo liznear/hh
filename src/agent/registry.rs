@@ -1,6 +1,7 @@
 use crate::agent::{AgentConfig, AgentMode};
 use std::collections::HashMap;
 
+#[derive(Default)]
 pub struct AgentRegistry {
     agents: HashMap<String, AgentConfig>,
 }
@@ -39,13 +40,5 @@ impl AgentRegistry {
             .filter(|a| a.mode == AgentMode::Primary)
             .map(|a| a.name.clone())
             .collect()
-    }
-}
-
-impl Default for AgentRegistry {
-    fn default() -> Self {
-        Self {
-            agents: HashMap::new(),
-        }
     }
 }

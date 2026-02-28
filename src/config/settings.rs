@@ -406,7 +406,7 @@ impl Settings {
             .model
             .as_ref()
             .or_else(|| self.agents.get(&agent.name).and_then(|s| s.model.as_ref()))
-            .or_else(|| Some(&self.models.default));
+            .or(Some(&self.models.default));
 
         if let Some(model) = model_to_use {
             self.models.default = model.clone();
