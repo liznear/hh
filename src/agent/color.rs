@@ -15,7 +15,7 @@ pub fn parse_color(s: &str) -> Option<Color> {
         "lightgreen" => Some(Color::LightGreen),
         "lightyellow" => Some(Color::LightYellow),
         "lightblue" => Some(Color::LightBlue),
-        "lightmagenta" | "lightpink" => Some(Color::LightMagenta),
+        "lightmagenta" | "lightpink" | "pink" => Some(Color::LightMagenta),
         "lightcyan" => Some(Color::LightCyan),
         "lightwhite" => Some(Color::White),
         // Try to parse as RGB hex
