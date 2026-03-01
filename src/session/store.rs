@@ -26,6 +26,16 @@ impl SessionStore {
         id: Option<&str>,
         title: Option<String>,
     ) -> anyhow::Result<Self> {
+        Self::new_with_parent(root, cwd, id, title, None)
+    }
+
+    pub fn new_with_parent(
+        root: &Path,
+        cwd: &Path,
+        id: Option<&str>,
+        title: Option<String>,
+        parent_session_id: Option<String>,
+    ) -> anyhow::Result<Self> {
         let workspace_id = workspace_key(cwd);
         let dir = root.join(&workspace_id);
         fs::create_dir_all(&dir)?;
@@ -43,6 +53,7 @@ impl SessionStore {
                 title: "Migrated Session".to_string(),
                 created_at: timestamp,
                 last_updated_at: timestamp,
+                parent_session_id: None,
             };
             let f = fs::File::create(&meta_file)?;
             serde_json::to_writer(f, &metadata)?;
@@ -70,6 +81,7 @@ impl SessionStore {
                 title,
                 created_at: timestamp,
                 last_updated_at: timestamp,
+                parent_session_id,
             })?;
         }
 
@@ -77,6 +89,14 @@ impl SessionStore {
     }
 
     pub fn list(root: &Path, cwd: &Path) -> anyhow::Result<Vec<SessionMetadata>> {
+        Self::list_with_options(root, cwd, false)
+    }
+
+    pub fn list_with_options(
+        root: &Path,
+        cwd: &Path,
+        include_children: bool,
+    ) -> anyhow::Result<Vec<SessionMetadata>> {
         let workspace_id = workspace_key(cwd);
         let dir = root.join(&workspace_id);
         if !dir.exists() {
@@ -93,6 +113,9 @@ impl SessionStore {
                 && let Ok(file) = fs::File::open(&path)
                 && let Ok(metadata) = serde_json::from_reader::<_, SessionMetadata>(file)
             {
+                if !include_children && metadata.parent_session_id.is_some() {
+                    continue;
+                }
                 sessions.push(metadata);
             }
         }
@@ -131,6 +154,7 @@ impl SessionStore {
                 title,
                 created_at: timestamp,
                 last_updated_at: timestamp,
+                parent_session_id: None,
             }
         };
         self.write_metadata(metadata)

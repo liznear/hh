@@ -53,6 +53,9 @@ pub trait Provider: Send + Sync {
 pub trait ToolExecutor: Send + Sync {
     fn schemas(&self) -> Vec<crate::tool::schema::ToolSchema>;
     async fn execute(&self, name: &str, args: Value) -> crate::tool::ToolResult;
+    fn is_non_blocking(&self, _name: &str) -> bool {
+        false
+    }
 }
 
 pub trait ApprovalPolicy: Send + Sync {

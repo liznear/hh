@@ -1,4 +1,5 @@
 pub mod state;
+pub mod subagent_manager;
 
 pub use super::{AgentEvents, NoopEvents};
 
@@ -9,6 +10,7 @@ use crate::core::{
 use crate::safety::sanitize_tool_output;
 use crate::session::{SessionEvent, event_id};
 use crate::tool::ToolResult;
+use futures::stream::{FuturesUnordered, StreamExt};
 use serde::Serialize;
 use state::AgentState;
 use std::future::Future;
@@ -173,6 +175,8 @@ where
                 return Ok(assistant_content);
             }
 
+            let mut pending_non_blocking = FuturesUnordered::new();
+
             for call in response.tool_calls {
                 self.session
                     .append(&SessionEvent::ToolCall { call: call.clone() })?;
@@ -213,7 +217,24 @@ where
                     continue;
                 }
 
+                if self.tools.is_non_blocking(&call.name) {
+                    let event_args = decorate_tool_start_args(&call.name, &call.arguments);
+                    self.events.on_tool_start(&call.name, &event_args);
+                    pending_non_blocking.push(async {
+                        let mut result =
+                            self.tools.execute(&call.name, call.arguments.clone()).await;
+                        result.output = sanitize_tool_output(&result.output);
+                        (call, result)
+                    });
+                    continue;
+                }
+
                 self.execute_tool_call(&call, &mut state).await?;
+            }
+
+            while let Some((call, result)) = pending_non_blocking.next().await {
+                self.events.on_tool_end(&call.name, &result);
+                self.record_tool_result(&call, result, &mut state)?;
             }
 
             state.step += 1;
@@ -245,7 +266,8 @@ where
         call: &ToolCall,
         state: &mut AgentState,
     ) -> anyhow::Result<()> {
-        self.events.on_tool_start(&call.name, &call.arguments);
+        let event_args = decorate_tool_start_args(&call.name, &call.arguments);
+        self.events.on_tool_start(&call.name, &event_args);
         let mut result = if call.name == "todo_read" {
             todo_snapshot_result(&state.todo_items)
         } else {
@@ -300,6 +322,18 @@ where
             message,
         })
     }
+}
+
+fn decorate_tool_start_args(name: &str, args: &serde_json::Value) -> serde_json::Value {
+    if name != "task" {
+        return args.clone();
+    }
+    let mut obj = args.as_object().cloned().unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    obj.insert("__started_at".to_string(), serde_json::Value::from(now));
+    serde_json::Value::Object(obj)
 }
 
 #[derive(Debug, Serialize)]

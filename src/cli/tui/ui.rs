@@ -119,6 +119,15 @@ struct EditDiffSummary {
     removed_lines: usize,
 }
 
+#[derive(Debug, Deserialize)]
+struct TaskToolRenderOutput {
+    name: String,
+    agent_name: String,
+    started_at: u64,
+    #[serde(default)]
+    finished_at: Option<u64>,
+}
+
 pub fn render_app(f: &mut Frame, app: &ChatApp) {
     let layout = UiLayout::default();
     f.render_widget(
@@ -906,7 +915,9 @@ fn render_tool_call_message(
         }
         None => render_pending_tool_call(
             lines,
+            message.name,
             &label,
+            message.args,
             context.available_width,
             context.style.pending_prefix,
             context.style.pending_continuation,
@@ -919,7 +930,9 @@ fn render_completed_tool_call(
     completed: CompletedToolCall<'_>,
     context: ToolRenderContext<'_>,
 ) {
-    let completed_label = if completed.is_error {
+    let completed_label = if completed.name == "task" {
+        task_completed_label(completed.label, completed.output)
+    } else if completed.is_error {
         completed.label.to_string()
     } else {
         append_tool_result_count(completed.name, completed.label, completed.output)
@@ -947,12 +960,20 @@ fn render_completed_tool_call(
 
 fn render_pending_tool_call(
     lines: &mut Vec<Line<'static>>,
+    tool_name: &str,
     label: &str,
+    args: &str,
     available_width: usize,
     tool_pending_prefix: &str,
     tool_pending_continuation: &str,
 ) {
-    let wrapped = wrap_compact_text(label, available_width.saturating_sub(1));
+    let pending_label = if tool_name == "task" {
+        let elapsed = task_pending_elapsed_secs(args).unwrap_or(0);
+        format!("{label}  {}", format_elapsed_seconds(elapsed))
+    } else {
+        label.to_string()
+    };
+    let wrapped = wrap_compact_text(&pending_label, available_width.saturating_sub(1));
     push_wrapped_tool_rows(
         lines,
         &wrapped,
@@ -963,6 +984,67 @@ fn render_pending_tool_call(
         vec![Span::raw(tool_pending_continuation.to_string())],
         Style::default().fg(TEXT_SECONDARY),
     );
+}
+
+fn task_pending_elapsed_secs(args: &str) -> Option<u64> {
+    let args_value = serde_json::from_str::<Value>(args).ok()?;
+    let started_at = args_value
+        .as_object()
+        .and_then(|map| map.get("__started_at"))
+        .and_then(Value::as_u64)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(now.saturating_sub(started_at))
+}
+
+fn task_completed_label(base_label: &str, output: Option<&str>) -> String {
+    let Some(output) = output else {
+        return format!("{base_label}  0s");
+    };
+
+    let Ok(parsed) = serde_json::from_str::<TaskToolRenderOutput>(output) else {
+        return format!("{base_label}  0s");
+    };
+
+    let label = format!("Task [{}]: {}", title_case(&parsed.agent_name), parsed.name);
+    let finished = parsed.finished_at.unwrap_or(parsed.started_at);
+    format!(
+        "{}  {}",
+        label,
+        format_elapsed_seconds(finished.saturating_sub(parsed.started_at))
+    )
+}
+
+fn format_elapsed_seconds(secs: u64) -> String {
+    if secs < 60 {
+        return format!("{}s", secs);
+    }
+    let mins = secs / 60;
+    let rem = secs % 60;
+    format!("{}m {}s", mins, rem)
+}
+
+fn title_case(name: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize = true;
+    for ch in name.chars() {
+        if matches!(ch, '_' | '-' | ' ') {
+            if !result.ends_with(' ') {
+                result.push(' ');
+            }
+            capitalize = true;
+            continue;
+        }
+        if capitalize {
+            result.extend(ch.to_uppercase());
+            capitalize = false;
+        } else {
+            result.extend(ch.to_lowercase());
+        }
+    }
+    result.trim().to_string()
 }
 
 fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {

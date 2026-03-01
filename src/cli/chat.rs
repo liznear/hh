@@ -1,4 +1,7 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::{fs, io::Cursor};
 
@@ -10,6 +13,7 @@ use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
+use crate::agent::{AgentLoader, AgentMode, AgentRegistry};
 use crate::cli::agent_init;
 use crate::cli::render;
 use crate::cli::tui::{
@@ -17,13 +21,21 @@ use crate::cli::tui::{
     SubmittedInput, TuiEvent, TuiEventSender,
 };
 use crate::config::Settings;
+use crate::core::agent::subagent_manager::{
+    SubagentExecutionRequest, SubagentExecutionResult, SubagentExecutor, SubagentManager,
+    SubagentStatus,
+};
 use crate::core::agent::{AgentEvents, AgentLoop, NoopEvents};
 use crate::core::{Message, MessageAttachment, Role};
 use crate::permission::PermissionMatcher;
 use crate::provider::openai_compatible::OpenAiCompatibleProvider;
+use crate::session::types::SubAgentFailureReason;
 use crate::session::{SessionEvent, SessionStore, event_id};
-use crate::tool::registry::ToolRegistry;
+use crate::tool::registry::{ToolRegistry, ToolRegistryContext};
+use crate::tool::task::TaskToolRuntimeContext;
 use uuid::Uuid;
+
+static GLOBAL_SUBAGENT_MANAGER: OnceLock<Arc<SubagentManager>> = OnceLock::new();
 
 pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Result<()> {
     // Setup terminal
@@ -43,6 +55,7 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
+    initialize_subagent_manager(settings.clone(), cwd.to_path_buf());
 
     run_interactive_chat_loop(
         &mut tui_guard,
@@ -87,6 +100,7 @@ pub async fn run_chat_with_debug(
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
+    initialize_subagent_manager(settings.clone(), cwd.to_path_buf());
 
     run_interactive_chat_loop(
         &mut tui_guard,
@@ -134,6 +148,7 @@ pub async fn run_prompt_with_debug(
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
+    let subagent_manager = current_subagent_manager(&settings, cwd);
 
     // Submit the prompt
     app.messages.push(tui::ChatMessage::User(prompt.clone()));
@@ -192,6 +207,7 @@ pub async fn run_prompt_with_debug(
             },
             model_ref,
             sender_clone.clone(),
+            Arc::clone(&subagent_manager),
             AgentRunOptions {
                 session_id: Some(session_id),
                 session_title: Some(title_clone),
@@ -907,6 +923,7 @@ fn spawn_agent_task(
     input: Message,
     model_ref: String,
     event_sender: &TuiEventSender,
+    subagent_manager: Arc<SubagentManager>,
     session_id: Option<String>,
     session_title: Option<String>,
 ) -> tokio::task::JoinHandle<()> {
@@ -920,6 +937,7 @@ fn spawn_agent_task(
             input,
             model_ref,
             sender.clone(),
+            subagent_manager,
             AgentRunOptions {
                 session_id,
                 session_title,
@@ -967,6 +985,8 @@ async fn run_interactive_chat_loop(
     if let Some(renderer) = runner.debug_renderer.as_deref_mut() {
         renderer.render(app)?;
     }
+
+    let mut render_tick = tokio::time::interval(Duration::from_secs(1));
 
     loop {
         tui_guard.get().draw(|f| tui::render_app(f, app))?;
@@ -1045,6 +1065,9 @@ async fn run_interactive_chat_loop(
                     app.handle_event(&event.event);
                 }
             }
+            _ = render_tick.tick() => {
+                app.mark_dirty();
+            }
         }
 
         if app.should_quit {
@@ -1106,6 +1129,144 @@ fn build_model_options(settings: &Settings) -> Vec<ModelOptionView> {
         .collect()
 }
 
+fn initialize_subagent_manager(settings: Settings, cwd: PathBuf) {
+    let _ = GLOBAL_SUBAGENT_MANAGER.get_or_init(|| Arc::new(build_subagent_manager(settings, cwd)));
+}
+
+fn current_subagent_manager(settings: &Settings, cwd: &Path) -> Arc<SubagentManager> {
+    Arc::clone(
+        GLOBAL_SUBAGENT_MANAGER
+            .get_or_init(|| Arc::new(build_subagent_manager(settings.clone(), cwd.to_path_buf()))),
+    )
+}
+
+fn build_subagent_manager(settings: Settings, cwd: PathBuf) -> SubagentManager {
+    let enabled = settings.agent.parallel_subagents;
+    let max_parallel = settings.agent.max_parallel_subagents;
+    let max_depth = settings.agent.sub_agent_max_depth;
+    let executor_settings = settings.clone();
+    let executor: SubagentExecutor = Arc::new(move |request| {
+        let settings = executor_settings.clone();
+        let cwd = cwd.clone();
+        Box::pin(async move {
+            if !enabled {
+                return SubagentExecutionResult {
+                    status: SubagentStatus::Failed,
+                    summary: "parallel sub-agents are disabled by configuration".to_string(),
+                    error: Some("agent.parallel_subagents=false".to_string()),
+                    failure_reason: Some(SubAgentFailureReason::RuntimeError),
+                };
+            }
+            run_subagent_execution(settings, cwd, request).await
+        })
+    });
+
+    SubagentManager::new(max_parallel, max_depth, executor)
+}
+
+async fn run_subagent_execution(
+    settings: Settings,
+    cwd: PathBuf,
+    request: SubagentExecutionRequest,
+) -> SubagentExecutionResult {
+    let loader = match AgentLoader::new() {
+        Ok(loader) => loader,
+        Err(err) => {
+            return SubagentExecutionResult {
+                status: SubagentStatus::Failed,
+                summary: "failed to initialize agent loader".to_string(),
+                error: Some(err.to_string()),
+                failure_reason: Some(SubAgentFailureReason::RuntimeError),
+            };
+        }
+    };
+    let registry = match loader.load_agents() {
+        Ok(agents) => AgentRegistry::new(agents),
+        Err(err) => {
+            return SubagentExecutionResult {
+                status: SubagentStatus::Failed,
+                summary: "failed to load agents".to_string(),
+                error: Some(err.to_string()),
+                failure_reason: Some(SubAgentFailureReason::RuntimeError),
+            };
+        }
+    };
+
+    let Some(agent) = registry.get_agent(&request.subagent_type).cloned() else {
+        return SubagentExecutionResult {
+            status: SubagentStatus::Failed,
+            summary: format!("unknown subagent_type: {}", request.subagent_type),
+            error: None,
+            failure_reason: Some(SubAgentFailureReason::RuntimeError),
+        };
+    };
+    if agent.mode != AgentMode::Subagent {
+        return SubagentExecutionResult {
+            status: SubagentStatus::Failed,
+            summary: format!("agent '{}' is not a subagent", agent.name),
+            error: None,
+            failure_reason: Some(SubAgentFailureReason::RuntimeError),
+        };
+    }
+
+    let mut child_settings = settings.clone();
+    child_settings.apply_agent_settings(&agent);
+    child_settings.selected_agent = Some(agent.name.clone());
+    let model_ref = child_settings.selected_model_ref().to_string();
+
+    let loop_runner = match create_agent_loop(
+        child_settings,
+        &cwd,
+        &model_ref,
+        NoopEvents,
+        Some(current_subagent_manager(&settings, &cwd)),
+        Some(request.task_id.clone()),
+        request.depth,
+        Some(request.child_session_id),
+        Some(request.description),
+        Some(request.parent_session_id),
+    ) {
+        Ok(loop_runner) => loop_runner,
+        Err(err) => {
+            return SubagentExecutionResult {
+                status: SubagentStatus::Failed,
+                summary: "failed to initialize sub-agent runtime".to_string(),
+                error: Some(err.to_string()),
+                failure_reason: Some(SubAgentFailureReason::RuntimeError),
+            };
+        }
+    };
+
+    match loop_runner
+        .run_with_question_tool(
+            Message {
+                role: Role::User,
+                content: request.prompt,
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            |_tool_name| Ok(true),
+            |_questions| async {
+                anyhow::bail!("question tool is not available in sub-agent mode")
+            },
+        )
+        .await
+    {
+        Ok(output) => SubagentExecutionResult {
+            status: SubagentStatus::Completed,
+            summary: output,
+            error: None,
+            failure_reason: None,
+        },
+        Err(err) => SubagentExecutionResult {
+            status: SubagentStatus::Failed,
+            summary: "sub-agent execution failed".to_string(),
+            error: Some(err.to_string()),
+            failure_reason: Some(SubAgentFailureReason::RuntimeError),
+        },
+    }
+}
+
 fn format_modalities(modalities: &[crate::config::settings::ModelModalityType]) -> String {
     modalities
         .iter()
@@ -1120,19 +1281,26 @@ async fn run_agent(
     prompt: Message,
     model_ref: String,
     events: TuiEventSender,
+    subagent_manager: Arc<SubagentManager>,
     options: AgentRunOptions,
 ) -> anyhow::Result<()> {
     validate_image_input_model_support(&settings, &model_ref, &prompt)?;
 
     let event_sender = events.clone();
+    let question_event_sender = event_sender.clone();
     let allow_questions = options.allow_questions;
+    let parent_session_id = options.session_id.clone();
     let loop_runner = create_agent_loop(
         settings,
         cwd,
         &model_ref,
         events,
+        Some(Arc::clone(&subagent_manager)),
+        None,
+        0,
         options.session_id,
         options.session_title,
+        None,
     )?;
     loop_runner
         .run_with_question_tool(
@@ -1142,7 +1310,7 @@ async fn run_agent(
                 Ok(true)
             },
             move |questions| {
-                let event_sender = event_sender.clone();
+                let event_sender = question_event_sender.clone();
                 async move {
                     if !allow_questions {
                         anyhow::bail!("question tool is not available in headless debug mode")
@@ -1159,7 +1327,63 @@ async fn run_agent(
         )
         .await?;
 
+    if let Some(parent_session_id) = parent_session_id.as_deref() {
+        loop {
+            let nodes = subagent_manager.list_for_parent(parent_session_id).await;
+            event_sender.send(TuiEvent::SubagentsChanged(
+                nodes.iter().map(map_subagent_node_event).collect(),
+            ));
+
+            if nodes.iter().all(|node| {
+                matches!(
+                    node.status,
+                    SubagentStatus::Completed | SubagentStatus::Failed | SubagentStatus::Cancelled
+                )
+            }) {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     Ok(())
+}
+
+fn map_subagent_node_event(
+    node: &crate::core::agent::subagent_manager::SubagentNode,
+) -> tui::SubagentEventItem {
+    let status = match node.status {
+        SubagentStatus::Pending => "queued",
+        SubagentStatus::Running => "running",
+        SubagentStatus::Completed => "done",
+        SubagentStatus::Failed => "error",
+        SubagentStatus::Cancelled => "cancelled",
+    }
+    .to_string();
+
+    let finished_at = if matches!(
+        node.status,
+        SubagentStatus::Completed | SubagentStatus::Failed | SubagentStatus::Cancelled
+    ) {
+        Some(node.updated_at)
+    } else {
+        None
+    };
+
+    tui::SubagentEventItem {
+        task_id: node.task_id.clone(),
+        name: node.name.clone(),
+        agent_name: node.agent_name.clone(),
+        status,
+        prompt: node.prompt.clone(),
+        depth: node.depth,
+        parent_task_id: node.parent_task_id.clone(),
+        started_at: node.started_at,
+        finished_at,
+        summary: node.summary.clone(),
+        error: node.error.clone(),
+    }
 }
 
 fn validate_image_input_model_support(
@@ -1234,12 +1458,16 @@ where
     }
 
     let loop_runner = create_agent_loop(
-        settings,
+        settings.clone(),
         cwd,
         &default_model_ref,
         events,
+        Some(current_subagent_manager(&settings, cwd)),
+        None,
+        0,
         Some(session_id),
         Some(fallback_title),
+        None,
     )?;
 
     loop_runner
@@ -1266,8 +1494,12 @@ fn create_agent_loop<E>(
     cwd: &std::path::Path,
     model_ref: &str,
     events: E,
+    subagent_manager: Option<Arc<SubagentManager>>,
+    parent_task_id: Option<String>,
+    depth: usize,
     session_id: Option<String>,
     session_title: Option<String>,
+    session_parent_id: Option<String>,
 ) -> anyhow::Result<
     AgentLoop<OpenAiCompatibleProvider, E, ToolRegistry, PermissionMatcher, SessionStore>,
 >
@@ -1283,16 +1515,40 @@ where
         selected.provider.api_key_env.clone(),
     );
 
-    let tool_registry = ToolRegistry::new(&settings, cwd);
+    let session = match session_parent_id {
+        Some(parent_session_id) => SessionStore::new_with_parent(
+            &settings.session.root,
+            cwd,
+            session_id.as_deref(),
+            session_title,
+            Some(parent_session_id),
+        )?,
+        None => SessionStore::new(
+            &settings.session.root,
+            cwd,
+            session_id.as_deref(),
+            session_title,
+        )?,
+    };
+
+    let tool_context = if let Some(manager) = subagent_manager {
+        ToolRegistryContext {
+            task: Some(TaskToolRuntimeContext {
+                manager,
+                settings: settings.clone(),
+                workspace_root: cwd.to_path_buf(),
+                parent_session_id: session.id.clone(),
+                parent_task_id,
+                depth,
+            }),
+        }
+    } else {
+        ToolRegistryContext::default()
+    };
+
+    let tool_registry = ToolRegistry::new_with_context(&settings, cwd, tool_context);
     let tool_schemas = tool_registry.schemas();
     let permissions = PermissionMatcher::new(settings.clone(), &tool_schemas);
-    // Use the new session store constructor
-    let session = SessionStore::new(
-        &settings.session.root,
-        cwd,
-        session_id.as_deref(),
-        session_title,
-    )?;
 
     Ok(AgentLoop {
         provider,
@@ -1580,6 +1836,8 @@ fn handle_session_selection(
 
     app.messages.clear();
     app.todo_items.clear();
+    app.subagent_items.clear();
+    let mut subagent_items_by_task: HashMap<String, tui::SubagentItemView> = HashMap::new();
     for event in events {
         match event {
             SessionEvent::Message { message, .. } => {
@@ -1630,12 +1888,111 @@ fn handle_session_selection(
             SessionEvent::Compact { summary, .. } => {
                 app.messages.push(tui::ChatMessage::Compaction(summary));
             }
+            SessionEvent::SubAgentStart {
+                id,
+                task_id,
+                name,
+                parent_id,
+                agent_name,
+                prompt,
+                depth,
+                created_at,
+                status,
+                ..
+            } => {
+                let task_id = task_id.unwrap_or(id);
+                subagent_items_by_task.insert(
+                    task_id.clone(),
+                    tui::SubagentItemView {
+                        task_id,
+                        name: name
+                            .or_else(|| agent_name.clone())
+                            .unwrap_or_else(|| "subagent".to_string()),
+                        parent_task_id: parent_id,
+                        agent_name: agent_name.unwrap_or_else(|| "subagent".to_string()),
+                        prompt,
+                        summary: None,
+                        depth,
+                        started_at: created_at,
+                        finished_at: None,
+                        status: map_subagent_status(status),
+                    },
+                );
+            }
+            SessionEvent::SubAgentResult {
+                id,
+                task_id,
+                status,
+                summary,
+                output,
+                ..
+            } => {
+                let task_id = task_id.unwrap_or(id);
+                let entry = subagent_items_by_task
+                    .entry(task_id.clone())
+                    .or_insert_with(|| tui::SubagentItemView {
+                        task_id,
+                        name: "subagent".to_string(),
+                        parent_task_id: None,
+                        agent_name: "subagent".to_string(),
+                        prompt: String::new(),
+                        summary: None,
+                        depth: 0,
+                        started_at: 0,
+                        finished_at: None,
+                        status: tui::SubagentStatusView::Running,
+                    });
+                entry.status = map_subagent_status(status);
+                if matches!(
+                    entry.status,
+                    tui::SubagentStatusView::Completed
+                        | tui::SubagentStatusView::Failed
+                        | tui::SubagentStatusView::Cancelled
+                ) {
+                    entry.finished_at = Some(entry.started_at);
+                }
+                entry.summary = if let Some(summary) = summary {
+                    Some(summary)
+                } else if output.trim().is_empty() {
+                    None
+                } else {
+                    Some(output)
+                };
+            }
             _ => {}
+        }
+    }
+    app.subagent_items = subagent_items_by_task.into_values().collect();
+    for item in &mut app.subagent_items {
+        if matches!(
+            item.status,
+            tui::SubagentStatusView::Pending | tui::SubagentStatusView::Running
+        ) {
+            item.status = tui::SubagentStatusView::Failed;
+            if item.summary.is_none() {
+                item.summary = Some("interrupted_by_restart".to_string());
+            }
         }
     }
     app.mark_dirty();
 
     Ok(())
+}
+
+fn map_subagent_status(
+    status: crate::session::types::SubAgentLifecycleStatus,
+) -> tui::SubagentStatusView {
+    match status {
+        crate::session::types::SubAgentLifecycleStatus::Pending => tui::SubagentStatusView::Pending,
+        crate::session::types::SubAgentLifecycleStatus::Running => tui::SubagentStatusView::Running,
+        crate::session::types::SubAgentLifecycleStatus::Completed => {
+            tui::SubagentStatusView::Completed
+        }
+        crate::session::types::SubAgentLifecycleStatus::Failed => tui::SubagentStatusView::Failed,
+        crate::session::types::SubAgentLifecycleStatus::Cancelled => {
+            tui::SubagentStatusView::Cancelled
+        }
+    }
 }
 
 fn handle_chat_message(
@@ -1683,12 +2040,14 @@ fn handle_chat_message(
             tool_call_id: None,
         };
 
+        let subagent_manager = current_subagent_manager(settings, cwd);
         let handle = spawn_agent_task(
             settings,
             cwd,
             message,
             app.selected_model_ref().to_string(),
             &scoped_sender,
+            subagent_manager,
             Some(current_session_id),
             session_title,
         );
@@ -1880,6 +2239,8 @@ mod tests {
             agent: AgentSettings {
                 max_steps: 10,
                 sub_agent_max_depth: 2,
+                parallel_subagents: false,
+                max_parallel_subagents: 2,
                 system_prompt: None,
             },
             session: SessionSettings {
@@ -2014,6 +2375,7 @@ mod tests {
             title: "Todo Session".to_string(),
             created_at: 0,
             last_updated_at: 0,
+            parent_session_id: None,
         }];
         app.is_picking_session = true;
 

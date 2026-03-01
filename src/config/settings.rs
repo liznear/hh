@@ -281,6 +281,10 @@ pub struct AgentSettings {
     pub max_steps: usize,
     #[serde(default = "default_sub_agent_max_depth")]
     pub sub_agent_max_depth: usize,
+    #[serde(default = "default_parallel_subagents")]
+    pub parallel_subagents: bool,
+    #[serde(default = "default_max_parallel_subagents")]
+    pub max_parallel_subagents: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
 }
@@ -290,12 +294,22 @@ impl Default for AgentSettings {
         Self {
             max_steps: 0,
             sub_agent_max_depth: default_sub_agent_max_depth(),
+            parallel_subagents: default_parallel_subagents(),
+            max_parallel_subagents: default_max_parallel_subagents(),
             system_prompt: None,
         }
     }
 }
 
 fn default_sub_agent_max_depth() -> usize {
+    2
+}
+
+fn default_parallel_subagents() -> bool {
+    true
+}
+
+fn default_max_parallel_subagents() -> usize {
     2
 }
 
@@ -340,6 +354,8 @@ pub struct PermissionSettings {
     pub todo_read: String,
     #[serde(default = "default_question_permission")]
     pub question: String,
+    #[serde(default = "default_task_permission")]
+    pub task: String,
     pub bash: String,
     pub web: String,
     #[serde(default)]
@@ -358,6 +374,7 @@ impl Default for PermissionSettings {
             todo_write: default_todo_write_permission(),
             todo_read: default_todo_read_permission(),
             question: default_question_permission(),
+            task: default_task_permission(),
             bash: "ask".to_string(),
             web: "ask".to_string(),
             capabilities: BTreeMap::new(),
@@ -378,6 +395,10 @@ fn default_todo_read_permission() -> String {
 }
 
 fn default_question_permission() -> String {
+    "allow".to_string()
+}
+
+fn default_task_permission() -> String {
     "allow".to_string()
 }
 
@@ -431,6 +452,7 @@ impl Settings {
                 "todo_write" => self.permission.todo_write = policy.clone(),
                 "todo_read" => self.permission.todo_read = policy.clone(),
                 "question" => self.permission.question = policy.clone(),
+                "task" => self.permission.task = policy.clone(),
                 "bash" => self.permission.bash = policy.clone(),
                 "web" => self.permission.web = policy.clone(),
                 _ => {

@@ -6,6 +6,7 @@ pub mod question;
 pub mod registry;
 pub mod schema;
 pub mod skill;
+pub mod task;
 pub mod todo;
 pub mod web;
 

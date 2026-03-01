@@ -56,6 +56,55 @@ impl AgentConfig {
             color: Some("pink".to_string()),
         }
     }
+
+    pub fn builtin_explorer() -> Self {
+        let mut overrides = BTreeMap::new();
+        overrides.insert("write".to_string(), "deny".to_string());
+        overrides.insert("edit".to_string(), "deny".to_string());
+        overrides.insert("bash".to_string(), "deny".to_string());
+
+        Self {
+            name: "explorer".to_string(),
+            display_name: "Explorer".to_string(),
+            description:
+                "A fast, read-only agent for exploring codebases and answering code questions"
+                    .to_string(),
+            mode: AgentMode::Subagent,
+            system_prompt: Some(crate::core::system_prompt::explorer_system_prompt()),
+            permission_overrides: overrides,
+            model: None,
+            color: Some("cyan".to_string()),
+        }
+    }
+
+    pub fn builtin_general() -> Self {
+        let mut overrides = BTreeMap::new();
+        overrides.insert("read".to_string(), "allow".to_string());
+        overrides.insert("list".to_string(), "allow".to_string());
+        overrides.insert("glob".to_string(), "allow".to_string());
+        overrides.insert("grep".to_string(), "allow".to_string());
+        overrides.insert("write".to_string(), "allow".to_string());
+        overrides.insert("edit".to_string(), "allow".to_string());
+        overrides.insert("question".to_string(), "allow".to_string());
+        overrides.insert("bash".to_string(), "allow".to_string());
+        overrides.insert("web".to_string(), "allow".to_string());
+        overrides.insert("task".to_string(), "allow".to_string());
+        overrides.insert("todo_write".to_string(), "deny".to_string());
+        overrides.insert("todo_read".to_string(), "deny".to_string());
+
+        Self {
+            name: "general".to_string(),
+            display_name: "General".to_string(),
+            description:
+                "A general-purpose subagent for complex research and multi-step parallel tasks"
+                    .to_string(),
+            mode: AgentMode::Subagent,
+            system_prompt: Some(crate::core::system_prompt::general_system_prompt()),
+            permission_overrides: overrides,
+            model: None,
+            color: Some("green".to_string()),
+        }
+    }
 }
 
 fn default_mode() -> AgentMode {

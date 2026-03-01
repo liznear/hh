@@ -34,6 +34,8 @@ impl AgentLoader {
         // Start with built-in agents
         agents.push(AgentConfig::builtin_build());
         agents.push(AgentConfig::builtin_plan());
+        agents.push(AgentConfig::builtin_explorer());
+        agents.push(AgentConfig::builtin_general());
 
         // Load user-defined agents from discovery paths
         for path in &self.discovery_paths {

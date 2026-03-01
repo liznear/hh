@@ -80,6 +80,10 @@ const TOOL_PRESENTATIONS: &[ToolPresentation] = &[
         tool_name: "edit",
         render_start: render_edit_start,
     },
+    ToolPresentation {
+        tool_name: "task",
+        render_start: render_task_start,
+    },
 ];
 
 fn render_read_start(args: &Value) -> ToolCallStartView {
@@ -161,6 +165,16 @@ fn render_question_start(args: &Value) -> ToolCallStartView {
         .unwrap_or(0);
     ToolCallStartView {
         line: format!("Ask {count} question{}", if count == 1 { "" } else { "s" }),
+    }
+}
+
+fn render_task_start(args: &Value) -> ToolCallStartView {
+    let task_name = json_str(args, "name").unwrap_or_else(|| "Unnamed task".to_string());
+    let agent_name = json_str(args, "subagent_type")
+        .map(|name| title_case(&name))
+        .unwrap_or_else(|| "Subagent".to_string());
+    ToolCallStartView {
+        line: format!("Task [{}]: {}", agent_name, task_name),
     }
 }
 

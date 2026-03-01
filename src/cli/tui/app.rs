@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::text::Line;
+use serde::Deserialize;
 use tokio::sync::oneshot;
 
 type QuestionResponder = std::sync::Arc<
@@ -12,7 +13,7 @@ type QuestionResponder = std::sync::Arc<
 >;
 
 use super::commands::{SlashCommand, get_default_commands};
-use super::event::TuiEvent;
+use super::event::{SubagentEventItem, TuiEvent};
 use super::tool_render::render_tool_result;
 use crate::core::MessageAttachment;
 
@@ -94,6 +95,29 @@ pub enum TodoPriority {
     High,
     Medium,
     Low,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentStatusView {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentItemView {
+    pub task_id: String,
+    pub name: String,
+    pub parent_task_id: Option<String>,
+    pub agent_name: String,
+    pub prompt: String,
+    pub summary: Option<String>,
+    pub depth: usize,
+    pub started_at: u64,
+    pub finished_at: Option<u64>,
+    pub status: SubagentStatusView,
 }
 
 #[derive(Debug, Clone)]
@@ -246,6 +270,7 @@ pub struct ChatApp {
     pub context_budget: usize,
     processing_started_at: Option<Instant>,
     pub todo_items: Vec<TodoItemView>,
+    pub subagent_items: Vec<SubagentItemView>,
     // Cached rendered lines (rebuilt only when messages change)
     pub cached_lines: RefCell<Vec<Line<'static>>>,
     pub cached_width: RefCell<usize>,
@@ -317,6 +342,7 @@ impl ChatApp {
             context_budget: DEFAULT_CONTEXT_LIMIT,
             processing_started_at: None,
             todo_items: Vec::new(),
+            subagent_items: Vec::new(),
             cached_lines: RefCell::new(Vec::new()),
             cached_width: RefCell::new(0),
             needs_rebuild: RefCell::new(true),
@@ -503,6 +529,10 @@ impl ChatApp {
                     custom_mode: false,
                     responder: Some(responder.clone()),
                 });
+                self.mark_dirty();
+            }
+            TuiEvent::SubagentsChanged(items) => {
+                self.subagent_items = items.iter().filter_map(to_subagent_item_view).collect();
                 self.mark_dirty();
             }
             TuiEvent::Error(msg) => {
@@ -916,6 +946,9 @@ impl ChatApp {
         if let Some(todos) = rendered.todos {
             self.todo_items = todos;
         }
+        if name == "task" && !result.is_error {
+            self.update_subagent_items_from_task_result(result);
+        }
 
         // Find the matching ToolCall
         for message in self.messages.iter_mut().rev() {
@@ -932,6 +965,41 @@ impl ChatApp {
                 *out = Some(rendered.text);
                 return;
             }
+        }
+    }
+
+    fn update_subagent_items_from_task_result(&mut self, result: &crate::tool::ToolResult) {
+        let parsed = parse_task_tool_output(&result.payload)
+            .or_else(|| serde_json::from_str::<TaskToolWireOutput>(&result.output).ok());
+        let Some(parsed) = parsed else {
+            return;
+        };
+
+        let Some(status) = SubagentStatusView::from_wire(&parsed.status) else {
+            return;
+        };
+
+        let item = SubagentItemView {
+            task_id: parsed.task_id,
+            name: parsed.name,
+            parent_task_id: parsed.parent_task_id,
+            agent_name: parsed.agent_name,
+            prompt: parsed.prompt,
+            summary: parsed.summary.or(parsed.error),
+            depth: parsed.depth,
+            started_at: parsed.started_at,
+            finished_at: parsed.finished_at,
+            status,
+        };
+
+        if let Some(existing) = self
+            .subagent_items
+            .iter_mut()
+            .find(|existing| existing.task_id == item.task_id)
+        {
+            *existing = item;
+        } else {
+            self.subagent_items.push(item);
         }
     }
 
@@ -982,6 +1050,7 @@ impl ChatApp {
         self.bump_session_epoch();
         self.messages.clear();
         self.todo_items.clear();
+        self.subagent_items.clear();
         self.last_context_tokens = None;
         self.session_id = None;
         self.session_name = session_name;
@@ -1333,6 +1402,29 @@ impl ChatApp {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct TaskToolWireOutput {
+    task_id: String,
+    status: String,
+    name: String,
+    agent_name: String,
+    prompt: String,
+    depth: usize,
+    #[serde(default)]
+    parent_task_id: Option<String>,
+    started_at: u64,
+    #[serde(default)]
+    finished_at: Option<u64>,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+fn parse_task_tool_output(value: &serde_json::Value) -> Option<TaskToolWireOutput> {
+    serde_json::from_value(value.clone()).ok()
+}
+
 fn normalize_custom_input(value: &str) -> String {
     value.trim_end_matches('\n').to_string()
 }
@@ -1374,6 +1466,35 @@ impl TodoPriority {
             _ => None,
         }
     }
+}
+
+impl SubagentStatusView {
+    pub fn from_wire(status: &str) -> Option<Self> {
+        match status {
+            "pending" | "queued" => Some(Self::Pending),
+            "running" => Some(Self::Running),
+            "completed" | "done" => Some(Self::Completed),
+            "failed" | "error" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+}
+
+fn to_subagent_item_view(item: &SubagentEventItem) -> Option<SubagentItemView> {
+    let status = SubagentStatusView::from_wire(&item.status)?;
+    Some(SubagentItemView {
+        task_id: item.task_id.clone(),
+        name: item.name.clone(),
+        parent_task_id: item.parent_task_id.clone(),
+        agent_name: item.agent_name.clone(),
+        prompt: item.prompt.clone(),
+        summary: item.summary.clone().or(item.error.clone()),
+        depth: item.depth,
+        started_at: item.started_at,
+        finished_at: item.finished_at,
+        status,
+    })
 }
 
 impl Default for ChatApp {

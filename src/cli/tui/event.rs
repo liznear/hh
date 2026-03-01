@@ -7,6 +7,21 @@ use tokio::sync::oneshot;
 
 use crate::core::agent::AgentEvents;
 
+#[derive(Debug, Clone)]
+pub struct SubagentEventItem {
+    pub task_id: String,
+    pub name: String,
+    pub agent_name: String,
+    pub status: String,
+    pub prompt: String,
+    pub depth: usize,
+    pub parent_task_id: Option<String>,
+    pub started_at: u64,
+    pub finished_at: Option<u64>,
+    pub summary: Option<String>,
+    pub error: Option<String>,
+}
+
 type QuestionResponder =
     Arc<Mutex<Option<oneshot::Sender<anyhow::Result<crate::core::QuestionAnswers>>>>>;
 
@@ -39,6 +54,7 @@ pub enum TuiEvent {
         questions: Vec<crate::core::QuestionPrompt>,
         responder: QuestionResponder,
     },
+    SubagentsChanged(Vec<SubagentEventItem>),
     Error(String),
     Key(crossterm::event::KeyEvent),
     Tick,
