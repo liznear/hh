@@ -623,3 +623,104 @@ async fn agent_loop_todo_read_returns_current_runtime_snapshot() {
     assert_eq!(snapshot["counts"]["total"], 1);
     assert_eq!(snapshot["todos"][0]["content"], "Ship feature");
 }
+
+#[tokio::test]
+async fn agent_loop_question_tool_uses_question_handler_answers() {
+    let provider = MockProvider {
+        responses: Arc::new(Mutex::new(vec![
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: String::new(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![ToolCall {
+                    id: "call-1".to_string(),
+                    name: "question".to_string(),
+                    arguments: json!({
+                        "questions": [
+                            {
+                                "question": "Which strategy?",
+                                "header": "Strategy",
+                                "options": [
+                                    {"label": "A", "description": "First"},
+                                    {"label": "B", "description": "Second"}
+                                ]
+                            }
+                        ]
+                    }),
+                }],
+                done: false,
+                thinking: None,
+                context_tokens: None,
+            },
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "done".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![],
+                done: true,
+                thinking: None,
+                context_tokens: None,
+            },
+        ])),
+        stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("ws");
+    std::fs::create_dir_all(&cwd).expect("mkdir");
+
+    let settings = Settings::default();
+    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
+    let session_reader = session.clone();
+    let tools = ToolRegistry::new(&settings, &cwd);
+    let schemas = tools.schemas();
+
+    let agent = AgentLoop {
+        provider,
+        tools,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        max_steps: 4,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.selected_model_ref().to_string(),
+        session,
+        events: NoopEvents,
+    };
+
+    let out = agent
+        .run_with_question_tool(
+            Message {
+                role: Role::User,
+                content: "ask me".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            |_tool| Ok(true),
+            |_questions| async { Ok(vec![vec!["B".to_string()]]) },
+        )
+        .await
+        .expect("run");
+
+    assert_eq!(out, "done");
+
+    let events = session_reader.replay_events().expect("replay events");
+    let payload = events
+        .into_iter()
+        .find_map(|event| match event {
+            SessionEvent::ToolResult {
+                id,
+                result: Some(result),
+                ..
+            } if id == "call-1" => Some(result.payload),
+            _ => None,
+        })
+        .expect("question result payload");
+
+    assert_eq!(payload["answers"][0][0], "B");
+}

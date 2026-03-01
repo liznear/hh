@@ -3,6 +3,7 @@ use hh::tool::ToolResult;
 use hh::tool::bash::BashTool;
 use hh::tool::edit::EditTool;
 use hh::tool::fs::{FsGrep, FsRead, FsWrite};
+use hh::tool::question::{QuestionTool, question_result};
 use hh::tool::todo::{TodoReadTool, TodoWriteTool};
 use serde_json::json;
 
@@ -337,4 +338,33 @@ async fn edit_rejects_symlink_escape() {
 
     assert!(result.is_error);
     assert!(result.output.contains("outside workspace"));
+}
+
+#[tokio::test]
+async fn question_tool_schema_and_result_payload() {
+    let tool = QuestionTool;
+    let schema = tool.schema();
+    assert_eq!(schema.name, "question");
+
+    let questions = vec![hh::core::QuestionPrompt {
+        question: "Choose one".to_string(),
+        header: "Pick".to_string(),
+        options: vec![
+            hh::core::QuestionOption {
+                label: "A".to_string(),
+                description: "Option A".to_string(),
+            },
+            hh::core::QuestionOption {
+                label: "B".to_string(),
+                description: "Option B".to_string(),
+            },
+        ],
+        multiple: false,
+        custom: true,
+    }];
+
+    let result = question_result(&questions, vec![vec!["B".to_string()]]);
+    assert!(!result.is_error);
+    assert_eq!(result.content_type, "application/vnd.hh.question+json");
+    assert_eq!(result.payload["answers"][0][0], "B");
 }

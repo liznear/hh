@@ -35,6 +35,7 @@ const SELECTION_BG: Color = Color::Rgb(55, 114, 255);
 const NOTICE_BG: Color = Color::Rgb(224, 227, 233);
 const PROGRESS_HEAD: Color = Color::Rgb(124, 72, 227);
 const THINKING_LABEL: Color = Color::Rgb(227, 152, 67);
+const QUESTION_BORDER: Color = Color::Rgb(220, 96, 180);
 const CONTEXT_USAGE_YELLOW: Color = Color::Rgb(214, 168, 46);
 const CONTEXT_USAGE_ORANGE: Color = Color::Rgb(227, 136, 46);
 const CONTEXT_USAGE_RED: Color = Color::Rgb(196, 64, 64);
@@ -152,7 +153,11 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
         as usize;
     let input_line_count =
         input_line_count(&app.input, input_content_width).clamp(1, MAX_INPUT_LINES);
-    let input_area_height = (input_line_count + 4) as u16;
+    let input_area_height = if app.has_pending_question() {
+        (question_prompt_line_count(app, input_content_width) + 2) as u16
+    } else {
+        (input_line_count + 4) as u16
+    };
 
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -539,11 +544,14 @@ pub fn build_message_lines(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
 
 fn build_message_lines_impl(app: &ChatApp, width: usize, layout: UiLayout) -> Vec<Line<'static>> {
     // Get agent color for user message borders
-    let border_color = app
-        .selected_agent()
-        .and_then(|agent| agent.color.as_ref())
-        .and_then(|c| crate::agent::parse_color(c))
-        .unwrap_or(ACCENT);
+    let border_color = if app.has_pending_question() {
+        QUESTION_BORDER
+    } else {
+        app.selected_agent()
+            .and_then(|agent| agent.color.as_ref())
+            .and_then(|c| crate::agent::parse_color(c))
+            .unwrap_or(ACCENT)
+    };
     let mut lines = Vec::new();
     let message_indent = layout.message_indent();
     let tool_done_continuation = layout.message_child_indent();
@@ -918,7 +926,11 @@ fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
         .min(area.bottom().saturating_sub(1));
     let content_x = left_border_x.saturating_add(2);
     let content_height = area.height.saturating_sub(2).max(1);
-    let input_height = content_height.saturating_sub(2).max(1);
+    let input_height = if app.has_pending_question() {
+        content_height.max(1)
+    } else {
+        content_height.saturating_sub(2).max(1)
+    };
     let content_area = Rect {
         x: content_x,
         y: content_y,
@@ -927,6 +939,139 @@ fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
             .saturating_sub(content_x.saturating_sub(area.x) + 1),
         height: input_height,
     };
+
+    if let Some(question) = app.pending_question_view() {
+        let mut lines = Vec::new();
+        let mut custom_input_row: Option<usize> = None;
+        let mut custom_input_indent: usize = 0;
+        lines.push(Line::from(Span::styled(
+            question.question,
+            Style::default().fg(TEXT_PRIMARY).bold(),
+        )));
+        lines.push(Line::from(""));
+
+        for (idx, option) in question.options.iter().enumerate() {
+            let option_style = if option.active {
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else if option.selected {
+                Style::default().fg(INPUT_ACCENT)
+            } else {
+                Style::default().fg(TEXT_SECONDARY)
+            };
+
+            let prefix = if option.submit {
+                format!("{}. ", idx + 1)
+            } else if question.multiple {
+                format!(
+                    "{}. [{}] ",
+                    idx + 1,
+                    if option.selected { "x" } else { " " }
+                )
+            } else {
+                format!("{}. ", idx + 1)
+            };
+            let prefix_width = prefix.chars().count();
+
+            lines.push(Line::from(vec![
+                Span::styled(prefix, option_style),
+                Span::styled(option.label.clone(), option_style),
+            ]));
+
+            if option.custom {
+                custom_input_indent = prefix_width;
+            }
+
+            if !option.description.trim().is_empty() {
+                for description_line in option.description.split('\n') {
+                    lines.push(Line::from(vec![
+                        Span::raw(" ".repeat(prefix_width)),
+                        Span::styled(
+                            description_line.to_string(),
+                            Style::default().fg(TEXT_MUTED),
+                        ),
+                    ]));
+                }
+            }
+        }
+
+        if question.custom_mode {
+            custom_input_row = Some(lines.len());
+            if question.custom_value.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::raw(" ".repeat(custom_input_indent)),
+                    Span::styled("Type your own answer", Style::default().fg(TEXT_MUTED)),
+                ]));
+            } else {
+                for custom_line in question.custom_value.split('\n') {
+                    lines.push(Line::from(vec![
+                        Span::raw(" ".repeat(custom_input_indent)),
+                        Span::styled(custom_line.to_string(), Style::default().fg(TEXT_SECONDARY)),
+                    ]));
+                }
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("↑↓", Style::default().fg(TEXT_PRIMARY)),
+            Span::styled(" select", Style::default().fg(TEXT_MUTED)),
+            Span::raw("  "),
+            Span::styled("enter", Style::default().fg(TEXT_PRIMARY)),
+            Span::styled(
+                if question.custom_mode {
+                    " submit"
+                } else if question.multiple {
+                    " toggle/submit"
+                } else {
+                    " submit"
+                },
+                Style::default().fg(TEXT_MUTED),
+            ),
+            Span::raw(if question.custom_mode { "  " } else { "" }),
+            Span::styled(
+                if question.custom_mode {
+                    "shift+enter"
+                } else {
+                    ""
+                },
+                Style::default().fg(TEXT_PRIMARY),
+            ),
+            Span::styled(
+                if question.custom_mode { " newline" } else { "" },
+                Style::default().fg(TEXT_MUTED),
+            ),
+            Span::raw("  "),
+            Span::styled("esc", Style::default().fg(TEXT_PRIMARY)),
+            Span::styled(" dismiss", Style::default().fg(TEXT_MUTED)),
+        ]));
+
+        f.render_widget(
+            Paragraph::new(Text::from(lines))
+                .style(Style::default().fg(TEXT_PRIMARY).bg(INPUT_PANEL_BG))
+                .wrap(Wrap { trim: false }),
+            content_area,
+        );
+
+        if question.custom_mode
+            && let Some(base_row) = custom_input_row
+        {
+            let custom_lines: Vec<&str> = if question.custom_value.is_empty() {
+                vec![""]
+            } else {
+                question.custom_value.split('\n').collect()
+            };
+            let row = base_row + custom_lines.len().saturating_sub(1);
+            let col = custom_input_indent
+                + custom_lines
+                    .last()
+                    .map(|line| line.chars().count())
+                    .unwrap_or(0);
+            if row < content_area.height as usize && col < content_area.width as usize {
+                f.set_cursor_position((content_area.x + col as u16, content_area.y + row as u16));
+            }
+        }
+        return;
+    }
 
     let (input_value, cursor_row, cursor_col) = if app.input.is_empty() {
         ("Tell me more about this project...".to_string(), 0, 0)
@@ -977,6 +1122,31 @@ fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
             height: 1,
         },
     );
+}
+
+fn question_prompt_line_count(app: &ChatApp, _width: usize) -> usize {
+    let Some(question) = app.pending_question_view() else {
+        return 1;
+    };
+
+    let body_rows = question
+        .options
+        .iter()
+        .map(|option| {
+            let description_rows = if option.description.trim().is_empty() {
+                0
+            } else {
+                option.description.split('\n').count()
+            };
+            1 + description_rows
+        })
+        .sum::<usize>();
+    let custom_rows = if question.custom_mode {
+        question.custom_value.split('\n').count().max(1)
+    } else {
+        0
+    };
+    (body_rows + custom_rows + 4).max(1)
 }
 
 fn selected_provider_name(app: &ChatApp) -> String {
@@ -1359,7 +1529,11 @@ pub(crate) fn compute_layout_rects(area: Rect, app: &ChatApp) -> AppLayoutRects 
         as usize;
     let input_line_count =
         input_line_count(&app.input, input_content_width).clamp(1, MAX_INPUT_LINES);
-    let input_area_height = (input_line_count + 4) as u16;
+    let input_area_height = if app.has_pending_question() {
+        (question_prompt_line_count(app, input_content_width) + 2) as u16
+    } else {
+        (input_line_count + 4) as u16
+    };
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

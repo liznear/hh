@@ -9,6 +9,7 @@ pub use traits::{
     SessionSink, ToolExecutor,
 };
 pub use types::{
-    Message, MessageAttachment, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role,
-    SubAgentCall, SubAgentResult, TodoItem, TodoPriority, TodoStatus, ToolCall,
+    Message, MessageAttachment, ProviderRequest, ProviderResponse, ProviderStreamEvent,
+    QuestionAnswer, QuestionAnswers, QuestionOption, QuestionPrompt, Role, SubAgentCall,
+    SubAgentResult, TodoItem, TodoPriority, TodoStatus, ToolCall,
 };

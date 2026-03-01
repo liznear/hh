@@ -8,12 +8,13 @@ use crossterm::event::{
 };
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 
 use crate::cli::agent_init;
 use crate::cli::render;
 use crate::cli::tui::{
-    self, ChatApp, DebugRenderer, ModelOptionView, ScopedTuiEvent, SubmittedInput, TuiEvent,
-    TuiEventSender,
+    self, ChatApp, DebugRenderer, ModelOptionView, QuestionKeyResult, ScopedTuiEvent,
+    SubmittedInput, TuiEvent, TuiEventSender,
 };
 use crate::config::Settings;
 use crate::core::agent::{AgentEvents, AgentLoop, NoopEvents};
@@ -191,8 +192,11 @@ pub async fn run_prompt_with_debug(
             },
             model_ref,
             sender_clone.clone(),
-            Some(session_id),
-            Some(title_clone),
+            AgentRunOptions {
+                session_id: Some(session_id),
+                session_title: Some(title_clone),
+                allow_questions: false,
+            },
         )
         .await;
         if let Err(ref e) = result {
@@ -301,6 +305,13 @@ where
 {
     if key_event.kind == KeyEventKind::Release {
         return Ok(());
+    }
+
+    if app.has_pending_question() {
+        let handled = app.handle_question_key(key_event);
+        if handled != QuestionKeyResult::NotHandled {
+            return Ok(());
+        }
     }
 
     if key_event.code == KeyCode::Char('c') && key_event.modifiers.contains(KeyModifiers::CONTROL) {
@@ -885,8 +896,11 @@ fn spawn_agent_task(
             input,
             model_ref,
             sender.clone(),
-            session_id,
-            session_title,
+            AgentRunOptions {
+                session_id,
+                session_title,
+                allow_questions: true,
+            },
         )
         .await
         {
@@ -1025,6 +1039,13 @@ struct InteractiveChatRunner<'a> {
     scroll_down_lines: usize,
 }
 
+#[derive(Clone)]
+struct AgentRunOptions {
+    session_id: Option<String>,
+    session_title: Option<String>,
+    allow_questions: bool,
+}
+
 fn build_session_name(cwd: &std::path::Path) -> String {
     let _ = cwd;
     "New Session".to_string()
@@ -1073,20 +1094,44 @@ async fn run_agent(
     cwd: &std::path::Path,
     prompt: Message,
     model_ref: String,
-    events: impl AgentEvents + 'static,
-    session_id: Option<String>,
-    session_title: Option<String>,
+    events: TuiEventSender,
+    options: AgentRunOptions,
 ) -> anyhow::Result<()> {
     validate_image_input_model_support(&settings, &model_ref, &prompt)?;
 
-    let loop_runner =
-        create_agent_loop(settings, cwd, &model_ref, events, session_id, session_title)?;
-
+    let event_sender = events.clone();
+    let allow_questions = options.allow_questions;
+    let loop_runner = create_agent_loop(
+        settings,
+        cwd,
+        &model_ref,
+        events,
+        options.session_id,
+        options.session_title,
+    )?;
     loop_runner
-        .run(prompt, |_tool_name| {
-            // For TUI mode, auto-approve tools (could prompt via TUI in future)
-            Ok(true)
-        })
+        .run_with_question_tool(
+            prompt,
+            |_tool_name| {
+                // For TUI mode, auto-approve tools (could prompt via TUI in future)
+                Ok(true)
+            },
+            move |questions| {
+                let event_sender = event_sender.clone();
+                async move {
+                    if !allow_questions {
+                        anyhow::bail!("question tool is not available in headless debug mode")
+                    }
+                    let (tx, rx) = oneshot::channel();
+                    event_sender.send(TuiEvent::QuestionPrompt {
+                        questions,
+                        responder: std::sync::Arc::new(std::sync::Mutex::new(Some(tx))),
+                    });
+                    rx.await
+                        .unwrap_or_else(|_| Err(anyhow::anyhow!("question prompt was cancelled")))
+                }
+            },
+        )
         .await?;
 
     Ok(())
@@ -1173,7 +1218,7 @@ where
     )?;
 
     loop_runner
-        .run(
+        .run_with_question_tool(
             Message {
                 role: Role::User,
                 content: prompt,
@@ -1186,6 +1231,7 @@ where
                     tool_name
                 ))?)
             },
+            |questions| async move { Ok(render::ask_questions(&questions)?) },
         )
         .await
 }

@@ -73,6 +73,10 @@ const TOOL_PRESENTATIONS: &[ToolPresentation] = &[
         render_start: render_todo_write_start,
     },
     ToolPresentation {
+        tool_name: "question",
+        render_start: render_question_start,
+    },
+    ToolPresentation {
         tool_name: "edit",
         render_start: render_edit_start,
     },
@@ -146,6 +150,18 @@ fn render_todo_read_start(_args: &Value) -> ToolCallStartView {
 
 fn render_edit_start(args: &Value) -> ToolCallStartView {
     render_action_with_field("Edit", "path", args)
+}
+
+fn render_question_start(args: &Value) -> ToolCallStartView {
+    let count = args
+        .as_object()
+        .and_then(|map| map.get("questions"))
+        .and_then(|value| value.as_array())
+        .map(|items| items.len())
+        .unwrap_or(0);
+    ToolCallStartView {
+        line: format!("Ask {count} question{}", if count == 1 { "" } else { "s" }),
+    }
 }
 
 fn render_action_with_field(action: &str, key: &str, args: &Value) -> ToolCallStartView {

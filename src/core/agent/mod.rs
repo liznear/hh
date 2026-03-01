@@ -4,13 +4,14 @@ pub use super::{AgentEvents, NoopEvents};
 
 use crate::core::{
     ApprovalDecision, ApprovalPolicy, Message, Provider, ProviderRequest, ProviderStreamEvent,
-    Role, SessionReader, SessionSink, ToolCall, ToolExecutor,
+    QuestionAnswers, QuestionPrompt, Role, SessionReader, SessionSink, ToolCall, ToolExecutor,
 };
 use crate::safety::sanitize_tool_output;
 use crate::session::{SessionEvent, event_id};
 use crate::tool::ToolResult;
 use serde::Serialize;
 use state::AgentState;
+use std::future::Future;
 
 pub struct AgentLoop<P, E, T, A, S>
 where
@@ -41,6 +42,23 @@ where
     pub async fn run<F>(&self, prompt: Message, mut approve: F) -> anyhow::Result<String>
     where
         F: FnMut(&str) -> anyhow::Result<bool>,
+    {
+        self.run_with_question_tool(prompt, &mut approve, |_questions| async {
+            anyhow::bail!("question tool is unavailable in this mode; provide a question handler")
+        })
+        .await
+    }
+
+    pub async fn run_with_question_tool<F, Q, QFut>(
+        &self,
+        prompt: Message,
+        mut approve: F,
+        mut ask_question: Q,
+    ) -> anyhow::Result<String>
+    where
+        F: FnMut(&str) -> anyhow::Result<bool>,
+        Q: FnMut(Vec<QuestionPrompt>) -> QFut,
+        QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
     {
         let replayed_events = self.session.replay_events()?;
         let mut state = AgentState {
@@ -185,10 +203,40 @@ where
                     ApprovalDecision::Allow => {}
                 }
 
+                if call.name == "question" {
+                    self.events.on_tool_start(&call.name, &call.arguments);
+                    let result = self
+                        .execute_question_tool_call(&call, &mut ask_question)
+                        .await;
+                    self.events.on_tool_end(&call.name, &result);
+                    self.record_tool_result(&call, result, &mut state)?;
+                    continue;
+                }
+
                 self.execute_tool_call(&call, &mut state).await?;
             }
 
             state.step += 1;
+        }
+    }
+
+    async fn execute_question_tool_call<Q, QFut>(
+        &self,
+        call: &ToolCall,
+        ask_question: &mut Q,
+    ) -> ToolResult
+    where
+        Q: FnMut(Vec<QuestionPrompt>) -> QFut,
+        QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
+    {
+        let parsed = match crate::tool::question::parse_question_args(call.arguments.clone()) {
+            Ok(parsed) => parsed,
+            Err(err) => return ToolResult::err_text("invalid_question_args", err.to_string()),
+        };
+
+        match ask_question(parsed.questions.clone()).await {
+            Ok(answers) => crate::tool::question::question_result(&parsed.questions, answers),
+            Err(err) => ToolResult::err_text("question_dismissed", err.to_string()),
         }
     }
 

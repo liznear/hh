@@ -1,8 +1,11 @@
 use super::app::{ChatApp, ChatMessage, ModelOptionView, TodoItemView, TodoPriority, TodoStatus};
 use super::event::TuiEvent;
 use super::ui::{UiLayout, build_message_lines, render_app};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{Terminal, backend::TestBackend, style::Color};
 use serde_json::json;
+use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot;
 
 fn line_text(line: &ratatui::text::Line<'_>) -> String {
     line.spans
@@ -1055,4 +1058,279 @@ fn todo_write_tool_end_updates_todo_state_from_full_output() {
     assert_eq!(app.todo_items[0].content, "One");
     assert_eq!(app.todo_items[0].status, TodoStatus::Pending);
     assert_eq!(app.todo_items[1].status, TodoStatus::Completed);
+}
+
+#[test]
+fn question_prompt_renders_overlay() {
+    let mut app = ChatApp::default();
+    let (tx, _rx) = oneshot::channel();
+    app.handle_event(&TuiEvent::QuestionPrompt {
+        questions: vec![crate::core::QuestionPrompt {
+            question: "Is it something you can hold in one hand?".to_string(),
+            header: "Size".to_string(),
+            options: vec![
+                crate::core::QuestionOption {
+                    label: "Yes".to_string(),
+                    description: "Small enough to hold easily".to_string(),
+                },
+                crate::core::QuestionOption {
+                    label: "No".to_string(),
+                    description: "Too large or unwieldy for one hand".to_string(),
+                },
+            ],
+            multiple: false,
+            custom: true,
+        }],
+        responder: Arc::new(Mutex::new(Some(tx))),
+    });
+
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let full_text = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(full_text.contains("Is it something you can hold in one hand?"));
+    assert!(full_text.contains("Type your own answer"));
+}
+
+#[test]
+fn question_prompt_submits_selected_answer_on_enter() {
+    let mut app = ChatApp::default();
+    let (tx, rx) = oneshot::channel();
+    app.handle_event(&TuiEvent::QuestionPrompt {
+        questions: vec![crate::core::QuestionPrompt {
+            question: "Pick one".to_string(),
+            header: "Choice".to_string(),
+            options: vec![
+                crate::core::QuestionOption {
+                    label: "Alpha".to_string(),
+                    description: "First".to_string(),
+                },
+                crate::core::QuestionOption {
+                    label: "Beta".to_string(),
+                    description: "Second".to_string(),
+                },
+            ],
+            multiple: false,
+            custom: true,
+        }],
+        responder: Arc::new(Mutex::new(Some(tx))),
+    });
+
+    let result = app.handle_question_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(result, crate::cli::tui::QuestionKeyResult::Submitted);
+
+    let answers = rx
+        .blocking_recv()
+        .expect("question response channel should receive a value")
+        .expect("question should resolve successfully");
+    assert_eq!(answers, vec![vec!["Alpha".to_string()]]);
+}
+
+#[test]
+fn custom_option_typing_requires_enter_first() {
+    let mut app = ChatApp::default();
+    let (tx, _rx) = oneshot::channel();
+    app.handle_event(&TuiEvent::QuestionPrompt {
+        questions: vec![crate::core::QuestionPrompt {
+            question: "What name should I use?".to_string(),
+            header: "Name".to_string(),
+            options: vec![crate::core::QuestionOption {
+                label: "Preferred name".to_string(),
+                description: "Use a short name".to_string(),
+            }],
+            multiple: false,
+            custom: true,
+        }],
+        responder: Arc::new(Mutex::new(Some(tx))),
+    });
+
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+
+    let before_enter = app.pending_question_view().expect("pending question");
+    assert!(!before_enter.custom_mode);
+    assert!(before_enter.custom_value.is_empty());
+
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+
+    let after_enter = app.pending_question_view().expect("pending question");
+    assert!(after_enter.custom_mode);
+    assert_eq!(after_enter.custom_value, "a");
+}
+
+#[test]
+fn esc_clears_custom_once_then_dismisses_on_second_press() {
+    let mut app = ChatApp::default();
+    let (tx, mut rx) = oneshot::channel();
+    app.handle_event(&TuiEvent::QuestionPrompt {
+        questions: vec![crate::core::QuestionPrompt {
+            question: "What name should I use?".to_string(),
+            header: "Name".to_string(),
+            options: vec![crate::core::QuestionOption {
+                label: "Preferred name".to_string(),
+                description: "Use a short name".to_string(),
+            }],
+            multiple: false,
+            custom: true,
+        }],
+        responder: Arc::new(Mutex::new(Some(tx))),
+    });
+
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+
+    let first = app.handle_question_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(first, crate::cli::tui::QuestionKeyResult::Handled);
+    assert!(app.has_pending_question());
+    let after_first = app.pending_question_view().expect("pending question");
+    assert!(!after_first.custom_mode);
+    assert!(after_first.custom_value.is_empty());
+    assert!(matches!(
+        rx.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+
+    let second = app.handle_question_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(second, crate::cli::tui::QuestionKeyResult::Dismissed);
+    assert!(!app.has_pending_question());
+    assert!(
+        rx.blocking_recv()
+            .expect("question response should be sent")
+            .is_err()
+    );
+}
+
+#[test]
+fn entering_custom_option_adds_newline_placeholder() {
+    let mut app = ChatApp::default();
+    let (tx, _rx) = oneshot::channel();
+    app.handle_event(&TuiEvent::QuestionPrompt {
+        questions: vec![crate::core::QuestionPrompt {
+            question: "What name should I use?".to_string(),
+            header: "Name".to_string(),
+            options: vec![crate::core::QuestionOption {
+                label: "Preferred name".to_string(),
+                description: "Use a short name".to_string(),
+            }],
+            multiple: false,
+            custom: true,
+        }],
+        responder: Arc::new(Mutex::new(Some(tx))),
+    });
+
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let pending = app.pending_question_view().expect("pending question");
+    assert!(pending.custom_mode);
+    assert_eq!(pending.custom_value, "");
+}
+
+#[test]
+fn custom_mode_enter_submits_answer() {
+    let mut app = ChatApp::default();
+    let (tx, rx) = oneshot::channel();
+    app.handle_event(&TuiEvent::QuestionPrompt {
+        questions: vec![crate::core::QuestionPrompt {
+            question: "What name should I use?".to_string(),
+            header: "Name".to_string(),
+            options: vec![crate::core::QuestionOption {
+                label: "Preferred name".to_string(),
+                description: "Use a short name".to_string(),
+            }],
+            multiple: false,
+            custom: true,
+        }],
+        responder: Arc::new(Mutex::new(Some(tx))),
+    });
+
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE));
+    let result = app.handle_question_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(result, crate::cli::tui::QuestionKeyResult::Submitted);
+    let answers = rx
+        .blocking_recv()
+        .expect("question response should be sent")
+        .expect("question should resolve successfully");
+    assert_eq!(answers, vec![vec!["N".to_string()]]);
+}
+
+#[test]
+fn custom_mode_shift_enter_inserts_newline() {
+    let mut app = ChatApp::default();
+    let (tx, _rx) = oneshot::channel();
+    app.handle_event(&TuiEvent::QuestionPrompt {
+        questions: vec![crate::core::QuestionPrompt {
+            question: "What name should I use?".to_string(),
+            header: "Name".to_string(),
+            options: vec![crate::core::QuestionOption {
+                label: "Preferred name".to_string(),
+                description: "Use a short name".to_string(),
+            }],
+            multiple: false,
+            custom: true,
+        }],
+        responder: Arc::new(Mutex::new(Some(tx))),
+    });
+
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+
+    let pending = app.pending_question_view().expect("pending question");
+    assert!(pending.custom_mode);
+    assert_eq!(pending.custom_value, "\n");
+}
+
+#[test]
+fn custom_typed_value_renders_once() {
+    let mut app = ChatApp::default();
+    let (tx, _rx) = oneshot::channel();
+    app.handle_event(&TuiEvent::QuestionPrompt {
+        questions: vec![crate::core::QuestionPrompt {
+            question: "What name should I use?".to_string(),
+            header: "Name".to_string(),
+            options: vec![crate::core::QuestionOption {
+                label: "Preferred name".to_string(),
+                description: "Use a short name".to_string(),
+            }],
+            multiple: false,
+            custom: true,
+        }],
+        responder: Arc::new(Mutex::new(Some(tx))),
+    });
+
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let _ = app.handle_question_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    for c in "asdf".chars() {
+        let _ = app.handle_question_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let full_text = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert_eq!(full_text.match_indices("asdf").count(), 1);
 }

@@ -2,6 +2,7 @@ pub mod bash;
 pub mod diff;
 pub mod edit;
 pub mod fs;
+pub mod question;
 pub mod registry;
 pub mod schema;
 pub mod skill;

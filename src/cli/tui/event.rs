@@ -1,17 +1,22 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 
 use crate::core::agent::AgentEvents;
 
-#[derive(Debug, Clone)]
+type QuestionResponder =
+    Arc<Mutex<Option<oneshot::Sender<anyhow::Result<crate::core::QuestionAnswers>>>>>;
+
+#[derive(Debug)]
 pub struct ScopedTuiEvent {
     pub session_epoch: u64,
     pub event: TuiEvent,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum TuiEvent {
     Thinking(String),
     ToolStart {
@@ -29,6 +34,10 @@ pub enum TuiEvent {
     SessionTitle(String),
     CompactionStart,
     CompactionDone(String),
+    QuestionPrompt {
+        questions: Vec<crate::core::QuestionPrompt>,
+        responder: QuestionResponder,
+    },
     Error(String),
     Key(crossterm::event::KeyEvent),
     Tick,

@@ -3,7 +3,13 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::text::Line;
+use tokio::sync::oneshot;
+
+type QuestionResponder = std::sync::Arc<
+    std::sync::Mutex<Option<oneshot::Sender<anyhow::Result<crate::core::QuestionAnswers>>>>,
+>;
 
 use super::commands::{SlashCommand, get_default_commands};
 use super::event::TuiEvent;
@@ -104,6 +110,48 @@ pub enum ChatMessage {
         is_error: Option<bool>,
     },
     Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingQuestionView {
+    pub header: String,
+    pub question: String,
+    pub options: Vec<QuestionOptionView>,
+    pub selected_index: usize,
+    pub custom_mode: bool,
+    pub custom_value: String,
+    pub question_index: usize,
+    pub total_questions: usize,
+    pub multiple: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct QuestionOptionView {
+    pub label: String,
+    pub description: String,
+    pub selected: bool,
+    pub active: bool,
+    pub custom: bool,
+    pub submit: bool,
+}
+
+#[derive(Debug)]
+struct PendingQuestionState {
+    questions: Vec<crate::core::QuestionPrompt>,
+    answers: crate::core::QuestionAnswers,
+    custom_values: Vec<String>,
+    question_index: usize,
+    selected_index: usize,
+    custom_mode: bool,
+    responder: Option<QuestionResponder>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuestionKeyResult {
+    NotHandled,
+    Handled,
+    Submitted,
+    Dismissed,
 }
 
 use crate::session::SessionMetadata;
@@ -207,6 +255,7 @@ pub struct ChatApp {
     // Text selection state
     pub text_selection: TextSelection,
     pub clipboard_notice: Option<ClipboardNotice>,
+    pending_question: Option<PendingQuestionState>,
     // Agent state
     pub current_agent_name: Option<String>,
     pub available_agents: Vec<AgentOptionView>,
@@ -268,6 +317,7 @@ impl ChatApp {
             preferred_column: None,
             text_selection: TextSelection::None,
             clipboard_notice: None,
+            pending_question: None,
             current_agent_name: None,
             available_agents: Vec::new(),
         }
@@ -335,6 +385,9 @@ impl ChatApp {
             }
             TuiEvent::ToolEnd { name, result } => {
                 self.complete_tool_call(name, result);
+                if name == "question" {
+                    self.pending_question = None;
+                }
                 self.mark_dirty();
             }
             TuiEvent::TodoItemsChanged(items) => {
@@ -386,6 +439,21 @@ impl ChatApp {
                 self.set_processing(false);
                 self.mark_dirty();
             }
+            TuiEvent::QuestionPrompt {
+                questions,
+                responder,
+            } => {
+                self.pending_question = Some(PendingQuestionState {
+                    answers: vec![Vec::new(); questions.len()],
+                    custom_values: vec![String::new(); questions.len()],
+                    questions: questions.clone(),
+                    question_index: 0,
+                    selected_index: 0,
+                    custom_mode: false,
+                    responder: Some(responder.clone()),
+                });
+                self.mark_dirty();
+            }
             TuiEvent::Error(msg) => {
                 self.messages.push(ChatMessage::Error(msg.clone()));
                 self.set_processing(false);
@@ -394,6 +462,265 @@ impl ChatApp {
             TuiEvent::Tick => {}
             TuiEvent::Key(_) => {}
         }
+    }
+
+    pub fn has_pending_question(&self) -> bool {
+        self.pending_question.is_some()
+    }
+
+    pub fn pending_question_view(&self) -> Option<PendingQuestionView> {
+        let state = self.pending_question.as_ref()?;
+        let question = state.questions.get(state.question_index)?;
+        let mut options = Vec::new();
+        let selected = state.answers[state.question_index].clone();
+
+        for (idx, option) in question.options.iter().enumerate() {
+            options.push(QuestionOptionView {
+                label: option.label.clone(),
+                description: option.description.clone(),
+                selected: selected.contains(&option.label),
+                active: idx == state.selected_index,
+                custom: false,
+                submit: false,
+            });
+        }
+
+        if question.custom {
+            options.push(QuestionOptionView {
+                label: "Type your own answer".to_string(),
+                description: String::new(),
+                selected: !state.custom_values[state.question_index].trim().is_empty()
+                    && selected.contains(&state.custom_values[state.question_index]),
+                active: options.len() == state.selected_index,
+                custom: true,
+                submit: false,
+            });
+        }
+
+        if question.multiple {
+            options.push(QuestionOptionView {
+                label: "Submit answers".to_string(),
+                description: "Continue to the next question".to_string(),
+                selected: false,
+                active: options.len() == state.selected_index,
+                custom: false,
+                submit: true,
+            });
+        }
+
+        Some(PendingQuestionView {
+            header: question.header.clone(),
+            question: question.question.clone(),
+            options,
+            selected_index: state.selected_index,
+            custom_mode: state.custom_mode,
+            custom_value: state.custom_values[state.question_index].clone(),
+            question_index: state.question_index,
+            total_questions: state.questions.len(),
+            multiple: question.multiple,
+        })
+    }
+
+    pub fn handle_question_key(&mut self, key_event: KeyEvent) -> QuestionKeyResult {
+        let Some(state) = self.pending_question.as_mut() else {
+            return QuestionKeyResult::NotHandled;
+        };
+
+        let Some(question) = state.questions.get(state.question_index).cloned() else {
+            self.pending_question = None;
+            return QuestionKeyResult::Dismissed;
+        };
+
+        if state.custom_mode {
+            match key_event.code {
+                KeyCode::Char(c) if !key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    state.custom_values[state.question_index].push(c);
+                    self.mark_dirty();
+                    return QuestionKeyResult::Handled;
+                }
+                KeyCode::Backspace => {
+                    state.custom_values[state.question_index].pop();
+                    self.mark_dirty();
+                    return QuestionKeyResult::Handled;
+                }
+                KeyCode::Esc => {
+                    let existing_custom = state.custom_values[state.question_index].clone();
+                    if !existing_custom.is_empty() {
+                        let normalized = normalize_custom_input(&existing_custom);
+                        state.answers[state.question_index].retain(|item| item != &normalized);
+                        state.custom_values[state.question_index].clear();
+                    }
+                    state.custom_mode = false;
+                    self.mark_dirty();
+                    return QuestionKeyResult::Handled;
+                }
+                KeyCode::Enter => {
+                    if key_event.modifiers.contains(KeyModifiers::SHIFT) {
+                        state.custom_values[state.question_index].push('\n');
+                        self.mark_dirty();
+                        return QuestionKeyResult::Handled;
+                    }
+
+                    let custom = normalize_custom_input(&state.custom_values[state.question_index]);
+                    state.custom_mode = false;
+                    if custom.trim().is_empty() {
+                        self.mark_dirty();
+                        return QuestionKeyResult::Handled;
+                    }
+                    if question.multiple {
+                        if !state.answers[state.question_index].contains(&custom) {
+                            state.answers[state.question_index].push(custom);
+                        }
+                        self.mark_dirty();
+                        return QuestionKeyResult::Handled;
+                    }
+
+                    state.answers[state.question_index] = vec![custom];
+                    return self.advance_or_submit_question();
+                }
+                _ => return QuestionKeyResult::Handled,
+            }
+        }
+
+        let option_count =
+            question.options.len() + usize::from(question.custom) + usize::from(question.multiple);
+
+        match key_event.code {
+            KeyCode::Char(_) if !key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                QuestionKeyResult::Handled
+            }
+            KeyCode::Up => {
+                state.selected_index = if state.selected_index == 0 {
+                    option_count.saturating_sub(1)
+                } else {
+                    state.selected_index.saturating_sub(1)
+                };
+                self.mark_dirty();
+                QuestionKeyResult::Handled
+            }
+            KeyCode::Down => {
+                state.selected_index = (state.selected_index + 1) % option_count.max(1);
+                self.mark_dirty();
+                QuestionKeyResult::Handled
+            }
+            KeyCode::Esc => {
+                let existing_custom = state.custom_values[state.question_index].clone();
+                if !existing_custom.is_empty() {
+                    let normalized = normalize_custom_input(&existing_custom);
+                    state.answers[state.question_index].retain(|item| item != &normalized);
+                    state.custom_values[state.question_index].clear();
+                    state.custom_mode = false;
+                    self.mark_dirty();
+                    return QuestionKeyResult::Handled;
+                }
+
+                self.finish_question_with_error(anyhow::anyhow!("question dismissed by user"));
+                QuestionKeyResult::Dismissed
+            }
+            KeyCode::Char(digit) if digit.is_ascii_digit() => {
+                let index = digit.to_digit(10).unwrap_or(0) as usize;
+                if index == 0 {
+                    return QuestionKeyResult::Handled;
+                }
+                let choice = index - 1;
+                if choice < option_count {
+                    state.selected_index = choice;
+                    return self.apply_question_selection(question);
+                }
+                QuestionKeyResult::Handled
+            }
+            KeyCode::Enter => self.apply_question_selection(question),
+            _ => QuestionKeyResult::Handled,
+        }
+    }
+
+    fn apply_question_selection(
+        &mut self,
+        question: crate::core::QuestionPrompt,
+    ) -> QuestionKeyResult {
+        let Some(state) = self.pending_question.as_mut() else {
+            return QuestionKeyResult::Dismissed;
+        };
+
+        let choice = state.selected_index;
+        let custom_index = if question.custom {
+            Some(question.options.len())
+        } else {
+            None
+        };
+        let submit_index = if question.multiple {
+            question.options.len() + usize::from(question.custom)
+        } else {
+            usize::MAX
+        };
+
+        if choice < question.options.len() {
+            let label = question.options[choice].label.clone();
+            if question.multiple {
+                if state.answers[state.question_index].contains(&label) {
+                    state.answers[state.question_index].retain(|item| item != &label);
+                } else {
+                    state.answers[state.question_index].push(label);
+                }
+                self.mark_dirty();
+                return QuestionKeyResult::Handled;
+            }
+
+            state.answers[state.question_index] = vec![label];
+            return self.advance_or_submit_question();
+        }
+
+        if custom_index.is_some() && custom_index == Some(choice) {
+            state.custom_mode = true;
+            self.mark_dirty();
+            return QuestionKeyResult::Handled;
+        }
+
+        if choice == submit_index {
+            return self.advance_or_submit_question();
+        }
+
+        QuestionKeyResult::Handled
+    }
+
+    fn advance_or_submit_question(&mut self) -> QuestionKeyResult {
+        let Some(state) = self.pending_question.as_mut() else {
+            return QuestionKeyResult::Dismissed;
+        };
+
+        if state.question_index + 1 < state.questions.len() {
+            state.question_index += 1;
+            state.selected_index = 0;
+            state.custom_mode = false;
+            self.mark_dirty();
+            return QuestionKeyResult::Handled;
+        }
+
+        let answers = state.answers.clone();
+        self.finish_question_with_answers(answers);
+        QuestionKeyResult::Submitted
+    }
+
+    fn finish_question_with_answers(&mut self, answers: crate::core::QuestionAnswers) {
+        if let Some(mut pending) = self.pending_question.take()
+            && let Some(guarded) = pending.responder.take()
+            && let Ok(mut lock) = guarded.lock()
+            && let Some(sender) = lock.take()
+        {
+            let _ = sender.send(Ok(answers));
+        }
+        self.mark_dirty();
+    }
+
+    fn finish_question_with_error(&mut self, error: anyhow::Error) {
+        if let Some(mut pending) = self.pending_question.take()
+            && let Some(guarded) = pending.responder.take()
+            && let Ok(mut lock) = guarded.lock()
+            && let Some(sender) = lock.take()
+        {
+            let _ = sender.send(Err(error));
+        }
+        self.mark_dirty();
     }
 
     pub fn submit_input(&mut self) -> SubmittedInput {
@@ -585,6 +912,7 @@ impl ChatApp {
         self.message_scroll.reset(true);
         self.sidebar_scroll.reset(false);
         self.set_processing(false);
+        self.pending_question = None;
         self.mark_dirty();
     }
 
@@ -888,6 +1216,10 @@ impl ChatApp {
 
         true
     }
+}
+
+fn normalize_custom_input(value: &str) -> String {
+    value.trim_end_matches('\n').to_string()
 }
 impl TodoStatus {
     pub fn from_core(status: crate::core::TodoStatus) -> Self {

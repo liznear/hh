@@ -3,6 +3,7 @@ use crate::core::ToolExecutor;
 use crate::tool::bash::BashTool;
 use crate::tool::edit::EditTool;
 use crate::tool::fs::{FsGlob, FsGrep, FsList, FsRead, FsWrite};
+use crate::tool::question::QuestionTool;
 use crate::tool::skill::SkillTool;
 use crate::tool::todo::{TodoReadTool, TodoWriteTool};
 use crate::tool::web::{WebFetchTool, WebSearchTool};
@@ -32,6 +33,7 @@ impl ToolRegistry {
             register(&mut tools, "grep", FsGrep);
             register(&mut tools, "todo_read", TodoReadTool);
             register(&mut tools, "todo_write", TodoWriteTool);
+            register(&mut tools, "question", QuestionTool);
             register(
                 &mut tools,
                 "edit",

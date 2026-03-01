@@ -191,6 +191,90 @@ pub fn confirm(prompt: &str) -> io::Result<bool> {
     Ok(normalized == "y" || normalized == "yes")
 }
 
+pub fn ask_questions(
+    questions: &[crate::core::QuestionPrompt],
+) -> io::Result<crate::core::QuestionAnswers> {
+    let mut answers = Vec::with_capacity(questions.len());
+
+    for question in questions {
+        println!();
+        println!("{}", question.question);
+        println!();
+
+        for (index, option) in question.options.iter().enumerate() {
+            println!("{}. {}", index + 1, option.label);
+            if !option.description.trim().is_empty() {
+                println!("   {}", option.description);
+            }
+        }
+
+        let custom_index = if question.custom {
+            let index = question.options.len() + 1;
+            println!("{}. Type your own answer", index);
+            Some(index)
+        } else {
+            None
+        };
+
+        if question.multiple {
+            print!("Select option numbers (comma-separated), or press enter to skip: ");
+        } else {
+            print!("Select an option number, or press enter to skip: ");
+        }
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim();
+
+        if trimmed.is_empty() {
+            answers.push(Vec::new());
+            continue;
+        }
+
+        let mut selected = Vec::new();
+        let tokens = if question.multiple {
+            trimmed
+                .split(',')
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .collect::<Vec<_>>()
+        } else {
+            vec![trimmed]
+        };
+
+        for token in tokens {
+            let Ok(choice) = token.parse::<usize>() else {
+                continue;
+            };
+
+            if let Some(index) = custom_index
+                && choice == index
+            {
+                print!("Type your own answer: ");
+                io::stdout().flush()?;
+                let mut custom = String::new();
+                io::stdin().read_line(&mut custom)?;
+                let custom = custom.trim();
+                if !custom.is_empty() {
+                    selected.push(custom.to_string());
+                }
+                continue;
+            }
+
+            if let Some(option) = question.options.get(choice.saturating_sub(1)) {
+                selected.push(option.label.clone());
+            }
+        }
+
+        selected.sort();
+        selected.dedup();
+        answers.push(selected);
+    }
+
+    Ok(answers)
+}
+
 pub fn format_args_preview(args: &Value, max_len: usize) -> String {
     let compact = serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string());
     truncate_text(&compact, max_len)
