@@ -1,8 +1,9 @@
 {
-  description = "A Nix-flake-based Rust development environment";
+  description = "hh: terminal UI coding assistant";
 
   inputs = {
     nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1"; # unstable Nixpkgs
+    crane.url = "github:ipetkov/crane";
     fenix = {
       url = "https://flakehub.com/f/nix-community/fenix/0.1";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -19,19 +20,16 @@
         "x86_64-darwin"
         "aarch64-darwin"
       ];
-      forEachSupportedSystem =
-        f:
-        inputs.nixpkgs.lib.genAttrs supportedSystems (
-          system:
-          f {
-            pkgs = import inputs.nixpkgs {
-              inherit system;
-              overlays = [
-                inputs.self.overlays.default
-              ];
-            };
-          }
-        );
+      forEachSupportedSystem = f: inputs.nixpkgs.lib.genAttrs supportedSystems (system: f system);
+
+      mkPkgs =
+        system:
+        import inputs.nixpkgs {
+          inherit system;
+          overlays = [
+            inputs.self.overlays.default
+          ];
+        };
     in
     {
       overlays.default = final: prev: {
@@ -49,8 +47,62 @@
           );
       };
 
+      packages = forEachSupportedSystem (
+        system:
+        let
+          pkgs = mkPkgs system;
+          craneLib = (inputs.crane.mkLib pkgs).overrideToolchain (_: pkgs.rustToolchain);
+          src = craneLib.cleanCargoSource ./.;
+
+          commonArgs = {
+            inherit src;
+            strictDeps = true;
+            nativeBuildInputs = with pkgs; [
+              pkg-config
+            ];
+            buildInputs = with pkgs; [
+              openssl
+            ];
+          };
+
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+          hh = craneLib.buildPackage (
+            commonArgs
+            // {
+              inherit cargoArtifacts;
+            }
+          );
+        in
+        {
+          default = hh;
+          hh = hh;
+        }
+      );
+
+      apps = forEachSupportedSystem (
+        system:
+        let
+          pkgs = mkPkgs system;
+        in
+        {
+          default = {
+            type = "app";
+            program = "${pkgs.lib.getExe inputs.self.packages.${system}.default}";
+          };
+
+          hh = {
+            type = "app";
+            program = "${pkgs.lib.getExe inputs.self.packages.${system}.hh}";
+          };
+        }
+      );
+
       devShells = forEachSupportedSystem (
-        { pkgs }:
+        system:
+        let
+          pkgs = mkPkgs system;
+        in
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
