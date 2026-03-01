@@ -52,13 +52,21 @@
         let
           pkgs = mkPkgs system;
           craneLib = (inputs.crane.mkLib pkgs).overrideToolchain (_: pkgs.rustToolchain);
-          src = craneLib.cleanCargoSource ./.;
+          src = pkgs.lib.cleanSourceWith {
+            src = ./.;
+            filter =
+              path: type:
+              (craneLib.filterCargoSources path type)
+              || pkgs.lib.hasInfix "/src/core/prompts/" (toString path);
+          };
 
           commonArgs = {
             inherit src;
             strictDeps = true;
             nativeBuildInputs = with pkgs; [
               pkg-config
+              makeWrapper
+              ripgrep
             ];
             buildInputs = with pkgs; [
               openssl
@@ -71,6 +79,9 @@
             commonArgs
             // {
               inherit cargoArtifacts;
+              postInstall = ''
+                wrapProgram "$out/bin/hh" --prefix PATH : "${pkgs.lib.makeBinPath [ pkgs.ripgrep ]}"
+              '';
             }
           );
         in
