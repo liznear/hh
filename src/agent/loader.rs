@@ -29,13 +29,13 @@ impl AgentLoader {
     }
 
     pub fn load_agents(&self) -> anyhow::Result<Vec<AgentConfig>> {
-        let mut agents = Vec::new();
-
-        // Start with built-in agents
-        agents.push(AgentConfig::builtin_build());
-        agents.push(AgentConfig::builtin_plan());
-        agents.push(AgentConfig::builtin_explorer());
-        agents.push(AgentConfig::builtin_general());
+        let mut agents = vec![
+            // Start with built-in agents
+            AgentConfig::builtin_build(),
+            AgentConfig::builtin_plan(),
+            AgentConfig::builtin_explorer(),
+            AgentConfig::builtin_general(),
+        ];
 
         // Load user-defined agents from discovery paths
         for path in &self.discovery_paths {

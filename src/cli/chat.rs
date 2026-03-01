@@ -924,8 +924,7 @@ fn spawn_agent_task(
     model_ref: String,
     event_sender: &TuiEventSender,
     subagent_manager: Arc<SubagentManager>,
-    session_id: Option<String>,
-    session_title: Option<String>,
+    run_options: AgentRunOptions,
 ) -> tokio::task::JoinHandle<()> {
     let settings = settings.clone();
     let cwd = cwd.to_path_buf();
@@ -938,11 +937,7 @@ fn spawn_agent_task(
             model_ref,
             sender.clone(),
             subagent_manager,
-            AgentRunOptions {
-                session_id,
-                session_title,
-                allow_questions: true,
-            },
+            run_options,
         )
         .await
         {
@@ -1094,6 +1089,15 @@ struct AgentRunOptions {
     allow_questions: bool,
 }
 
+struct AgentLoopOptions {
+    subagent_manager: Option<Arc<SubagentManager>>,
+    parent_task_id: Option<String>,
+    depth: usize,
+    session_id: Option<String>,
+    session_title: Option<String>,
+    session_parent_id: Option<String>,
+}
+
 fn build_session_name(cwd: &std::path::Path) -> String {
     let _ = cwd;
     "New Session".to_string()
@@ -1219,12 +1223,14 @@ async fn run_subagent_execution(
         &cwd,
         &model_ref,
         NoopEvents,
-        Some(current_subagent_manager(&settings, &cwd)),
-        Some(request.task_id.clone()),
-        request.depth,
-        Some(request.child_session_id),
-        Some(request.description),
-        Some(request.parent_session_id),
+        AgentLoopOptions {
+            subagent_manager: Some(current_subagent_manager(&settings, &cwd)),
+            parent_task_id: Some(request.task_id.clone()),
+            depth: request.depth,
+            session_id: Some(request.child_session_id),
+            session_title: Some(request.description),
+            session_parent_id: Some(request.parent_session_id),
+        },
     ) {
         Ok(loop_runner) => loop_runner,
         Err(err) => {
@@ -1295,12 +1301,14 @@ async fn run_agent(
         cwd,
         &model_ref,
         events,
-        Some(Arc::clone(&subagent_manager)),
-        None,
-        0,
-        options.session_id,
-        options.session_title,
-        None,
+        AgentLoopOptions {
+            subagent_manager: Some(Arc::clone(&subagent_manager)),
+            parent_task_id: None,
+            depth: 0,
+            session_id: options.session_id,
+            session_title: options.session_title,
+            session_parent_id: None,
+        },
     )?;
     loop_runner
         .run_with_question_tool(
@@ -1462,12 +1470,14 @@ where
         cwd,
         &default_model_ref,
         events,
-        Some(current_subagent_manager(&settings, cwd)),
-        None,
-        0,
-        Some(session_id),
-        Some(fallback_title),
-        None,
+        AgentLoopOptions {
+            subagent_manager: Some(current_subagent_manager(&settings, cwd)),
+            parent_task_id: None,
+            depth: 0,
+            session_id: Some(session_id),
+            session_title: Some(fallback_title),
+            session_parent_id: None,
+        },
     )?;
 
     loop_runner
@@ -1494,18 +1504,22 @@ fn create_agent_loop<E>(
     cwd: &std::path::Path,
     model_ref: &str,
     events: E,
-    subagent_manager: Option<Arc<SubagentManager>>,
-    parent_task_id: Option<String>,
-    depth: usize,
-    session_id: Option<String>,
-    session_title: Option<String>,
-    session_parent_id: Option<String>,
+    options: AgentLoopOptions,
 ) -> anyhow::Result<
     AgentLoop<OpenAiCompatibleProvider, E, ToolRegistry, PermissionMatcher, SessionStore>,
 >
 where
     E: AgentEvents,
 {
+    let AgentLoopOptions {
+        subagent_manager,
+        parent_task_id,
+        depth,
+        session_id,
+        session_title,
+        session_parent_id,
+    } = options;
+
     let selected = settings
         .resolve_model_ref(model_ref)
         .with_context(|| format!("unknown model reference: {model_ref}"))?;
@@ -2048,8 +2062,11 @@ fn handle_chat_message(
             app.selected_model_ref().to_string(),
             &scoped_sender,
             subagent_manager,
-            Some(current_session_id),
-            session_title,
+            AgentRunOptions {
+                session_id: Some(current_session_id),
+                session_title,
+                allow_questions: true,
+            },
         );
         app.set_agent_task(handle);
     } else {

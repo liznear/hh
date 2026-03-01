@@ -635,12 +635,13 @@ fn build_message_lines_impl(app: &ChatApp, width: usize, layout: UiLayout) -> Ve
             } => {
                 render_footer_block(
                     &mut lines,
-                    agent_display_name,
-                    provider_name,
-                    model_name,
-                    duration,
-                    *interrupted,
-                    width,
+                    FooterBlock {
+                        agent_display_name,
+                        provider_name,
+                        model_name,
+                        duration,
+                        interrupted: *interrupted,
+                    },
                     &message_indent,
                     app.selected_agent(),
                 );
@@ -731,15 +732,18 @@ fn render_compaction_block(
     }
 }
 
+struct FooterBlock<'a> {
+    agent_display_name: &'a str,
+    provider_name: &'a str,
+    model_name: &'a str,
+    duration: &'a str,
+    interrupted: bool,
+}
+
 fn render_footer_block(
     lines: &mut Vec<Line<'static>>,
-    agent_display_name: &str,
-    provider_name: &str,
-    model_name: &str,
-    duration: &str,
-    interrupted: bool,
-    _width: usize,
-    _indent: &str,
+    footer: FooterBlock<'_>,
+    indent: &str,
     agent: Option<&super::app::AgentOptionView>,
 ) {
     // Get agent color, default to TEXT_PRIMARY
@@ -749,7 +753,7 @@ fn render_footer_block(
         .unwrap_or(TEXT_PRIMARY);
 
     // Checkmark or cross symbol with appropriate color
-    let (status_symbol, status_color) = if interrupted {
+    let (status_symbol, status_color) = if footer.interrupted {
         ("✗", Color::Red)
     } else {
         ("✓", Color::Rgb(25, 110, 61))
@@ -760,19 +764,28 @@ fn render_footer_block(
         Span::styled(status_symbol, Style::default().fg(status_color)),
         Span::raw("  "),
         Span::styled(
-            agent_display_name.to_string(),
+            footer.agent_display_name.to_string(),
             Style::default().fg(agent_color),
         ),
         Span::raw("  "),
-        Span::styled(provider_name.to_string(), Style::default().fg(TEXT_MUTED)),
+        Span::styled(
+            footer.provider_name.to_string(),
+            Style::default().fg(TEXT_MUTED),
+        ),
         Span::raw(" "),
-        Span::styled(model_name.to_string(), Style::default().fg(TEXT_MUTED)),
+        Span::styled(
+            footer.model_name.to_string(),
+            Style::default().fg(TEXT_MUTED),
+        ),
         Span::raw("  "),
-        Span::styled(duration.to_string(), Style::default().fg(TEXT_PRIMARY)),
+        Span::styled(
+            footer.duration.to_string(),
+            Style::default().fg(TEXT_PRIMARY),
+        ),
     ];
 
     // Add "interrupted" text after duration if interrupted
-    if interrupted {
+    if footer.interrupted {
         footer_parts.push(Span::raw("  "));
         footer_parts.push(Span::styled("interrupted", Style::default().fg(Color::Red)));
     }
@@ -781,7 +794,7 @@ fn render_footer_block(
     lines.push(Line::from(""));
 
     // Render footer line with message indentation
-    let mut indent_spans = vec![Span::raw(_indent.to_string())];
+    let mut indent_spans = vec![Span::raw(indent.to_string())];
     indent_spans.extend(footer_parts);
     lines.push(Line::from(indent_spans));
 
