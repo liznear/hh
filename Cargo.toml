@@ -1,10 +1,14 @@
 [package]
-name = "hh"
+name = "hh-cli"
 version = "0.1.0"
 edition = "2024"
 description = "A terminal-based coding agent runtime"
 license = "MIT"
 repository = "https://github.com/liznear/hh"
+
+[[bin]]
+name = "hh"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
