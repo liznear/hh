@@ -315,14 +315,12 @@ where
 
     if app.has_pending_question() {
         let handled = app.handle_question_key(key_event);
-        if handled == QuestionKeyResult::Dismissed {
-            if app.is_processing {
-                if app.should_interrupt_on_esc() {
-                    app.cancel_agent_task();
-                    app.set_processing(false);
-                } else {
-                    app.arm_esc_interrupt();
-                }
+        if handled == QuestionKeyResult::Dismissed && app.is_processing {
+            if app.should_interrupt_on_esc() {
+                app.cancel_agent_task();
+                app.set_processing(false);
+            } else {
+                app.arm_esc_interrupt();
             }
         }
         if handled != QuestionKeyResult::NotHandled {
