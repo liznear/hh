@@ -783,27 +783,23 @@ impl ChatApp {
     }
 
     fn finish_question_with_answers(&mut self, answers: crate::core::QuestionAnswers) {
-        if let Some(mut pending) = self.pending_question.take() {
-            if let Some(guarded) = pending.responder.take() {
-                if let Ok(mut lock) = guarded.lock() {
-                    if let Some(sender) = lock.take() {
-                        let _ = sender.send(Ok(answers));
-                    }
-                }
-            }
+        if let Some(mut pending) = self.pending_question.take()
+            && let Some(guarded) = pending.responder.take()
+            && let Ok(mut lock) = guarded.lock()
+            && let Some(sender) = lock.take()
+        {
+            let _ = sender.send(Ok(answers));
         }
         self.mark_dirty();
     }
 
     fn finish_question_with_error(&mut self, error: anyhow::Error) {
-        if let Some(mut pending) = self.pending_question.take() {
-            if let Some(guarded) = pending.responder.take() {
-                if let Ok(mut lock) = guarded.lock() {
-                    if let Some(sender) = lock.take() {
-                        let _ = sender.send(Err(error));
-                    }
-                }
-            }
+        if let Some(mut pending) = self.pending_question.take()
+            && let Some(guarded) = pending.responder.take()
+            && let Ok(mut lock) = guarded.lock()
+            && let Some(sender) = lock.take()
+        {
+            let _ = sender.send(Err(error));
         }
         self.mark_dirty();
     }

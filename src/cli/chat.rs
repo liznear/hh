@@ -17,8 +17,8 @@ use crate::agent::{AgentLoader, AgentMode, AgentRegistry};
 use crate::cli::agent_init;
 use crate::cli::render;
 use crate::cli::tui::{
-    self, ChatApp, ModelOptionView, QuestionKeyResult, ScopedTuiEvent,
-    SubmittedInput, TuiEvent, TuiEventSender,
+    self, ChatApp, ModelOptionView, QuestionKeyResult, ScopedTuiEvent, SubmittedInput, TuiEvent,
+    TuiEventSender,
 };
 use crate::config::Settings;
 use crate::core::agent::subagent_manager::{
@@ -2253,6 +2253,7 @@ mod tests {
             .enable_all()
             .build()
             .expect("runtime");
+        #[allow(clippy::async_yields_async)]
         let handle = runtime.block_on(async { tokio::spawn(async {}) });
         app.set_agent_task(handle);
 
@@ -2437,6 +2438,7 @@ mod tests {
             .enable_all()
             .build()
             .expect("runtime");
+        #[allow(clippy::async_yields_async)]
         let handle = runtime.block_on(async {
             tokio::spawn(async {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -2496,6 +2498,7 @@ mod tests {
             .build()
             .expect("runtime");
 
+        #[allow(clippy::async_yields_async)]
         let first_handle = runtime.block_on(async { tokio::spawn(async {}) });
         app.set_agent_task(first_handle);
         app.set_processing(true);

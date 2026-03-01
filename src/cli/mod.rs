@@ -17,10 +17,7 @@ pub async fn run() -> anyhow::Result<()> {
         max_turns: None,
         agent: None,
     }) {
-        Commands::Chat {
-            max_turns,
-            agent,
-        } => {
+        Commands::Chat { max_turns, agent } => {
             let settings = load_settings(&cwd, agent)?;
             let settings = apply_max_turns(settings, max_turns);
             chat::run_chat(settings, &cwd).await
