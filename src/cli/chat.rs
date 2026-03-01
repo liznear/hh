@@ -1342,12 +1342,7 @@ async fn run_agent(
                 nodes.iter().map(map_subagent_node_event).collect(),
             ));
 
-            if nodes.iter().all(|node| {
-                matches!(
-                    node.status,
-                    SubagentStatus::Completed | SubagentStatus::Failed | SubagentStatus::Cancelled
-                )
-            }) {
+            if nodes.iter().all(|node| node.status.is_terminal()) {
                 break;
             }
 
@@ -1361,19 +1356,9 @@ async fn run_agent(
 fn map_subagent_node_event(
     node: &crate::core::agent::subagent_manager::SubagentNode,
 ) -> tui::SubagentEventItem {
-    let status = match node.status {
-        SubagentStatus::Pending => "queued",
-        SubagentStatus::Running => "running",
-        SubagentStatus::Completed => "done",
-        SubagentStatus::Failed => "error",
-        SubagentStatus::Cancelled => "cancelled",
-    }
-    .to_string();
+    let status = node.status.label().to_string();
 
-    let finished_at = if matches!(
-        node.status,
-        SubagentStatus::Completed | SubagentStatus::Failed | SubagentStatus::Cancelled
-    ) {
+    let finished_at = if node.status.is_terminal() {
         Some(node.updated_at)
     } else {
         None
@@ -1929,7 +1914,7 @@ fn handle_session_selection(
                         depth,
                         started_at: created_at,
                         finished_at: None,
-                        status: map_subagent_status(status),
+                        status: tui::SubagentStatusView::from_lifecycle(status),
                     },
                 );
             }
@@ -1956,13 +1941,8 @@ fn handle_session_selection(
                         finished_at: None,
                         status: tui::SubagentStatusView::Running,
                     });
-                entry.status = map_subagent_status(status);
-                if matches!(
-                    entry.status,
-                    tui::SubagentStatusView::Completed
-                        | tui::SubagentStatusView::Failed
-                        | tui::SubagentStatusView::Cancelled
-                ) {
+                entry.status = tui::SubagentStatusView::from_lifecycle(status);
+                if entry.status.is_terminal() {
                     entry.finished_at = Some(entry.started_at);
                 }
                 entry.summary = if let Some(summary) = summary {
@@ -1978,10 +1958,7 @@ fn handle_session_selection(
     }
     app.subagent_items = subagent_items_by_task.into_values().collect();
     for item in &mut app.subagent_items {
-        if matches!(
-            item.status,
-            tui::SubagentStatusView::Pending | tui::SubagentStatusView::Running
-        ) {
+        if item.status.is_active() {
             item.status = tui::SubagentStatusView::Failed;
             if item.summary.is_none() {
                 item.summary = Some("interrupted_by_restart".to_string());
@@ -1991,22 +1968,6 @@ fn handle_session_selection(
     app.mark_dirty();
 
     Ok(())
-}
-
-fn map_subagent_status(
-    status: crate::session::types::SubAgentLifecycleStatus,
-) -> tui::SubagentStatusView {
-    match status {
-        crate::session::types::SubAgentLifecycleStatus::Pending => tui::SubagentStatusView::Pending,
-        crate::session::types::SubAgentLifecycleStatus::Running => tui::SubagentStatusView::Running,
-        crate::session::types::SubAgentLifecycleStatus::Completed => {
-            tui::SubagentStatusView::Completed
-        }
-        crate::session::types::SubAgentLifecycleStatus::Failed => tui::SubagentStatusView::Failed,
-        crate::session::types::SubAgentLifecycleStatus::Cancelled => {
-            tui::SubagentStatusView::Cancelled
-        }
-    }
 }
 
 fn handle_chat_message(

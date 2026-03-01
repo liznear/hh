@@ -2,7 +2,7 @@ use crate::agent::{AgentLoader, AgentMode, AgentRegistry};
 use crate::config::Settings;
 use crate::core::agent::subagent_manager::{SubagentManager, SubagentRequest};
 use crate::session::SessionStore;
-use crate::tool::{Tool, ToolResult, ToolSchema};
+use crate::tool::{Tool, ToolResult, ToolSchema, parse_tool_args};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -119,30 +119,24 @@ impl Tool for TaskTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> ToolResult {
-        let parsed: TaskToolArgs = match serde_json::from_value(args) {
+        let parsed: TaskToolArgs = match parse_tool_args(args, "task") {
             Ok(value) => value,
-            Err(err) => {
-                return ToolResult::error(format!("invalid task args: {err}"));
-            }
+            Err(err) => return err,
         };
 
-        if parsed.name.trim().is_empty() {
-            return ToolResult::error("name must not be empty");
+        if let Err(err) = validate_non_empty("name", &parsed.name) {
+            return err;
         }
-        if parsed.description.trim().is_empty() {
-            return ToolResult::error("description must not be empty");
+        if let Err(err) = validate_non_empty("description", &parsed.description) {
+            return err;
         }
-        if parsed.prompt.trim().is_empty() {
-            return ToolResult::error("prompt must not be empty");
+        if let Err(err) = validate_non_empty("prompt", &parsed.prompt) {
+            return err;
         }
 
-        let loader = match AgentLoader::new() {
-            Ok(loader) => loader,
-            Err(err) => return ToolResult::error(format!("failed to load agent registry: {err}")),
-        };
-        let registry = match loader.load_agents() {
-            Ok(agents) => AgentRegistry::new(agents),
-            Err(err) => return ToolResult::error(format!("failed to load agents: {err}")),
+        let registry = match load_agent_registry() {
+            Ok(registry) => registry,
+            Err(err) => return ToolResult::error(err),
         };
 
         let Some(agent) = registry.get_agent(&parsed.subagent_type) else {
@@ -189,26 +183,13 @@ impl Tool for TaskTool {
             Err(err) => return ToolResult::error(err.to_string()),
         };
 
-        let output = TaskToolOutput {
-            task_id: accepted.task_id.clone(),
-            name: parsed.name,
-            description: task_description.clone(),
-            status: accepted.status,
-            message: accepted.message,
-            agent_name: parsed.subagent_type,
-            prompt: parsed.prompt,
-            depth: self.context.depth.saturating_add(1),
-            parent_task_id: self.context.parent_task_id.clone(),
-            started_at: 0,
-            finished_at: None,
-            summary: None,
-            error: None,
-        };
+        let task_id = accepted.task_id;
+        let message = accepted.message;
 
         let completed = match self
             .context
             .manager
-            .wait_for_terminal(&self.context.parent_session_id, &accepted.task_id)
+            .wait_for_terminal(&self.context.parent_session_id, &task_id)
             .await
         {
             Ok(node) => node,
@@ -216,11 +197,11 @@ impl Tool for TaskTool {
         };
 
         let output = TaskToolOutput {
-            task_id: output.task_id,
+            task_id,
             name: completed.name,
             description: task_description,
-            status: status_label(&completed.status).to_string(),
-            message: output.message,
+            status: completed.status.label().to_string(),
+            message,
             agent_name: completed.agent_name,
             prompt: completed.prompt,
             depth: completed.depth,
@@ -239,33 +220,35 @@ impl Tool for TaskTool {
     }
 }
 
-fn status_label(status: &crate::core::agent::subagent_manager::SubagentStatus) -> &'static str {
-    match status {
-        crate::core::agent::subagent_manager::SubagentStatus::Pending => "queued",
-        crate::core::agent::subagent_manager::SubagentStatus::Running => "running",
-        crate::core::agent::subagent_manager::SubagentStatus::Completed => "done",
-        crate::core::agent::subagent_manager::SubagentStatus::Failed => "error",
-        crate::core::agent::subagent_manager::SubagentStatus::Cancelled => "cancelled",
+fn load_agent_registry() -> Result<AgentRegistry, String> {
+    let loader =
+        AgentLoader::new().map_err(|err| format!("failed to load agent registry: {err}"))?;
+    let agents = loader
+        .load_agents()
+        .map_err(|err| format!("failed to load agents: {err}"))?;
+    Ok(AgentRegistry::new(agents))
+}
+
+fn validate_non_empty(field: &str, value: &str) -> Result<(), ToolResult> {
+    if value.trim().is_empty() {
+        return Err(ToolResult::error(format!("{field} must not be empty")));
     }
+    Ok(())
 }
 
 fn discover_available_subagents() -> Vec<AvailableSubagent> {
-    let loader = match AgentLoader::new() {
-        Ok(loader) => loader,
+    let registry = match load_agent_registry() {
+        Ok(registry) => registry,
         Err(_) => return Vec::new(),
     };
 
-    let agents = match loader.load_agents() {
-        Ok(agents) => agents,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut subagents = agents
+    let mut subagents = registry
+        .list_agents()
         .into_iter()
         .filter(|agent| agent.mode == AgentMode::Subagent)
         .map(|agent| AvailableSubagent {
-            name: agent.name,
-            description: agent.description,
+            name: agent.name.clone(),
+            description: agent.description.clone(),
         })
         .collect::<Vec<_>>();
     subagents.sort_by(|left, right| left.name.cmp(&right.name));

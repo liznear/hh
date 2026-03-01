@@ -24,11 +24,21 @@ pub enum SubagentStatus {
 }
 
 impl SubagentStatus {
-    fn is_terminal(&self) -> bool {
+    pub fn is_terminal(&self) -> bool {
         matches!(
             self,
             SubagentStatus::Completed | SubagentStatus::Failed | SubagentStatus::Cancelled
         )
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            SubagentStatus::Pending => "queued",
+            SubagentStatus::Running => "running",
+            SubagentStatus::Completed => "done",
+            SubagentStatus::Failed => "error",
+            SubagentStatus::Cancelled => "cancelled",
+        }
     }
 
     fn as_lifecycle_status(&self) -> SubAgentLifecycleStatus {
@@ -164,7 +174,7 @@ impl SubagentManager {
                 ) {
                     return Ok(SubagentAcceptance {
                         task_id: task_id.clone(),
-                        status: status_label(&existing.status).to_string(),
+                        status: existing.status.label().to_string(),
                         message: "sub-agent is already active".to_string(),
                     });
                 }
@@ -240,7 +250,7 @@ impl SubagentManager {
 
         Ok(SubagentAcceptance {
             task_id,
-            status: "queued".to_string(),
+            status: SubagentStatus::Pending.label().to_string(),
             message: "sub-agent accepted".to_string(),
         })
     }
@@ -418,16 +428,6 @@ fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs())
-}
-
-fn status_label(status: &SubagentStatus) -> &'static str {
-    match status {
-        SubagentStatus::Pending => "queued",
-        SubagentStatus::Running => "running",
-        SubagentStatus::Completed => "done",
-        SubagentStatus::Failed => "error",
-        SubagentStatus::Cancelled => "cancelled",
-    }
 }
 
 fn bounded_text(input: &str, max_bytes: usize) -> String {

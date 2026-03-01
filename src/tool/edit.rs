@@ -1,6 +1,6 @@
 use crate::tool::diff::build_unified_line_diff;
 use crate::tool::fs::resolve_workspace_target;
-use crate::tool::{Tool, ToolResult, ToolSchema};
+use crate::tool::{Tool, ToolResult, ToolSchema, parse_tool_args};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -61,9 +61,9 @@ impl Tool for EditTool {
     }
 
     async fn execute(&self, args: Value) -> ToolResult {
-        let parsed: EditArgs = match serde_json::from_value(args) {
+        let parsed: EditArgs = match parse_tool_args(args, "edit") {
             Ok(value) => value,
-            Err(err) => return ToolResult::error(format!("invalid edit args: {err}")),
+            Err(err) => return err,
         };
 
         if parsed.old_string.is_empty() {

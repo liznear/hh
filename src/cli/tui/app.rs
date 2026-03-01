@@ -1469,6 +1469,14 @@ impl TodoPriority {
 }
 
 impl SubagentStatusView {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Pending | Self::Running)
+    }
+
     pub fn from_wire(status: &str) -> Option<Self> {
         match status {
             "pending" | "queued" => Some(Self::Pending),
@@ -1477,6 +1485,16 @@ impl SubagentStatusView {
             "failed" | "error" => Some(Self::Failed),
             "cancelled" => Some(Self::Cancelled),
             _ => None,
+        }
+    }
+
+    pub fn from_lifecycle(status: crate::session::types::SubAgentLifecycleStatus) -> Self {
+        match status {
+            crate::session::types::SubAgentLifecycleStatus::Pending => Self::Pending,
+            crate::session::types::SubAgentLifecycleStatus::Running => Self::Running,
+            crate::session::types::SubAgentLifecycleStatus::Completed => Self::Completed,
+            crate::session::types::SubAgentLifecycleStatus::Failed => Self::Failed,
+            crate::session::types::SubAgentLifecycleStatus::Cancelled => Self::Cancelled,
         }
     }
 }

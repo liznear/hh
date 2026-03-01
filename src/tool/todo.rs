@@ -1,4 +1,4 @@
-use crate::tool::{Tool, ToolResult, ToolSchema};
+use crate::tool::{Tool, ToolResult, ToolSchema, parse_tool_args};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -7,10 +7,27 @@ pub struct TodoWriteTool;
 pub struct TodoReadTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum TodoPriority {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TodoItem {
     content: String,
-    status: String,
-    priority: String,
+    status: TodoStatus,
+    priority: TodoPriority,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,12 +61,11 @@ impl TodoCounts {
         };
 
         for item in todos {
-            match item.status.as_str() {
-                "pending" => counts.pending += 1,
-                "in_progress" => counts.in_progress += 1,
-                "completed" => counts.completed += 1,
-                "cancelled" => counts.cancelled += 1,
-                _ => {}
+            match item.status {
+                TodoStatus::Pending => counts.pending += 1,
+                TodoStatus::InProgress => counts.in_progress += 1,
+                TodoStatus::Completed => counts.completed += 1,
+                TodoStatus::Cancelled => counts.cancelled += 1,
             }
         }
 
@@ -127,23 +143,14 @@ impl Tool for TodoWriteTool {
     }
 
     async fn execute(&self, args: Value) -> ToolResult {
-        let parsed: TodoWriteArgs = match serde_json::from_value(args) {
+        let parsed: TodoWriteArgs = match parse_tool_args(args, "todo_write") {
             Ok(value) => value,
-            Err(err) => return ToolResult::error(format!("invalid todo_write args: {err}")),
+            Err(err) => return err,
         };
 
         for item in &parsed.todos {
             if item.content.trim().is_empty() {
                 return ToolResult::error("todo content must not be empty");
-            }
-            if !matches!(
-                item.status.as_str(),
-                "pending" | "in_progress" | "completed" | "cancelled"
-            ) {
-                return ToolResult::error(format!("invalid todo status: {}", item.status));
-            }
-            if !matches!(item.priority.as_str(), "high" | "medium" | "low") {
-                return ToolResult::error(format!("invalid todo priority: {}", item.priority));
             }
         }
 

@@ -11,6 +11,7 @@ pub mod todo;
 pub mod web;
 
 use async_trait::async_trait;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -119,6 +120,11 @@ impl ToolResult {
             Err(err) => Self::serialization_error(err),
         }
     }
+}
+
+pub fn parse_tool_args<T: DeserializeOwned>(args: Value, tool_name: &str) -> Result<T, ToolResult> {
+    serde_json::from_value(args)
+        .map_err(|err| ToolResult::error(format!("invalid {tool_name} args: {err}")))
 }
 
 #[async_trait]
