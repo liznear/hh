@@ -1646,6 +1646,10 @@ fn handle_chat_message(
     event_sender: &TuiEventSender,
 ) {
     if !input.text.is_empty() || !input.attachments.is_empty() {
+        // Ensure any run-epoch bump from replacing an existing task happens
+        // before we scope events for the new run.
+        app.cancel_agent_task();
+
         let scoped_sender = event_sender.scoped(app.session_epoch(), app.run_epoch());
         let session_id = app.session_id.clone();
         let session_title = if session_id.is_none() {
@@ -2335,6 +2339,60 @@ mod tests {
         assert!(!app.messages.iter().any(
             |message| matches!(message, tui::ChatMessage::Assistant(text) if text.contains("stale-stream"))
         ));
+
+        app.cancel_agent_task();
+    }
+
+    #[test]
+    fn test_replacing_finished_task_scopes_events_to_new_run_epoch() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let first_handle = runtime.block_on(async { tokio::spawn(async {}) });
+        app.set_agent_task(first_handle);
+        app.set_processing(true);
+
+        let submitted = SubmittedInput {
+            text: "follow-up".to_string(),
+            attachments: vec![crate::core::MessageAttachment::Image {
+                media_type: "image/png".to_string(),
+                data_base64: "aGVsbG8=".to_string(),
+            }],
+        };
+
+        let _enter = runtime.enter();
+        handle_chat_message(submitted, &mut app, &settings, cwd, &event_sender);
+        drop(_enter);
+
+        runtime.block_on(async {
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        });
+
+        while let Ok(event) = rx.try_recv() {
+            if event.session_epoch == app.session_epoch() && event.run_epoch == app.run_epoch() {
+                app.handle_event(&event.event);
+            }
+        }
+
+        assert!(
+            app.messages
+                .iter()
+                .any(|message| matches!(message, tui::ChatMessage::Error(_))),
+            "expected an error event from the newly started run"
+        );
+        assert!(
+            !app.is_processing,
+            "processing should stop when the run emits a scoped error event"
+        );
 
         app.cancel_agent_task();
     }

@@ -750,7 +750,10 @@ fn render_footer_block(
     let mut footer_parts: Vec<Span<'static>> = vec![
         Span::styled(status_symbol, Style::default().fg(status_color)),
         Span::raw("  "),
-        Span::styled(agent_display_name.to_string(), Style::default().fg(agent_color)),
+        Span::styled(
+            agent_display_name.to_string(),
+            Style::default().fg(agent_color),
+        ),
         Span::raw("  "),
         Span::styled(provider_name.to_string(), Style::default().fg(TEXT_MUTED)),
         Span::raw(" "),

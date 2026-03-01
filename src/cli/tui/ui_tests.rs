@@ -1,8 +1,8 @@
 use super::app::{ChatApp, ChatMessage, ModelOptionView, TodoItemView, TodoPriority, TodoStatus};
 use super::event::TuiEvent;
-use super::ui::{build_message_lines, render_app, UiLayout};
+use super::ui::{UiLayout, build_message_lines, render_app};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::{backend::TestBackend, style::Color, Terminal};
+use ratatui::{Terminal, backend::TestBackend, style::Color};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
@@ -94,13 +94,17 @@ fn compaction_renders_separator_and_preserves_previous_messages() {
     let lines = build_message_lines(&app, 100);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("Before compaction")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Before compaction"))
+    );
     assert!(rendered.iter().any(|line| line.contains("Compaction")));
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("Keep key requirements")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Keep key requirements"))
+    );
 }
 
 #[test]
@@ -500,9 +504,11 @@ fn user_prompt_box_has_inner_top_bottom_padding_and_left_indent() {
     assert!(bubble_lines.len() >= 3);
     let layout = test_layout();
     let bubble_prefix = format!("{}▌", " ".repeat(layout.main_content_left_offset()));
-    assert!(bubble_lines
-        .iter()
-        .all(|line| line.starts_with(&bubble_prefix)));
+    assert!(
+        bubble_lines
+            .iter()
+            .all(|line| line.starts_with(&bubble_prefix))
+    );
 }
 
 #[test]
@@ -669,15 +675,21 @@ fn edit_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("src/main.rs  +1 -1")));
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("+") && line.contains("new")));
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("-") && line.contains("old")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("src/main.rs  +1 -1"))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("+") && line.contains("new"))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("-") && line.contains("old"))
+    );
 
     let added_span = lines
         .iter()
@@ -714,15 +726,21 @@ fn write_tool_success_renders_diff_header_and_lines() {
     let lines = build_message_lines(&app, 120);
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
 
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("README.md  +2 -1")));
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("+") && line.contains("new")));
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("-") && line.contains("old")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("README.md  +2 -1"))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("+") && line.contains("new"))
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("-") && line.contains("old"))
+    );
 }
 
 #[test]
@@ -747,9 +765,11 @@ fn edit_diff_header_includes_tool_name() {
         .iter()
         .map(line_text)
         .collect();
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("Edit src/main.rs  +1 -1")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Edit src/main.rs  +1 -1"))
+    );
 }
 
 #[test]
@@ -774,9 +794,11 @@ fn side_by_side_diff_pairs_removed_and_added_lines() {
         .iter()
         .map(line_text)
         .collect();
-    assert!(rendered
-        .iter()
-        .any(|line| line.contains("old") && line.contains("|") && line.contains("new")));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("old") && line.contains("|") && line.contains("new"))
+    );
 }
 
 #[test]
@@ -1234,10 +1256,11 @@ fn esc_clears_custom_once_then_dismisses_on_second_press() {
     let second = app.handle_question_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(second, crate::cli::tui::QuestionKeyResult::Dismissed);
     assert!(!app.has_pending_question());
-    assert!(rx
-        .blocking_recv()
-        .expect("question response should be sent")
-        .is_err());
+    assert!(
+        rx.blocking_recv()
+            .expect("question response should be sent")
+            .is_err()
+    );
 }
 
 #[test]
