@@ -1,3 +1,4 @@
+use crate::core::ApprovalChoice;
 use crate::core::agent::AgentEvents;
 use serde_json::Value;
 use std::io::{self, Write};
@@ -189,6 +190,27 @@ pub fn confirm(prompt: &str) -> io::Result<bool> {
     io::stdin().read_line(&mut input)?;
     let normalized = input.trim().to_ascii_lowercase();
     Ok(normalized == "y" || normalized == "yes")
+}
+
+pub fn prompt_approval(request: &crate::core::ApprovalRequest) -> io::Result<ApprovalChoice> {
+    println!();
+    println!("{}", request.title);
+    println!("{}", request.body);
+    println!();
+    println!("1. Allow Once");
+    println!("2. Always Allow in Session");
+    println!("3. Deny");
+    print!("Choose [1-3] (default: 3): ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    Ok(match input.trim() {
+        "1" => ApprovalChoice::AllowOnce,
+        "2" => ApprovalChoice::AllowSession,
+        _ => ApprovalChoice::Deny,
+    })
 }
 
 pub fn ask_questions(

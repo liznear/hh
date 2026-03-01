@@ -4,15 +4,31 @@ use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use tokio::process::Command;
 
-pub struct FsRead;
-pub struct FsWrite {
+#[derive(Clone)]
+pub struct FileAccessController {
     workspace_root: PathBuf,
+    session_allowed_roots: Arc<RwLock<Vec<PathBuf>>>,
+    once_allowed_roots: Arc<RwLock<Vec<PathBuf>>>,
 }
-pub struct FsList;
-pub struct FsGlob;
-pub struct FsGrep;
+
+pub struct FsRead {
+    access: FileAccessController,
+}
+pub struct FsWrite {
+    access: FileAccessController,
+}
+pub struct FsList {
+    access: FileAccessController,
+}
+pub struct FsGlob {
+    access: FileAccessController,
+}
+pub struct FsGrep {
+    access: FileAccessController,
+}
 
 #[derive(Debug, Serialize)]
 struct FileWriteSummary {
@@ -72,6 +88,220 @@ struct GrepMatch {
     line: String,
 }
 
+#[derive(Debug)]
+pub enum FileAccessError {
+    InvalidPath(String),
+    OutsideAllowedFolders {
+        target: PathBuf,
+        suggested_folder: PathBuf,
+    },
+    Io(String),
+}
+
+impl FileAccessController {
+    pub fn new(workspace_root: PathBuf) -> Result<Self, String> {
+        let canonical_workspace = std::fs::canonicalize(&workspace_root)
+            .map_err(|err| format!("failed to resolve workspace root: {err}"))?;
+        Ok(Self {
+            workspace_root,
+            session_allowed_roots: Arc::new(RwLock::new(vec![canonical_workspace])),
+            once_allowed_roots: Arc::new(RwLock::new(Vec::new())),
+        })
+    }
+
+    pub fn resolve_input_path(&self, path: &Path) -> PathBuf {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.workspace_root.join(path)
+        }
+    }
+
+    pub fn ensure_allowed_file_path(&self, path: &Path) -> Result<PathBuf, FileAccessError> {
+        if path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        {
+            return Err(FileAccessError::InvalidPath(
+                "path must not contain parent directory traversal".to_string(),
+            ));
+        }
+
+        let target = self.resolve_input_path(path);
+        let checked_target =
+            canonicalize_existing_or_parent(&target).map_err(FileAccessError::Io)?;
+
+        if self
+            .is_allowed_path(&checked_target)
+            .map_err(FileAccessError::Io)?
+        {
+            Ok(target)
+        } else {
+            let suggested_folder = suggested_folder_for_target(&target);
+            Err(FileAccessError::OutsideAllowedFolders {
+                target,
+                suggested_folder,
+            })
+        }
+    }
+
+    pub fn ensure_allowed_dir_path(&self, path: &Path) -> Result<PathBuf, FileAccessError> {
+        if path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        {
+            return Err(FileAccessError::InvalidPath(
+                "path must not contain parent directory traversal".to_string(),
+            ));
+        }
+
+        let target = self.resolve_input_path(path);
+        let checked_target =
+            canonicalize_existing_or_parent(&target).map_err(FileAccessError::Io)?;
+
+        if self
+            .is_allowed_path(&checked_target)
+            .map_err(FileAccessError::Io)?
+        {
+            Ok(target)
+        } else {
+            let suggested_folder = suggested_folder_for_target(&target);
+            Err(FileAccessError::OutsideAllowedFolders {
+                target,
+                suggested_folder,
+            })
+        }
+    }
+
+    pub fn allow_folder_for_session(&self, folder: &Path) -> Result<PathBuf, String> {
+        let canonical = self.canonicalize_allowed_folder(folder)?;
+
+        let mut roots = self
+            .session_allowed_roots
+            .write()
+            .map_err(|_| "failed to lock allowed folders".to_string())?;
+        if !roots.iter().any(|root| root == &canonical) {
+            roots.push(canonical.clone());
+        }
+
+        Ok(canonical)
+    }
+
+    pub fn allow_folder_once(&self, folder: &Path) -> Result<PathBuf, String> {
+        let canonical = self.canonicalize_allowed_folder(folder)?;
+
+        let mut roots = self
+            .once_allowed_roots
+            .write()
+            .map_err(|_| "failed to lock allowed folders".to_string())?;
+        if !roots.iter().any(|root| root == &canonical) {
+            roots.push(canonical.clone());
+        }
+
+        Ok(canonical)
+    }
+
+    fn canonicalize_allowed_folder(&self, folder: &Path) -> Result<PathBuf, String> {
+        let resolved = self.resolve_input_path(folder);
+        let canonical = std::fs::canonicalize(&resolved)
+            .map_err(|err| format!("failed to resolve folder path: {err}"))?;
+
+        if !canonical.is_dir() {
+            return Err("folder path must point to a directory".to_string());
+        }
+
+        Ok(canonical)
+    }
+
+    fn is_allowed_path(&self, checked_target: &Path) -> Result<bool, String> {
+        let session_roots = self
+            .session_allowed_roots
+            .read()
+            .map_err(|_| "failed to lock allowed folders".to_string())?;
+        if session_roots
+            .iter()
+            .any(|allowed_root| checked_target.starts_with(allowed_root))
+        {
+            return Ok(true);
+        }
+        drop(session_roots);
+
+        let mut once_roots = self
+            .once_allowed_roots
+            .write()
+            .map_err(|_| "failed to lock allowed folders".to_string())?;
+        if let Some(index) = once_roots
+            .iter()
+            .position(|allowed_root| checked_target.starts_with(allowed_root))
+        {
+            once_roots.remove(index);
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+}
+
+impl FileAccessError {
+    pub fn into_tool_result(self) -> ToolResult {
+        match self {
+            Self::InvalidPath(message) => ToolResult::error(message),
+            Self::Io(message) => ToolResult::error(message),
+            Self::OutsideAllowedFolders {
+                target,
+                suggested_folder,
+            } => ToolResult::err_json(
+                "approval_required",
+                json!({
+                    "title": "File Access Approval Required",
+                    "body": format!(
+                        "Access to `{}` is blocked because it is outside allowed folders.",
+                        target.display()
+                    ),
+                    "action": {
+                        "operation": "allow_folder",
+                        "folder": suggested_folder.display().to_string()
+                    }
+                }),
+            ),
+        }
+    }
+}
+
+fn suggested_folder_for_target(target: &Path) -> PathBuf {
+    if target.is_dir() {
+        target.to_path_buf()
+    } else {
+        target
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| target.to_path_buf())
+    }
+}
+
+fn canonicalize_existing_or_parent(target: &Path) -> Result<PathBuf, String> {
+    if target.exists() {
+        return std::fs::canonicalize(target)
+            .map_err(|err| format!("failed to resolve target path: {err}"));
+    }
+
+    let parent = target
+        .parent()
+        .ok_or_else(|| "target path has no parent directory".to_string())?;
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|err| format!("failed to resolve target parent: {err}"))?;
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| "target path has no file name".to_string())?;
+    Ok(canonical_parent.join(file_name))
+}
+
+impl FsRead {
+    pub fn new(access: FileAccessController) -> Self {
+        Self { access }
+    }
+}
+
 #[async_trait]
 impl Tool for FsRead {
     fn schema(&self) -> ToolSchema {
@@ -93,10 +323,11 @@ impl Tool for FsRead {
     }
 
     async fn execute(&self, args: Value) -> ToolResult {
-        let path = args
+        let raw_path = args
             .get("path")
             .and_then(|v| v.as_str())
             .unwrap_or_default();
+        let path = PathBuf::from(raw_path);
         let start = args.get("start").and_then(|v| v.as_i64()).unwrap_or(0);
         let end = args.get("end").and_then(|v| v.as_i64()).unwrap_or(-1);
 
@@ -107,7 +338,12 @@ impl Tool for FsRead {
             return ToolResult::error("end must be >= -1".to_string());
         }
 
-        let content = match std::fs::read_to_string(path) {
+        let target = match self.access.ensure_allowed_file_path(&path) {
+            Ok(path) => path,
+            Err(err) => return err.into_tool_result(),
+        };
+
+        let content = match std::fs::read_to_string(&target) {
             Ok(text) => text,
             Err(err) => return ToolResult::error(err.to_string()),
         };
@@ -128,7 +364,7 @@ impl Tool for FsRead {
 
         let content = line_chunks[start..end].join("");
         let output = FileReadOutput {
-            path: path.to_string(),
+            path: target.display().to_string(),
             bytes: content.len(),
             lines: end.saturating_sub(start),
             start,
@@ -141,8 +377,8 @@ impl Tool for FsRead {
 }
 
 impl FsWrite {
-    pub fn new(workspace_root: PathBuf) -> Self {
-        Self { workspace_root }
+    pub fn new(access: FileAccessController) -> Self {
+        Self { access }
     }
 }
 
@@ -177,9 +413,9 @@ impl Tool for FsWrite {
             .and_then(|v| v.as_str())
             .unwrap_or_default();
 
-        let target = match resolve_workspace_target(&self.workspace_root, &path) {
+        let target = match self.access.ensure_allowed_file_path(&path) {
             Ok(path) => path,
-            Err(err) => return ToolResult::error(err),
+            Err(err) => return err.into_tool_result(),
         };
 
         if let Some(parent) = target.parent()
@@ -221,6 +457,12 @@ impl Tool for FsWrite {
     }
 }
 
+impl FsList {
+    pub fn new(access: FileAccessController) -> Self {
+        Self { access }
+    }
+}
+
 #[async_trait]
 impl Tool for FsList {
     fn schema(&self) -> ToolSchema {
@@ -238,15 +480,21 @@ impl Tool for FsList {
     }
 
     async fn execute(&self, args: Value) -> ToolResult {
-        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-        match std::fs::read_dir(path) {
+        let raw_path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let path = PathBuf::from(raw_path);
+        let target = match self.access.ensure_allowed_dir_path(&path) {
+            Ok(path) => path,
+            Err(err) => return err.into_tool_result(),
+        };
+
+        match std::fs::read_dir(&target) {
             Ok(entries) => {
                 let mut entries_list = Vec::new();
                 for entry in entries.flatten() {
                     entries_list.push(entry.path().display().to_string());
                 }
                 let output = ListOutput {
-                    path: path.to_string(),
+                    path: target.display().to_string(),
                     count: entries_list.len(),
                     entries: entries_list,
                 };
@@ -254,6 +502,12 @@ impl Tool for FsList {
             }
             Err(err) => ToolResult::error(err.to_string()),
         }
+    }
+}
+
+impl FsGlob {
+    pub fn new(access: FileAccessController) -> Self {
+        Self { access }
     }
 }
 
@@ -282,7 +536,11 @@ impl Tool for FsGlob {
         match glob::glob(pattern) {
             Ok(paths) => {
                 for p in paths.flatten() {
-                    matches.push(p.display().to_string());
+                    if let Ok(checked) = canonicalize_existing_or_parent(&p)
+                        && self.access.is_allowed_path(&checked).unwrap_or(false)
+                    {
+                        matches.push(p.display().to_string());
+                    }
                 }
                 let output = GlobOutput {
                     pattern: pattern.to_string(),
@@ -293,6 +551,12 @@ impl Tool for FsGlob {
             }
             Err(err) => ToolResult::error(err.to_string()),
         }
+    }
+}
+
+impl FsGrep {
+    pub fn new(access: FileAccessController) -> Self {
+        Self { access }
     }
 }
 
@@ -318,6 +582,10 @@ impl Tool for FsGrep {
 
     async fn execute(&self, args: Value) -> ToolResult {
         let root = PathBuf::from(args.get("path").and_then(|v| v.as_str()).unwrap_or("."));
+        let root = match self.access.ensure_allowed_dir_path(&root) {
+            Ok(path) => path,
+            Err(err) => return err.into_tool_result(),
+        };
         let pattern = args
             .get("pattern")
             .and_then(|v| v.as_str())
@@ -431,49 +699,4 @@ fn extract_rg_field(data: &Value, outer: &str, inner: &str) -> Option<String> {
         .and_then(|v| v.get(inner))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-}
-
-pub(crate) fn to_workspace_target(workspace_root: &Path, path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        workspace_root.join(path)
-    }
-}
-
-pub(crate) fn resolve_workspace_target(
-    workspace_root: &Path,
-    path: &Path,
-) -> Result<PathBuf, String> {
-    if path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err("path must not contain parent directory traversal".to_string());
-    }
-
-    let workspace_root = std::fs::canonicalize(workspace_root)
-        .map_err(|err| format!("failed to resolve workspace root: {err}"))?;
-    let target = to_workspace_target(&workspace_root, path);
-
-    let checked_target = if target.exists() {
-        std::fs::canonicalize(&target)
-            .map_err(|err| format!("failed to resolve target path: {err}"))?
-    } else {
-        let parent = target
-            .parent()
-            .ok_or_else(|| "target path has no parent directory".to_string())?;
-        let canonical_parent = std::fs::canonicalize(parent)
-            .map_err(|err| format!("failed to resolve target parent: {err}"))?;
-        let file_name = target
-            .file_name()
-            .ok_or_else(|| "target path has no file name".to_string())?;
-        canonical_parent.join(file_name)
-    };
-
-    if !checked_target.starts_with(&workspace_root) {
-        return Err("path is outside workspace".to_string());
-    }
-
-    Ok(target)
 }

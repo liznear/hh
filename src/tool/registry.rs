@@ -1,8 +1,8 @@
 use crate::config::Settings;
-use crate::core::ToolExecutor;
+use crate::core::{ApprovalChoice, ToolExecutor};
 use crate::tool::bash::BashTool;
 use crate::tool::edit::EditTool;
-use crate::tool::fs::{FsGlob, FsGrep, FsList, FsRead, FsWrite};
+use crate::tool::fs::{FileAccessController, FsGlob, FsGrep, FsList, FsRead, FsWrite};
 use crate::tool::question::QuestionTool;
 use crate::tool::skill::SkillTool;
 use crate::tool::task::{TaskTool, TaskToolRuntimeContext};
@@ -17,6 +17,7 @@ use std::sync::Arc;
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn Tool>>,
     non_blocking_tools: std::collections::HashSet<String>,
+    file_access: Option<FileAccessController>,
 }
 
 #[derive(Clone, Default)]
@@ -37,23 +38,31 @@ impl ToolRegistry {
         let mut tools: HashMap<String, Arc<dyn Tool>> = HashMap::new();
         let mut non_blocking_tools = std::collections::HashSet::new();
 
+        let mut file_access = None;
+
         if settings.tools.fs {
-            register(&mut tools, "read", FsRead);
+            let shared_file_access = match FileAccessController::new(workspace_root.to_path_buf()) {
+                Ok(access) => access,
+                Err(err) => panic!("failed to initialize file access controller: {err}"),
+            };
+            file_access = Some(shared_file_access.clone());
+
+            register(&mut tools, "read", FsRead::new(shared_file_access.clone()));
             register(
                 &mut tools,
                 "write",
-                FsWrite::new(workspace_root.to_path_buf()),
+                FsWrite::new(shared_file_access.clone()),
             );
-            register(&mut tools, "list", FsList);
-            register(&mut tools, "glob", FsGlob);
-            register(&mut tools, "grep", FsGrep);
+            register(&mut tools, "list", FsList::new(shared_file_access.clone()));
+            register(&mut tools, "glob", FsGlob::new(shared_file_access.clone()));
+            register(&mut tools, "grep", FsGrep::new(shared_file_access.clone()));
             register(&mut tools, "todo_read", TodoReadTool);
             register(&mut tools, "todo_write", TodoWriteTool);
             register(&mut tools, "question", QuestionTool);
             register(
                 &mut tools,
                 "edit",
-                EditTool::new(workspace_root.to_path_buf()),
+                EditTool::new(shared_file_access.clone()),
             );
             register(
                 &mut tools,
@@ -79,6 +88,7 @@ impl ToolRegistry {
         Self {
             tools,
             non_blocking_tools,
+            file_access,
         }
     }
 
@@ -110,6 +120,46 @@ impl ToolExecutor for ToolRegistry {
 
     async fn execute(&self, name: &str, args: serde_json::Value) -> crate::tool::ToolResult {
         self.execute(name, args).await
+    }
+
+    fn apply_approval_decision(
+        &self,
+        action: &serde_json::Value,
+        choice: ApprovalChoice,
+    ) -> anyhow::Result<bool> {
+        let Some(operation) = action.get("operation").and_then(|value| value.as_str()) else {
+            return Ok(false);
+        };
+
+        if operation != "allow_folder" {
+            return Ok(false);
+        }
+
+        let Some(folder) = action.get("folder").and_then(|value| value.as_str()) else {
+            anyhow::bail!("approval action missing folder");
+        };
+
+        let Some(file_access) = &self.file_access else {
+            anyhow::bail!("file access controller is unavailable");
+        };
+
+        let folder_path = std::path::Path::new(folder);
+
+        match choice {
+            ApprovalChoice::AllowOnce => {
+                file_access
+                    .allow_folder_once(folder_path)
+                    .map_err(|err| anyhow::anyhow!(err))?;
+                Ok(true)
+            }
+            ApprovalChoice::AllowSession => {
+                file_access
+                    .allow_folder_for_session(folder_path)
+                    .map_err(|err| anyhow::anyhow!(err))?;
+                Ok(true)
+            }
+            ApprovalChoice::Deny => Ok(false),
+        }
     }
 
     fn is_non_blocking(&self, name: &str) -> bool {

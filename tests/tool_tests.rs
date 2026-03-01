@@ -2,7 +2,7 @@ use hh_cli::tool::Tool;
 use hh_cli::tool::ToolResult;
 use hh_cli::tool::bash::BashTool;
 use hh_cli::tool::edit::EditTool;
-use hh_cli::tool::fs::{FsGrep, FsRead, FsWrite};
+use hh_cli::tool::fs::{FileAccessController, FsGrep, FsRead, FsWrite};
 use hh_cli::tool::question::{QuestionTool, question_result};
 use hh_cli::tool::todo::{TodoReadTool, TodoWriteTool};
 use serde_json::json;
@@ -31,7 +31,8 @@ fn diff_contains_removal(output: &serde_json::Value, text: &str) -> bool {
 #[tokio::test]
 async fn fs_write_respects_workspace_boundary() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let write_tool = FsWrite::new(temp.path().to_path_buf());
+    let access = FileAccessController::new(temp.path().to_path_buf()).expect("access");
+    let write_tool = FsWrite::new(access);
 
     let ok = write_tool
         .execute(json!({"path": "a.txt", "content": "hello"}))
@@ -61,7 +62,8 @@ async fn fs_read_returns_file_content() {
     let path = temp.path().join("note.txt");
     std::fs::write(&path, "content").expect("write file");
 
-    let read_tool = FsRead;
+    let access = FileAccessController::new(temp.path().to_path_buf()).expect("access");
+    let read_tool = FsRead::new(access);
     let res = read_tool
         .execute(json!({"path": path.display().to_string()}))
         .await;
@@ -82,7 +84,8 @@ async fn fs_read_supports_line_range() {
     let path = temp.path().join("note.txt");
     std::fs::write(&path, "one\ntwo\nthree\n").expect("write file");
 
-    let read_tool = FsRead;
+    let access = FileAccessController::new(temp.path().to_path_buf()).expect("access");
+    let read_tool = FsRead::new(access);
     let res = read_tool
         .execute(json!({
             "path": path.display().to_string(),
@@ -106,7 +109,8 @@ async fn fs_grep_includes_match_line_numbers() {
     let path = temp.path().join("note.txt");
     std::fs::write(&path, "alpha\nbeta\ngamma\n").expect("write file");
 
-    let grep_tool = FsGrep;
+    let access = FileAccessController::new(temp.path().to_path_buf()).expect("access");
+    let grep_tool = FsGrep::new(access);
     let res = grep_tool
         .execute(json!({
             "path": temp.path().display().to_string(),
@@ -201,7 +205,8 @@ async fn edit_applies_single_replacement() {
     let temp = tempfile::tempdir().expect("tempdir");
     let path = temp.path().join("note.txt");
     std::fs::write(&path, "hello world\n").expect("seed file");
-    let edit = EditTool::new(temp.path().to_path_buf());
+    let access = FileAccessController::new(temp.path().to_path_buf()).expect("access");
+    let edit = EditTool::new(access);
 
     let result = edit
         .execute(json!({
@@ -225,7 +230,8 @@ async fn edit_replace_all() {
     let temp = tempfile::tempdir().expect("tempdir");
     let path = temp.path().join("repeat.txt");
     std::fs::write(&path, "a\na\n").expect("seed file");
-    let edit = EditTool::new(temp.path().to_path_buf());
+    let access = FileAccessController::new(temp.path().to_path_buf()).expect("access");
+    let edit = EditTool::new(access);
 
     let result = edit
         .execute(json!({
@@ -246,7 +252,8 @@ async fn edit_errors_when_old_string_missing() {
     let temp = tempfile::tempdir().expect("tempdir");
     let path = temp.path().join("missing.txt");
     std::fs::write(&path, "hello\n").expect("seed file");
-    let edit = EditTool::new(temp.path().to_path_buf());
+    let access = FileAccessController::new(temp.path().to_path_buf()).expect("access");
+    let edit = EditTool::new(access);
 
     let result = edit
         .execute(json!({
@@ -265,7 +272,8 @@ async fn edit_errors_on_non_unique_match_when_replace_all_false() {
     let temp = tempfile::tempdir().expect("tempdir");
     let path = temp.path().join("non_unique.txt");
     std::fs::write(&path, "x\nx\n").expect("seed file");
-    let edit = EditTool::new(temp.path().to_path_buf());
+    let access = FileAccessController::new(temp.path().to_path_buf()).expect("access");
+    let edit = EditTool::new(access);
 
     let result = edit
         .execute(json!({
@@ -283,7 +291,8 @@ async fn edit_errors_on_non_unique_match_when_replace_all_false() {
 async fn edit_respects_workspace_boundary() {
     let temp = tempfile::tempdir().expect("tempdir");
     let outside = tempfile::NamedTempFile::new().expect("outside file");
-    let edit = EditTool::new(temp.path().to_path_buf());
+    let access = FileAccessController::new(temp.path().to_path_buf()).expect("access");
+    let edit = EditTool::new(access);
 
     let result = edit
         .execute(json!({
@@ -294,13 +303,14 @@ async fn edit_respects_workspace_boundary() {
         .await;
 
     assert!(result.is_error);
-    assert!(result.output.contains("outside workspace"));
+    assert!(result.output.contains("outside allowed folders"));
 }
 
 #[tokio::test]
 async fn edit_rejects_parent_traversal() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let edit = EditTool::new(temp.path().to_path_buf());
+    let access = FileAccessController::new(temp.path().to_path_buf()).expect("access");
+    let edit = EditTool::new(access);
 
     let result = edit
         .execute(json!({
@@ -327,7 +337,8 @@ async fn edit_rejects_symlink_escape() {
     let symlink_path = temp.path().join("link.txt");
     symlink(&outside_file, &symlink_path).expect("create symlink");
 
-    let edit = EditTool::new(temp.path().to_path_buf());
+    let access = FileAccessController::new(temp.path().to_path_buf()).expect("access");
+    let edit = EditTool::new(access);
     let result = edit
         .execute(json!({
             "path": "link.txt",
@@ -337,7 +348,38 @@ async fn edit_rejects_symlink_escape() {
         .await;
 
     assert!(result.is_error);
-    assert!(result.output.contains("outside workspace"));
+    assert!(result.output.contains("outside allowed folders"));
+}
+
+#[tokio::test]
+async fn file_access_allow_folder_once_grants_single_access() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let outside = tempfile::tempdir().expect("outside");
+    let outside_file = outside.path().join("outside.txt");
+    std::fs::write(&outside_file, "secret").expect("seed outside file");
+
+    let access = FileAccessController::new(workspace.path().to_path_buf()).expect("access");
+    let read = FsRead::new(access.clone());
+
+    let blocked = read
+        .execute(json!({"path": outside_file.display().to_string()}))
+        .await;
+    assert!(blocked.is_error);
+    assert_eq!(blocked.summary, "approval_required");
+
+    access
+        .allow_folder_once(outside.path())
+        .expect("allow once");
+
+    let allowed = read
+        .execute(json!({"path": outside_file.display().to_string()}))
+        .await;
+    assert!(!allowed.is_error);
+
+    let blocked_again = read
+        .execute(json!({"path": outside_file.display().to_string()}))
+        .await;
+    assert!(blocked_again.is_error);
 }
 
 #[tokio::test]

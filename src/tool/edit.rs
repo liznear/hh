@@ -1,5 +1,5 @@
 use crate::tool::diff::build_unified_line_diff;
-use crate::tool::fs::resolve_workspace_target;
+use crate::tool::fs::FileAccessController;
 use crate::tool::{Tool, ToolResult, ToolSchema, parse_tool_args};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -7,12 +7,12 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 
 pub struct EditTool {
-    workspace_root: PathBuf,
+    access: FileAccessController,
 }
 
 impl EditTool {
-    pub fn new(workspace_root: PathBuf) -> Self {
-        Self { workspace_root }
+    pub fn new(access: FileAccessController) -> Self {
+        Self { access }
     }
 }
 
@@ -71,9 +71,9 @@ impl Tool for EditTool {
         }
 
         let input_path = PathBuf::from(&parsed.path);
-        let target = match resolve_workspace_target(&self.workspace_root, &input_path) {
+        let target = match self.access.ensure_allowed_file_path(&input_path) {
             Ok(path) => path,
-            Err(err) => return ToolResult::error(err),
+            Err(err) => return err.into_tool_result(),
         };
 
         let before = match std::fs::read_to_string(&target) {

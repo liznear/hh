@@ -4,8 +4,9 @@ pub mod subagent_manager;
 pub use super::{AgentEvents, NoopEvents};
 
 use crate::core::{
-    ApprovalDecision, ApprovalPolicy, Message, Provider, ProviderRequest, ProviderStreamEvent,
-    QuestionAnswers, QuestionPrompt, Role, SessionReader, SessionSink, ToolCall, ToolExecutor,
+    ApprovalChoice, ApprovalDecision, ApprovalPolicy, ApprovalRequest, Message, Provider,
+    ProviderRequest, ProviderStreamEvent, QuestionAnswers, QuestionPrompt, Role, SessionReader,
+    SessionSink, ToolCall, ToolExecutor,
 };
 use crate::safety::sanitize_tool_output;
 use crate::session::{SessionEvent, event_id};
@@ -41,9 +42,14 @@ where
     A: ApprovalPolicy,
     S: SessionSink + SessionReader,
 {
-    pub async fn run<F>(&self, prompt: Message, mut approve: F) -> anyhow::Result<String>
+    pub async fn run<AP, APFut>(
+        &self,
+        prompt: Message,
+        mut approve: AP,
+    ) -> anyhow::Result<String>
     where
-        F: FnMut(&str) -> anyhow::Result<bool>,
+        AP: FnMut(ApprovalRequest) -> APFut,
+        APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
     {
         self.run_with_question_tool(prompt, &mut approve, |_questions| async {
             anyhow::bail!("question tool is unavailable in this mode; provide a question handler")
@@ -51,14 +57,15 @@ where
         .await
     }
 
-    pub async fn run_with_question_tool<F, Q, QFut>(
+    pub async fn run_with_question_tool<AP, APFut, Q, QFut>(
         &self,
         prompt: Message,
-        mut approve: F,
+        mut approve: AP,
         mut ask_question: Q,
     ) -> anyhow::Result<String>
     where
-        F: FnMut(&str) -> anyhow::Result<bool>,
+        AP: FnMut(ApprovalRequest) -> APFut,
+        APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
         Q: FnMut(Vec<QuestionPrompt>) -> QFut,
         QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
     {
@@ -68,16 +75,23 @@ where
             todo_items: Vec::new(),
             step: 0,
         };
+        let mut session_allowed_tools = std::collections::HashSet::<String>::new();
+
+        restore_session_approvals(
+            &replayed_events,
+            &self.tools,
+            &mut session_allowed_tools,
+        )?;
 
         let mut tool_name_by_call_id = std::collections::HashMap::new();
-        for event in replayed_events {
+        for event in &replayed_events {
             match event {
                 SessionEvent::ToolCall { call } => {
-                    tool_name_by_call_id.insert(call.id, call.name);
+                    tool_name_by_call_id.insert(call.id.clone(), call.name.clone());
                 }
                 SessionEvent::ToolResult { id, result, .. } => {
                     if let (Some(name), Some(tool_result)) =
-                        (tool_name_by_call_id.get(&id), result.as_ref())
+                        (tool_name_by_call_id.get(id), result.as_ref())
                     {
                         state.apply_tool_result(name, tool_result);
                     }
@@ -188,20 +202,44 @@ where
                         continue;
                     }
                     ApprovalDecision::Ask => {
-                        self.events.on_tool_start(&call.name, &call.arguments);
-                        let approved = approve(&call.name)?;
-                        self.session.append(&SessionEvent::Approval {
-                            id: event_id(),
-                            tool_name: call.name.clone(),
-                            approved,
-                        })?;
-                        if !approved {
-                            self.record_tool_error(
-                                &call,
-                                format!("tool approval denied: {}", call.name),
-                                &mut state,
-                            )?;
-                            continue;
+                        if !session_allowed_tools.contains(&call.name) {
+                            self.events.on_tool_start(&call.name, &call.arguments);
+                            let choice = approve(ApprovalRequest {
+                                title: "Tool Execution Approval".to_string(),
+                                body: format!(
+                                    "Allow tool `{}` to execute with the current arguments?",
+                                    call.name
+                                ),
+                                action: serde_json::json!({
+                                    "operation": "tool_execution",
+                                    "tool_name": call.name,
+                                }),
+                            })
+                            .await?;
+
+                            if choice == ApprovalChoice::AllowSession {
+                                session_allowed_tools.insert(call.name.clone());
+                            }
+
+                            let approved = choice != ApprovalChoice::Deny;
+                            self.session.append(&SessionEvent::Approval {
+                                id: event_id(),
+                                tool_name: call.name.clone(),
+                                approved,
+                                action: Some(serde_json::json!({
+                                    "operation": "tool_execution",
+                                    "tool_name": call.name,
+                                })),
+                                choice: Some(choice),
+                            })?;
+                            if !approved {
+                                self.record_tool_error(
+                                    &call,
+                                    format!("tool approval denied: {}", call.name),
+                                    &mut state,
+                                )?;
+                                continue;
+                            }
                         }
                     }
                     ApprovalDecision::Allow => {}
@@ -229,7 +267,8 @@ where
                     continue;
                 }
 
-                self.execute_tool_call(&call, &mut state).await?;
+                self.execute_tool_call(&call, &mut state, &mut approve)
+                    .await?;
             }
 
             while let Some((call, result)) = pending_non_blocking.next().await {
@@ -261,21 +300,62 @@ where
         }
     }
 
-    async fn execute_tool_call(
+    async fn execute_tool_call<AP, APFut>(
         &self,
         call: &ToolCall,
         state: &mut AgentState,
-    ) -> anyhow::Result<()> {
-        let event_args = decorate_tool_start_args(&call.name, &call.arguments);
-        self.events.on_tool_start(&call.name, &event_args);
-        let mut result = if call.name == "todo_read" {
-            todo_snapshot_result(&state.todo_items)
-        } else {
-            self.tools.execute(&call.name, call.arguments.clone()).await
-        };
-        result.output = sanitize_tool_output(&result.output);
-        self.events.on_tool_end(&call.name, &result);
-        self.record_tool_result(call, result, state)
+        approve: &mut AP,
+    ) -> anyhow::Result<()>
+    where
+        AP: FnMut(ApprovalRequest) -> APFut,
+        APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
+    {
+        loop {
+            let event_args = decorate_tool_start_args(&call.name, &call.arguments);
+            self.events.on_tool_start(&call.name, &event_args);
+            let mut result = if call.name == "todo_read" {
+                todo_snapshot_result(&state.todo_items)
+            } else {
+                self.tools.execute(&call.name, call.arguments.clone()).await
+            };
+
+            if let Some(request) = parse_approval_request(&result) {
+                let choice = approve(request.clone()).await?;
+                let approved = choice != ApprovalChoice::Deny;
+                self.session.append(&SessionEvent::Approval {
+                    id: event_id(),
+                    tool_name: call.name.clone(),
+                    approved,
+                    action: Some(request.action.clone()),
+                    choice: Some(choice),
+                })?;
+
+                if !approved {
+                    let denied = ToolResult::err_text("denied", "approval denied by user");
+                    self.events.on_tool_end(&call.name, &denied);
+                    return self.record_tool_result(call, denied, state);
+                }
+
+                let applied = self
+                    .tools
+                    .apply_approval_decision(&request.action, choice)?;
+                if !applied {
+                    result = ToolResult::err_text(
+                        "approval_error",
+                        "approval decision could not be applied",
+                    );
+                    result.output = sanitize_tool_output(&result.output);
+                    self.events.on_tool_end(&call.name, &result);
+                    return self.record_tool_result(call, result, state);
+                }
+
+                continue;
+            }
+
+            result.output = sanitize_tool_output(&result.output);
+            self.events.on_tool_end(&call.name, &result);
+            return self.record_tool_result(call, result, state);
+        }
     }
 
     fn record_tool_error(
@@ -334,6 +414,55 @@ fn decorate_tool_start_args(name: &str, args: &serde_json::Value) -> serde_json:
         .map_or(0, |d| d.as_secs());
     obj.insert("__started_at".to_string(), serde_json::Value::from(now));
     serde_json::Value::Object(obj)
+}
+
+fn restore_session_approvals<T: ToolExecutor>(
+    replayed_events: &[SessionEvent],
+    tools: &T,
+    session_allowed_tools: &mut std::collections::HashSet<String>,
+) -> anyhow::Result<()> {
+    for event in replayed_events {
+        let SessionEvent::Approval {
+            approved: true,
+            action: Some(action),
+            choice: Some(ApprovalChoice::AllowSession),
+            ..
+        } = event
+        else {
+            continue;
+        };
+
+        if let Some(tool_name) = action.get("tool_name").and_then(|value| value.as_str())
+            && action
+                .get("operation")
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| value == "tool_execution")
+        {
+            session_allowed_tools.insert(tool_name.to_string());
+            continue;
+        }
+
+        let _ = tools.apply_approval_decision(action, ApprovalChoice::AllowSession)?;
+    }
+
+    Ok(())
+}
+
+fn parse_approval_request(result: &ToolResult) -> Option<ApprovalRequest> {
+    if result.summary != "approval_required" {
+        return None;
+    }
+
+    let payload = result.payload.as_object()?;
+    let title = payload.get("title")?.as_str()?.to_string();
+    let body = payload.get("body")?.as_str()?.to_string();
+    let action = payload.get("action")?.clone();
+
+    Some(ApprovalRequest {
+        title,
+        body,
+        action,
+    })
 }
 
 #[derive(Debug, Serialize)]

@@ -1050,7 +1050,11 @@ async fn run_subagent_execution(
                 attachments: Vec::new(),
                 tool_call_id: None,
             },
-            |_tool_name| Ok(true),
+            |_request| async {
+                Ok::<crate::core::ApprovalChoice, anyhow::Error>(
+                    crate::core::ApprovalChoice::AllowSession,
+                )
+            },
             |_questions| async {
                 anyhow::bail!("question tool is not available in sub-agent mode")
             },
@@ -1093,6 +1097,7 @@ async fn run_agent(
 
     let event_sender = events.clone();
     let question_event_sender = event_sender.clone();
+    let approval_event_sender = event_sender.clone();
     let allow_questions = options.allow_questions;
     let parent_session_id = options.session_id.clone();
     let loop_runner = create_agent_loop(
@@ -1112,9 +1117,22 @@ async fn run_agent(
     loop_runner
         .run_with_question_tool(
             prompt,
-            |_tool_name| {
-                // For TUI mode, auto-approve tools (could prompt via TUI in future)
-                Ok(true)
+            move |request| {
+                let event_sender = approval_event_sender.clone();
+                async move {
+                    let question = approval_request_to_question_prompt(&request);
+                    let (tx, rx) = oneshot::channel();
+                    event_sender.send(TuiEvent::QuestionPrompt {
+                        questions: vec![question],
+                        responder: std::sync::Arc::new(std::sync::Mutex::new(Some(tx))),
+                    });
+
+                    let answers = rx.await.unwrap_or_else(|_| {
+                        Err(anyhow::anyhow!("approval prompt was cancelled"))
+                    })?;
+
+                    Ok(parse_approval_choice(&answers).unwrap_or(crate::core::ApprovalChoice::Deny))
+                }
             },
             move |questions| {
                 let event_sender = question_event_sender.clone();
@@ -1206,6 +1224,39 @@ fn validate_image_input_model_support(
     )
 }
 
+fn approval_request_to_question_prompt(request: &crate::core::ApprovalRequest) -> crate::core::QuestionPrompt {
+    crate::core::QuestionPrompt {
+        question: request.body.clone(),
+        header: request.title.clone(),
+        options: vec![
+            crate::core::QuestionOption {
+                label: "Allow Once".to_string(),
+                description: "Approve this action a single time.".to_string(),
+            },
+            crate::core::QuestionOption {
+                label: "Always Allow in Session".to_string(),
+                description: "Remember this approval for the current session.".to_string(),
+            },
+            crate::core::QuestionOption {
+                label: "Deny".to_string(),
+                description: "Reject the action.".to_string(),
+            },
+        ],
+        multiple: false,
+        custom: false,
+    }
+}
+
+fn parse_approval_choice(answers: &crate::core::QuestionAnswers) -> Option<crate::core::ApprovalChoice> {
+    let label = answers.first()?.first()?.as_str();
+    match label {
+        "Allow Once" => Some(crate::core::ApprovalChoice::AllowOnce),
+        "Always Allow in Session" => Some(crate::core::ApprovalChoice::AllowSession),
+        "Deny" => Some(crate::core::ApprovalChoice::Deny),
+        _ => None,
+    }
+}
+
 pub async fn run_single_prompt(
     settings: Settings,
     cwd: &std::path::Path,
@@ -1272,11 +1323,8 @@ where
                 attachments: Vec::new(),
                 tool_call_id: None,
             },
-            |tool_name| {
-                Ok(render::confirm(&format!(
-                    "Allow tool '{}' execution?",
-                    tool_name
-                ))?)
+            |request| async move {
+                Ok::<crate::core::ApprovalChoice, anyhow::Error>(render::prompt_approval(&request)?)
             },
             |questions| async move { Ok(render::ask_questions(&questions)?) },
         )

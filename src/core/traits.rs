@@ -1,5 +1,6 @@
 use crate::core::types::{Message, ProviderRequest, ProviderResponse, ProviderStreamEvent};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7,6 +8,21 @@ pub enum ApprovalDecision {
     Allow,
     Ask,
     Deny,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalChoice {
+    AllowOnce,
+    AllowSession,
+    Deny,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    pub title: String,
+    pub body: String,
+    pub action: Value,
 }
 
 pub trait AgentEvents: Send + Sync {
@@ -53,6 +69,13 @@ pub trait Provider: Send + Sync {
 pub trait ToolExecutor: Send + Sync {
     fn schemas(&self) -> Vec<crate::tool::schema::ToolSchema>;
     async fn execute(&self, name: &str, args: Value) -> crate::tool::ToolResult;
+    fn apply_approval_decision(
+        &self,
+        _action: &Value,
+        _choice: ApprovalChoice,
+    ) -> anyhow::Result<bool> {
+        Ok(false)
+    }
     fn is_non_blocking(&self, _name: &str) -> bool {
         false
     }

@@ -1,5 +1,6 @@
 use crate::core::{Message, ToolCall};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 fn default_subagent_status_running() -> SubAgentLifecycleStatus {
     SubAgentLifecycleStatus::Running
@@ -48,6 +49,10 @@ pub enum SessionEvent {
         id: String,
         tool_name: String,
         approved: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        choice: Option<crate::core::ApprovalChoice>,
     },
     Thinking {
         id: String,

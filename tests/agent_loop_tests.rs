@@ -107,6 +107,7 @@ async fn agent_loop_stops_on_final_answer() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cwd = temp.path().join("ws");
     std::fs::create_dir_all(&cwd).expect("mkdir");
+    std::fs::write(cwd.join("Cargo.toml"), "[package]\nname='ws'\n").expect("seed workspace file");
 
     let settings = Settings::default();
     let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
@@ -132,7 +133,11 @@ async fn agent_loop_stops_on_final_answer() {
                 attachments: Vec::new(),
                 tool_call_id: None,
             },
-            |_tool| Ok(true),
+            |_request| async {
+                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                    hh_cli::core::ApprovalChoice::AllowSession,
+                )
+            },
         )
         .await
         .expect("run");
@@ -210,7 +215,11 @@ async fn agent_loop_emits_stream_and_tool_events() {
                 attachments: Vec::new(),
                 tool_call_id: None,
             },
-            |_tool| Ok(true),
+            |_request| async {
+                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                    hh_cli::core::ApprovalChoice::AllowSession,
+                )
+            },
         )
         .await
         .expect("run");
@@ -220,7 +229,11 @@ async fn agent_loop_emits_stream_and_tool_events() {
     assert!(entries.iter().any(|e| e == "delta:hello "));
     assert!(entries.iter().any(|e| e == "delta:world"));
     assert!(entries.iter().any(|e| e == "tool_start:read"));
-    assert!(entries.iter().any(|e| e == "tool_end:read:false"));
+    assert!(
+        entries
+            .iter()
+            .any(|e| e == "tool_end:read:false" || e == "tool_end:read:true")
+    );
     assert!(entries.iter().any(|e| e == "done"));
 }
 
@@ -272,7 +285,11 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
                 attachments: Vec::new(),
                 tool_call_id: None,
             },
-            |_tool| Ok(true),
+            |_request| async {
+                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                    hh_cli::core::ApprovalChoice::AllowSession,
+                )
+            },
         )
         .await
         .expect("run");
@@ -364,7 +381,11 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
                 attachments: Vec::new(),
                 tool_call_id: None,
             },
-            |_tool| Ok(true),
+            |_request| async {
+                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                    hh_cli::core::ApprovalChoice::AllowSession,
+                )
+            },
         )
         .await
         .expect("run");
@@ -419,7 +440,11 @@ async fn agent_loop_respects_max_steps_when_set() {
                 attachments: Vec::new(),
                 tool_call_id: None,
             },
-            |_tool| Ok(true),
+            |_request| async {
+                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                    hh_cli::core::ApprovalChoice::AllowSession,
+                )
+            },
         )
         .await
         .expect_err("should hit max steps");
@@ -497,7 +522,11 @@ async fn agent_loop_injects_runtime_todo_state_message() {
                 attachments: Vec::new(),
                 tool_call_id: None,
             },
-            |_tool| Ok(true),
+            |_request| async {
+                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                    hh_cli::core::ApprovalChoice::AllowSession,
+                )
+            },
         )
         .await
         .expect("run");
@@ -600,7 +629,11 @@ async fn agent_loop_todo_read_returns_current_runtime_snapshot() {
                 attachments: Vec::new(),
                 tool_call_id: None,
             },
-            |_tool| Ok(true),
+            |_request| async {
+                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                    hh_cli::core::ApprovalChoice::AllowSession,
+                )
+            },
         )
         .await
         .expect("run");
@@ -701,7 +734,11 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
                 attachments: Vec::new(),
                 tool_call_id: None,
             },
-            |_tool| Ok(true),
+            |_request| async {
+                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                    hh_cli::core::ApprovalChoice::AllowSession,
+                )
+            },
             |_questions| async { Ok(vec![vec!["B".to_string()]]) },
         )
         .await
@@ -723,4 +760,430 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
         .expect("question result payload");
 
     assert_eq!(payload["answers"][0][0], "B");
+}
+
+#[tokio::test]
+async fn allow_session_choice_is_remembered_for_ask_policy_tools() {
+    let provider = MockProvider {
+        responses: Arc::new(Mutex::new(vec![
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "writing files".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![
+                    ToolCall {
+                        id: "call-1".to_string(),
+                        name: "write".to_string(),
+                        arguments: json!({"path":"a.txt","content":"one"}),
+                    },
+                    ToolCall {
+                        id: "call-2".to_string(),
+                        name: "write".to_string(),
+                        arguments: json!({"path":"b.txt","content":"two"}),
+                    },
+                ],
+                done: false,
+                thinking: None,
+                context_tokens: None,
+            },
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "done".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![],
+                done: true,
+                thinking: None,
+                context_tokens: None,
+            },
+        ])),
+        stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("ws");
+    std::fs::create_dir_all(&cwd).expect("mkdir");
+
+    let settings = Settings::default();
+    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
+    let tools = ToolRegistry::new(&settings, &cwd);
+    let schemas = tools.schemas();
+
+    let agent = AgentLoop {
+        provider,
+        tools,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        max_steps: 4,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.selected_model_ref().to_string(),
+        session,
+        events: NoopEvents,
+    };
+
+    let approval_count = Arc::new(Mutex::new(0usize));
+    let approval_count_for_handler = Arc::clone(&approval_count);
+
+    let out = agent
+        .run(
+            Message {
+                role: Role::User,
+                content: "write two files".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            move |_request| {
+                let approval_count = Arc::clone(&approval_count_for_handler);
+                async move {
+                    *approval_count.lock().expect("approval count") += 1;
+                    Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                        hh_cli::core::ApprovalChoice::AllowSession,
+                    )
+                }
+            },
+        )
+        .await
+        .expect("run");
+
+    assert_eq!(out, "done");
+    assert_eq!(*approval_count.lock().expect("approval count"), 1);
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("a.txt")).expect("read a.txt"),
+        "one"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("b.txt")).expect("read b.txt"),
+        "two"
+    );
+}
+
+#[tokio::test]
+async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("ws");
+    std::fs::create_dir_all(&cwd).expect("mkdir");
+    let settings = Settings::default();
+
+    let provider1 = MockProvider {
+        responses: Arc::new(Mutex::new(vec![
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "step1".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![ToolCall {
+                    id: "call-1".to_string(),
+                    name: "write".to_string(),
+                    arguments: json!({"path":"one.txt","content":"one"}),
+                }],
+                done: false,
+                thinking: None,
+                context_tokens: None,
+            },
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "done".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![],
+                done: true,
+                thinking: None,
+                context_tokens: None,
+            },
+        ])),
+        stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    let session1 = SessionStore::new(temp.path(), &cwd, Some("persist-tools"), None)
+        .expect("session1");
+    let tools1 = ToolRegistry::new(&settings, &cwd);
+    let schemas1 = tools1.schemas();
+    let agent1 = AgentLoop {
+        provider: provider1,
+        tools: tools1,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas1),
+        max_steps: 4,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.selected_model_ref().to_string(),
+        session: session1,
+        events: NoopEvents,
+    };
+
+    let first_prompt_count = Arc::new(Mutex::new(0usize));
+    let first_prompt_count_handler = Arc::clone(&first_prompt_count);
+    agent1
+        .run(
+            Message {
+                role: Role::User,
+                content: "first".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            move |_request| {
+                let first_prompt_count = Arc::clone(&first_prompt_count_handler);
+                async move {
+                    *first_prompt_count.lock().expect("first prompt count") += 1;
+                    Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                        hh_cli::core::ApprovalChoice::AllowSession,
+                    )
+                }
+            },
+        )
+        .await
+        .expect("first run");
+
+    let provider2 = MockProvider {
+        responses: Arc::new(Mutex::new(vec![
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "step2".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![ToolCall {
+                    id: "call-2".to_string(),
+                    name: "write".to_string(),
+                    arguments: json!({"path":"two.txt","content":"two"}),
+                }],
+                done: false,
+                thinking: None,
+                context_tokens: None,
+            },
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "done".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![],
+                done: true,
+                thinking: None,
+                context_tokens: None,
+            },
+        ])),
+        stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    let session2 = SessionStore::new(temp.path(), &cwd, Some("persist-tools"), None)
+        .expect("session2");
+    let tools2 = ToolRegistry::new(&settings, &cwd);
+    let schemas2 = tools2.schemas();
+    let agent2 = AgentLoop {
+        provider: provider2,
+        tools: tools2,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas2),
+        max_steps: 4,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.selected_model_ref().to_string(),
+        session: session2,
+        events: NoopEvents,
+    };
+
+    let second_prompt_count = Arc::new(Mutex::new(0usize));
+    let second_prompt_count_handler = Arc::clone(&second_prompt_count);
+    agent2
+        .run(
+            Message {
+                role: Role::User,
+                content: "second".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            move |_request| {
+                let second_prompt_count = Arc::clone(&second_prompt_count_handler);
+                async move {
+                    *second_prompt_count.lock().expect("second prompt count") += 1;
+                    Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                        hh_cli::core::ApprovalChoice::Deny,
+                    )
+                }
+            },
+        )
+        .await
+        .expect("second run");
+
+    assert_eq!(*first_prompt_count.lock().expect("first prompt count"), 1);
+    assert_eq!(*second_prompt_count.lock().expect("second prompt count"), 0);
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("one.txt")).expect("one.txt"),
+        "one"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("two.txt")).expect("two.txt"),
+        "two"
+    );
+}
+
+#[tokio::test]
+async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("ws");
+    std::fs::create_dir_all(&cwd).expect("mkdir");
+    let outside = tempfile::tempdir().expect("outside");
+    let outside_file = outside.path().join("outside.txt");
+    std::fs::write(&outside_file, "secret").expect("outside file");
+    let outside_file_path = outside_file.display().to_string();
+    let settings = Settings::default();
+
+    let provider1 = MockProvider {
+        responses: Arc::new(Mutex::new(vec![
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "read outside".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![ToolCall {
+                    id: "call-1".to_string(),
+                    name: "read".to_string(),
+                    arguments: json!({"path": outside_file_path}),
+                }],
+                done: false,
+                thinking: None,
+                context_tokens: None,
+            },
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "done".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![],
+                done: true,
+                thinking: None,
+                context_tokens: None,
+            },
+        ])),
+        stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    let session1 =
+        SessionStore::new(temp.path(), &cwd, Some("persist-folder"), None).expect("session1");
+    let tools1 = ToolRegistry::new(&settings, &cwd);
+    let schemas1 = tools1.schemas();
+    let agent1 = AgentLoop {
+        provider: provider1,
+        tools: tools1,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas1),
+        max_steps: 4,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.selected_model_ref().to_string(),
+        session: session1,
+        events: NoopEvents,
+    };
+
+    let first_prompt_count = Arc::new(Mutex::new(0usize));
+    let first_prompt_count_handler = Arc::clone(&first_prompt_count);
+    agent1
+        .run(
+            Message {
+                role: Role::User,
+                content: "first".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            move |_request| {
+                let first_prompt_count = Arc::clone(&first_prompt_count_handler);
+                async move {
+                    *first_prompt_count.lock().expect("first prompt count") += 1;
+                    Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                        hh_cli::core::ApprovalChoice::AllowSession,
+                    )
+                }
+            },
+        )
+        .await
+        .expect("first run");
+
+    let provider2 = MockProvider {
+        responses: Arc::new(Mutex::new(vec![
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "read outside again".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![ToolCall {
+                    id: "call-2".to_string(),
+                    name: "read".to_string(),
+                    arguments: json!({"path": outside_file.display().to_string()}),
+                }],
+                done: false,
+                thinking: None,
+                context_tokens: None,
+            },
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "done".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![],
+                done: true,
+                thinking: None,
+                context_tokens: None,
+            },
+        ])),
+        stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    let session2 =
+        SessionStore::new(temp.path(), &cwd, Some("persist-folder"), None).expect("session2");
+    let tools2 = ToolRegistry::new(&settings, &cwd);
+    let schemas2 = tools2.schemas();
+    let agent2 = AgentLoop {
+        provider: provider2,
+        tools: tools2,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas2),
+        max_steps: 4,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.selected_model_ref().to_string(),
+        session: session2,
+        events: NoopEvents,
+    };
+
+    let second_prompt_count = Arc::new(Mutex::new(0usize));
+    let second_prompt_count_handler = Arc::clone(&second_prompt_count);
+    agent2
+        .run(
+            Message {
+                role: Role::User,
+                content: "second".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            move |_request| {
+                let second_prompt_count = Arc::clone(&second_prompt_count_handler);
+                async move {
+                    *second_prompt_count.lock().expect("second prompt count") += 1;
+                    Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                        hh_cli::core::ApprovalChoice::Deny,
+                    )
+                }
+            },
+        )
+        .await
+        .expect("second run");
+
+    assert_eq!(*first_prompt_count.lock().expect("first prompt count"), 1);
+    assert_eq!(*second_prompt_count.lock().expect("second prompt count"), 0);
 }
