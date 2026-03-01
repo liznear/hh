@@ -12,7 +12,7 @@
 ### In scope
 
 - Runtime orchestration for parallel sub-agents.
-- `task` tool for spawning/polling sub-agents.
+- `task` tool for spawning/resuming sub-agents (polling is out of scope for v1).
 - Persistent sub-agent lifecycle events.
 - TUI state and navigation for parent/sub-agent threads.
 - Refactor to share runtime builder between main and sub-agents.
@@ -48,6 +48,32 @@
 - Prefer explicit state transitions over implicit behavior.
 - Keep sub-agent outputs summarized in parent thread to reduce context pollution.
 
+## V1 Normative Decisions (Lock Before Coding)
+
+To avoid ambiguity during implementation, treat the following as the first-release contract:
+
+1. `task` tool supports **start/resume only** in v1.
+   - Start: no `task_id` provided, new child thread is created.
+   - Resume: `task_id` provided, existing child thread is continued.
+   - Poll/status calls are not part of v1 tool input surface; status is obtained from emitted events and manager/TUI state.
+2. Task IDs are generated as UUIDv7 strings and are globally unique.
+3. Lifecycle ordering is strict and deterministic:
+   - exactly one `SubAgentStart`
+   - zero or more `SubAgentProgress`
+   - exactly one terminal `SubAgentResult`
+   - v1 queue semantics: `SubAgentStart` is emitted when a task is accepted into manager state (queued or running), not only when execution begins.
+4. Restart reconciliation is deterministic:
+   - any persisted non-terminal child (`Pending`/`Running`) without terminal event is reconstructed as `Failed` with reason `interrupted_by_restart`.
+5. Parent context receives child summary only (bounded), while full child transcript/output remains in child session.
+6. All new persisted fields are additive with serde defaults for backward compatibility.
+7. Child sessions are hidden from the top-level resume-session list.
+   - Only parent/root sessions appear in global resume discovery.
+   - Child sessions are discoverable only through their parent sub-agent tree/navigation.
+8. Resume safety scope:
+   - resume by `task_id` is only valid within the current parent session context.
+   - implementation resolves child by `(parent_session_id, task_id)` to prevent cross-session collisions.
+9. `Cancelled` status is reserved in v1 for internal/system transitions only; user-facing cancellation workflow is out of scope.
+
 ## High-Level Architecture
 
 ### 1) Runtime orchestration service
@@ -59,8 +85,9 @@ Responsibilities:
 - Track sub-agent metadata by `task_id`.
 - Track parent/child relationships and expose a tree view.
 - Start sub-agent background tasks.
-- Accept status/poll/result requests.
+- Serve internal status/result lookups for replay and TUI state.
 - Emit lifecycle events to session store and TUI.
+- Reconcile interrupted in-flight tasks on startup/replay.
 
 Suggested shape:
 
@@ -68,6 +95,7 @@ Suggested shape:
 - `SubagentState` map keyed by `task_id`
 - parent->children adjacency index for fast tree rendering
 - optional join-handle map for live tasks
+- bounded work queue + semaphore for parallelism caps
 
 ### 2) Task tool contract
 
@@ -87,6 +115,15 @@ Initial API:
   - If `task_id` provided, continue existing child session.
 - Output:
   - structured JSON: `{ task_id, status, message }`
+
+V1 semantics:
+
+- This API is start/resume only.
+- `status` in the output indicates acceptance of request (`queued` or `running`), not final child completion.
+- Final child completion is delivered through session events (`SubAgentResult`) and reconstructed manager state.
+- `queued` means accepted into manager queue but not yet executing; `running` means worker execution has started.
+- Resume lookup must be scoped to current parent session.
+- Parent-ingest contract for child outcomes is bounded and structured: `{ task_id, status, summary, error? }`.
 
 Future extension (optional): `wait` flag and bounded polling timeout.
 
@@ -111,13 +148,32 @@ Use existing session event types and extend payloads if needed.
 Required persisted fields:
 
 - `task_id`
-- `parent_id`
+- `parent_task_id` (optional for nested sub-agent tasks)
+- `parent_session_id` (required for root-session scoping and discovery filtering)
 - `depth`
 - `agent_name`
 - child `session_id`
 - result status/output
 
+Recommended additional persisted metadata:
+
+- `created_at` / `updated_at`
+- `failure_reason` (structured, stable enum + freeform detail)
+- optional bounded `result_summary`
+
 This must allow complete reconstruction of tree/state when resuming sessions.
+
+Session discovery rule:
+
+- Mark child sessions with parent linkage metadata (for example `parent_session_id` or equivalent) so listing APIs can exclude them from top-level resume lists.
+- Resume list shows only root sessions; child sessions are loaded lazily when opening a root session and reconstructing its sub-agent tree.
+- Generic session-list APIs should default to root sessions only; child inclusion requires an explicit opt-in flag (for example `include_children=true`).
+
+Event invariants (must hold in persistence and replay):
+
+- A `task_id` has exactly one start event and exactly one terminal result event.
+- Progress events are monotonic by per-task sequence number and only valid between start and terminal.
+- Replay is idempotent; duplicate events do not create duplicate nodes or transition terminal nodes.
 
 ### 5) TUI model
 
@@ -163,6 +219,7 @@ Deliverable: compile-time scaffolding with no behavior change.
    - spawn background run via `tokio::spawn`
    - emit `SubAgentStart`
    - return `task_id`
+5. Add API contract tests for `task` JSON schema and backward compatibility snapshots.
 
 Deliverable: parent can request sub-agent spawn through tool call.
 
@@ -177,6 +234,11 @@ Deliverable: parent can request sub-agent spawn through tool call.
    - `SubAgentResult` at completion
 3. Ensure parent loop is non-blocking while children run.
 4. Enforce optional max parallel children.
+5. Define and enforce output bounds:
+   - max persisted bytes per progress/result payload
+   - truncation marker for oversized payloads
+   - child-to-parent summary size cap
+6. Define progress event rate limiting/coalescing to avoid persistence/TUI spam.
 
 Deliverable: multiple children can run concurrently and report status.
 
@@ -185,6 +247,8 @@ Deliverable: multiple children can run concurrently and report status.
 1. Extend replay logic in `handle_session_selection` (`src/cli/chat.rs`) to ingest sub-agent events.
 2. Rebuild tree from persisted events on resume.
 3. Preserve compatibility with old sessions lacking sub-agent events.
+4. Reconcile interrupted tasks as deterministic failures (`interrupted_by_restart`).
+5. Update resume-session query/list logic to return root sessions only (exclude child sessions).
 
 Deliverable: restart/resume restores sub-agent topology and statuses.
 
@@ -211,6 +275,10 @@ Deliverable: UX requirement achieved (click child -> read-only thread view).
    - structured error result surfaced
 3. Respect permission policy for `task` and child tools.
 4. Sanitize child outputs before storing/rendering.
+5. Add contention/race protections:
+   - never hold manager write locks while awaiting I/O
+   - idempotent terminal transition helper
+   - safe handling for duplicate completion signals
 
 Deliverable: safe behavior under load and failure conditions.
 
@@ -242,6 +310,21 @@ struct SubagentNode {
 }
 ```
 
+## State Transition Rules
+
+Allowed transitions:
+
+- `Pending -> Running | Failed | Cancelled`
+- `Running -> Completed | Failed | Cancelled`
+- terminal states are immutable (`Completed`, `Failed`, `Cancelled`)
+
+Operational rules:
+
+- Start event writes `Pending`; `Pending` may persist while queued, and transitions to `Running` when worker execution actually begins.
+- Exactly one terminal transition is accepted; subsequent terminal updates are ignored and logged.
+- Terminal transition always updates `updated_at` and emits exactly one `SubAgentResult`.
+- Progress events carry per-task sequence number (`seq`) assigned by manager at emit time.
+
 ## Event payloads
 
 If needed, enrich existing `SessionEvent` sub-agent variants with:
@@ -249,7 +332,16 @@ If needed, enrich existing `SessionEvent` sub-agent variants with:
 - `agent_name`
 - `session_id`
 - `status`
+- `seq` (for progress ordering)
 - optional `summary`
+
+Failure reason enum (v1 recommended baseline):
+
+- `tool_error`
+- `approval_denied`
+- `runtime_error`
+- `interrupted_by_restart`
+- `unknown`
 
 Do this additively with serde defaults to keep backward compatibility.
 
@@ -264,6 +356,15 @@ Recommended defaults:
 - Subagents: tool permissions inherited from selected subagent config.
 
 Optional advanced policy (later): per-agent task allowlist with glob matching.
+
+Inheritance and nesting rules:
+
+- Parent must be allowed to call `task`.
+- Spawned child uses its own configured capabilities (not implicit full inheritance from parent).
+- Nested spawn requires both:
+  - child agent capability allows `task`
+  - depth check passes (`depth < sub_agent_max_depth`)
+- Child execution uses the active approval policy snapshot resolved at child start (explicit, reproducible behavior).
 
 ## UI Behavior Specification
 
@@ -284,6 +385,10 @@ Main panel behavior:
   - disable input editing/submission
   - status line indicates read-only child thread
 
+Tree ordering behavior:
+
+- Siblings are sorted by `started_at`, then `task_id` for deterministic replay/UI stability.
+
 Keyboard extension (optional in first pass):
 
 - cycle parent/child threads via keybinds.
@@ -296,25 +401,43 @@ Keyboard extension (optional in first pass):
 - depth and max-parallel checks.
 - manager tree insert/update semantics.
 - permission decision for `task` capability.
+- state transition idempotency and duplicate terminal events.
+- restart reconciliation (`Running` -> `Failed(interrupted_by_restart)`).
+- resume lookup is scoped to `(parent_session_id, task_id)`.
+- progress sequence ordering is monotonic even under concurrent emits.
 
 ## Integration tests
 
 - parent spawns N children in parallel and receives all results.
 - one child fails, others succeed, parent remains healthy.
 - resumed session reconstructs tree/status correctly.
+- parent exits/restarts with in-flight children, replay marks interrupted tasks deterministically.
+- high-concurrency completion burst does not deadlock or corrupt tree.
+- queued-to-running transition emits expected status semantics.
+- progress rate limiting/coalescing prevents unbounded event growth.
 
 ## TUI tests
 
 - sidebar renders subagent section and statuses.
 - click mapping selects expected child thread.
 - input disabled in child view and enabled in parent view.
+- resume-session list excludes child sessions while parent thread still reconstructs and displays them.
 
 ## Rollout Strategy
 
 1. Ship behind config flag (recommended):
    - `agent.parallel_subagents = false` default initially.
+   - `agent.max_parallel_subagents = <small default>` (global process-wide cap)
+   - `agent.max_parallel_subagents_per_parent = <small default>` (fairness cap per parent session)
 2. Enable in dev builds and gather feedback.
 3. Promote to default after stability and UX validation.
+
+Suggested observability gates before default-on:
+
+- spawn success rate
+- child failure rate by reason
+- queue depth and wait time percentiles
+- replay reconciliation count
 
 ## Risks and Mitigations
 
@@ -339,6 +462,9 @@ Keyboard extension (optional in first pass):
 - [ ] Child thread read-only view with disabled input.
 - [ ] Unit + integration + TUI tests passing.
 - [ ] Documentation updates for config and usage.
+- [ ] Event ordering and transition invariants documented and enforced.
+- [ ] Restart reconciliation behavior implemented and tested.
+- [ ] Payload bounding/truncation policy implemented and tested.
 
 ## Notes from External Product Patterns
 
