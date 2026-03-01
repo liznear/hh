@@ -2,197 +2,151 @@
 
 Version: 0.1.0
 
-Happy Harness (hh) is a terminal-based agentic coding harness. It provides a robust, extensible framework for building AI-powered coding agents that operate through a rich terminal user interface (TUI).
+Happy Harness (`hh`) is a terminal-based coding agent runtime with a TUI, provider-agnostic core domain types, and a configurable tool/permission system.
+
+## Current Status
+
+`hh` is usable for day-to-day coding workflows and still actively evolving.
+
+- Core agent loop, tool execution, approvals, and termination are implemented.
+- TUI chat, one-shot `run`, and frame replay debugging are implemented.
+- Config loading, per-workspace sessions, and history compaction are implemented.
+- OpenAI-compatible provider support is implemented.
+- Multi-agent scaffolding and the `task` sub-agent protocol exist; the `task` tool is exposed when runtime task context is available.
 
 ## Features
 
-- **Terminal-Based TUI**: Rich, interactive terminal interface built with ratatui with syntax highlighting and markdown rendering
-- **Agent Runtime**: Core loop orchestrating turns, tool calls, approvals, and termination with trait-based architecture
-- **Provider-Agnostic Architecture**: Clean separation between LLM concepts and provider implementations (OpenAI-compatible API)
-- **Extensible Tools**: 10 integrated tools including file operations, bash, web access, diff visualization, and todo management
-- **Typed Tool Output**: Structured tool results with content-type metadata for intelligent rendering
-- **Permission System**: Fine-grained per-tool permission control (allow/ask/deny) with capability-based policy
-- **Session Persistence**: Full session history with workspace-based storage, compaction, and resume support
-- **Configuration**: TOML-based project and global configuration
-- **Image Support**: Paste images from clipboard or file paths for multimodal interactions
-- **Debug Mode**: Frame-by-frame TUI debugging for development and troubleshooting
-- **Sub-Agent Protocol**: Scaffolding for nested agent execution with depth limits
+- **Terminal TUI**: Interactive UI built with `ratatui`, markdown rendering, syntax highlighting, and debug frame dumping.
+- **Provider-Agnostic Core**: Canonical LLM domain types and runtime traits shared across providers.
+- **Tool Runtime**: File, shell, web, skill, question, and todo tools with schema-driven invocation.
+- **Permission Policy**: Per-tool allow/ask/deny policy with capability overrides.
+- **Session Persistence**: Workspace-aware storage and resume/compact workflows.
+- **Agent Profiles**: Built-in agents (`build`, `plan`, `explorer`, `general`) plus custom Markdown-defined agents.
+- **Image Input**: Clipboard and file-path image attachments for multimodal prompts.
 
 ## Quick Start
 
 ```bash
-# Build the project
+# Build
 cargo build --release
 
-# Initialize project configuration
+# Initialize project config
 hh config init
 
-# List available tools
-hh tools
+# Show resolved config
+hh config show
 
-# Run a single prompt
+# List available tools and agents
+hh tools
+hh agents
+
+# One-shot prompt
 hh run "list files in current directory"
 
-# Start interactive chat
+# Interactive chat
 hh chat
 
-# Debug a prompt (captures screen frames)
-hh run "your prompt" --debug ./debug
-
-# Replay debug frames
+# Debug/replay UI frames
+hh run "debug this prompt" --debug ./debug
 hh replay ./debug
-
-# Show current configuration
-hh config show
 ```
 
-## TUI Slash Commands
+## CLI Commands
 
-When running `hh chat`, the following slash commands are available:
+- `hh chat [--debug <dir>] [--max-turns <n>] [--agent <name>]`
+- `hh run <prompt> [--debug <dir>] [--max-turns <n>] [--agent <name>]`
+- `hh replay <dir> [--delay <ms>] [--loop]`
+- `hh tools`
+- `hh agents`
+- `hh config init`
+- `hh config show`
 
-- `/new` - Start a new session
-- `/model` - List models or switch to `/model <provider-id/model-id>`
-- `/resume` - Resume a previous session from a list
-- `/compact` - Summarize conversation history to save context
-- `/quit` - Exit the application
+## Slash Commands (Chat)
+
+- `/new` - start a new session
+- `/model` - list or switch models (`/model <provider-id/model-id>`)
+- `/resume` - resume a prior session
+- `/compact` - compact/summarize conversation history
+- `/quit` - exit chat
 
 ## Available Tools
 
-- `read` - Read file contents
-- `write` - Write UTF-8 text to file
-- `edit` - Edit a file by replacing an exact string
-- `list` - List directory entries
-- `glob` - Glob files matching a pattern
-- `grep` - Search regex in files recursively
-- `bash` - Run shell commands
-- `web_search` - Search the web
-- `web_fetch` - Fetch content from URLs
-- `todo_read` - Read canonical todo list state
-- `todo_write` - Manage canonical todo list state
-- `diff` - Compute and display unified diffs between text
+Current default tool list from `hh tools`:
+
+- `bash`
+- `edit`
+- `glob`
+- `grep`
+- `list`
+- `question`
+- `read`
+- `skill`
+- `todo_read`
+- `todo_write`
+- `web_fetch`
+- `web_search`
+- `write`
+
+The `task` tool is runtime-context dependent and may not appear in `hh tools` outside task-enabled execution paths.
 
 ## Configuration
 
-Happy Harness uses JSON configuration files to manage settings:
+`hh` uses JSON config files:
 
-### Initialize Configuration
+- Global: `~/.config/hh/config.json`
+- Project: `.hh/config.json`
 
-```bash
-hh config init  # Creates .hh/config.json in current directory
-```
+Project config overrides global config.
 
-### Configuration Structure
+### Key Settings
 
-- `models.default` - Global default model reference (`provider-id/model-id`)
-- `providers` - Provider registry (per-provider display name, base_url, api_key_env, and `models` map keyed by HH model id)
-- `agent` - Agent behavior (max_steps, sub_agent_max_depth, system_prompt)
-- `tools` - Tool enablement flags (fs, bash, web)
-- `permission` - Per-tool permission policy (allow/ask/deny)
-- `session` - Session storage root directory
+- `models.default` - selected model reference (`provider-id/model-id`)
+- `providers` - provider definitions (`base_url`, `api_key_env`, model metadata)
+- `agent` - runtime limits and behavior (`max_steps`, sub-agent settings, optional `system_prompt`)
+- `tools` - enable/disable tool groups (`fs`, `bash`, `web`)
+- `permission` - per-tool policies (`allow`/`ask`/`deny`)
+- `session.root` - session storage root
+- `agents` - per-agent overrides (for example model selection)
 
-### Environment Variables
+### Environment Overrides
 
-The default configuration uses `OPENAI_API_KEY` environment variable. Set it before running:
-
-```bash
-export OPENAI_API_KEY="your-key-here"
-```
+- `OPENAI_API_KEY` (default provider auth)
+- `HH_MODEL` (override selected model)
+- `HH_BASE_URL` (override selected provider base URL)
+- `HH_API_KEY_ENV` (override selected provider API-key env var name)
+- `HH_SYSTEM_PROMPT` (override runtime system prompt)
 
 ## Architecture
 
-The project follows a layered architecture with provider-agnostic core types and trait-based boundaries:
+The project keeps LLM semantics in a provider-agnostic core and composes runtime behavior through traits.
 
-### Core Design Principles
-
-- **Provider-Agnostic Core**: Canonical data structures for LLM interactions (`Role`, `Message`, `ToolCall`)
-- **Trait-Based Boundaries**: `Provider`, `ToolExecutor`, `ApprovalPolicy`, `SessionSink`, `SessionReader`
-- **Event-Driven UI**: TUI and CLI render by observing `AgentEvents`, not by embedding runtime logic
-- **Typed Tool Output**: `ToolResult` includes structured metadata (summary, content_type, payload) for intelligent rendering
-- **Session Per Workspace**: Sessions are organized by workspace path for automatic project context
-
-### Module Structure
-
-- **`src/core/`** - Core runtime, types, traits, and agent loop
-  - `AgentLoop` - Generic orchestration over trait bounds
-  - Domain types (`Message`, `ToolCall`, `SubAgentCall`, etc.)
-  - Core traits (`Provider`, `ToolExecutor`, `ApprovalPolicy`, `SessionSink`, `SessionReader`)
-- **`src/config/`** - Configuration loading and settings
-- **`src/provider/`** - LLM provider adapters (OpenAI-compatible)
-- **`src/tool/`** - Tool implementations and registry
-- **`src/cli/`** - Command-line interface and TUI
-- **`src/permission/`** - Permission policy system with capability-based matching
-- **`src/session/`** - Session persistence, compaction, and workspace-aware storage
-- **`src/safety/`** - Safety and validation utilities
+- `src/core/` - runtime loop, domain types, traits, prompts
+- `src/provider/` - provider adapters (OpenAI-compatible wire mapping)
+- `src/tool/` - tool implementations and registry
+- `src/session/` - session persistence and compaction
+- `src/permission/` - policy and capability matching
+- `src/config/` - settings model + loader/overrides
+- `src/cli/` - commands, chat runtime, TUI/replay
+- `src/agent/` - agent profile definitions and discovery
 
 ## Development
-
-### Build and Test
 
 ```bash
 cargo check
 cargo build
 cargo test
-```
-
-### Code Quality
-
-```bash
 cargo fmt --check
 cargo clippy -- -D warnings
 ```
 
-### Nix Development Environment
+Use `hh run ... --debug <dir>` or `hh chat --debug <dir>` to capture screen frames, then `hh replay <dir>` to inspect UI behavior.
 
-```bash
-nix develop  # Enter development shell with Rust toolchain
-```
+See `AGENTS.md` for architecture constraints and debugging workflow details.
 
-### Debugging the TUI
+## Session Storage
 
-The TUI supports debug mode for development:
-
-```bash
-# Capture frames from a single prompt
-hh run "test prompt" --debug ./debug
-
-# Capture frames from interactive session
-hh chat --debug ./debug-session
-
-# Replay captured frames
-hh replay ./debug --delay 100
-```
-
-### Running Specific Tests
-
-```bash
-cargo test agent_loop
-cargo test tool
-cargo test session
-```
-
-See `AGENTS.md` for detailed architecture documentation and debugging workflows.
-
-## Session Management
-
-Sessions are automatically organized by workspace path:
-
-- Each workspace (directory) gets its own session collection
-- Use `/new` to start a fresh session in the current workspace
-- Use `/resume` to browse and resume previous sessions
-- Use `/compact` to summarize conversation history and save tokens
-
-Sessions persist across runs in `~/.local/state/hh/sessions/<workspace-path>/`.
-
-## Image Support
-
-The TUI supports image attachments for multimodal interactions:
-
-- Paste images from clipboard (Ctrl+V or Cmd+V)
-- Drag and drop image file paths into the input
-- Supported formats: PNG, JPEG, GIF, WebP, BMP, TIFF, HEIC/HEIF, AVIF
-
-Images are base64-encoded and sent to the provider if supported.
+Sessions are stored under `~/.local/state/hh/sessions/<workspace-path>/` and scoped by workspace.
 
 ## License
 
-[Add your license here]
+License not specified yet.
