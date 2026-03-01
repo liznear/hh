@@ -83,11 +83,11 @@ const TOOL_PRESENTATIONS: &[ToolPresentation] = &[
 ];
 
 fn render_read_start(args: &Value) -> ToolCallStartView {
-    render_action_with_field("Read", "path", args)
+    render_action_with_aliases("Read", &["path", "filePath"], args)
 }
 
 fn render_write_start(args: &Value) -> ToolCallStartView {
-    render_action_with_field("Write", "path", args)
+    render_action_with_aliases("Write", &["path", "filePath"], args)
 }
 
 fn render_glob_start(args: &Value) -> ToolCallStartView {
@@ -149,7 +149,7 @@ fn render_todo_read_start(_args: &Value) -> ToolCallStartView {
 }
 
 fn render_edit_start(args: &Value) -> ToolCallStartView {
-    render_action_with_field("Edit", "path", args)
+    render_action_with_aliases("Edit", &["path", "filePath"], args)
 }
 
 fn render_question_start(args: &Value) -> ToolCallStartView {
@@ -165,12 +165,20 @@ fn render_question_start(args: &Value) -> ToolCallStartView {
 }
 
 fn render_action_with_field(action: &str, key: &str, args: &Value) -> ToolCallStartView {
+    render_action_with_aliases(action, &[key], args)
+}
+
+fn render_action_with_aliases(action: &str, keys: &[&str], args: &Value) -> ToolCallStartView {
     ToolCallStartView {
         line: format!(
             "{action} {}",
-            json_str(args, key).unwrap_or_else(|| compact_json(args))
+            json_str_any(args, keys).unwrap_or_else(|| compact_json(args))
         ),
     }
+}
+
+fn json_str_any(args: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| json_str(args, key))
 }
 
 fn render_default_start(name: &str, args: &Value) -> ToolCallStartView {
@@ -226,6 +234,12 @@ mod tests {
     #[test]
     fn read_tool_has_path_forwarding() {
         let rendered = render_tool_start("read", &json!({"path":"src/main.rs"}));
+        assert_eq!(rendered.line, "Read src/main.rs");
+    }
+
+    #[test]
+    fn read_tool_accepts_file_path_alias() {
+        let rendered = render_tool_start("read", &json!({"filePath":"src/main.rs"}));
         assert_eq!(rendered.line, "Read src/main.rs");
     }
 
