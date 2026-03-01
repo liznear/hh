@@ -1,12 +1,12 @@
 use async_trait::async_trait;
-use hh::config::settings::Settings;
-use hh::core::agent::{AgentEvents, AgentLoop, NoopEvents};
-use hh::permission::PermissionMatcher;
-use hh::provider::{
+use hh_cli::config::settings::Settings;
+use hh_cli::core::agent::{AgentEvents, AgentLoop, NoopEvents};
+use hh_cli::permission::PermissionMatcher;
+use hh_cli::provider::{
     Message, Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role, ToolCall,
 };
-use hh::session::{SessionEvent, SessionStore};
-use hh::tool::registry::ToolRegistry;
+use hh_cli::session::{SessionEvent, SessionStore};
+use hh_cli::tool::registry::ToolRegistry;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 
@@ -69,7 +69,7 @@ impl AgentEvents for RecordingEvents {
             .push(format!("tool_start:{name}"));
     }
 
-    fn on_tool_end(&self, name: &str, result: &hh::tool::ToolResult) {
+    fn on_tool_end(&self, name: &str, result: &hh_cli::tool::ToolResult) {
         self.log
             .lock()
             .expect("log")

@@ -1,6 +1,6 @@
-use hh::config::settings::{PermissionSettings, Settings};
-use hh::permission::{Decision, PermissionMatcher};
-use hh::tool::registry::ToolRegistry;
+use hh_cli::config::settings::{PermissionSettings, Settings};
+use hh_cli::permission::{Decision, PermissionMatcher};
+use hh_cli::tool::registry::ToolRegistry;
 
 #[test]
 fn default_permission_matrix_matches_policy() {

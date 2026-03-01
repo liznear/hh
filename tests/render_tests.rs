@@ -1,5 +1,5 @@
-use hh::cli::render::{LiveRender, ThinkingMode, format_args_preview, truncate_text};
-use hh::core::agent::AgentEvents;
+use hh_cli::cli::render::{LiveRender, ThinkingMode, format_args_preview, truncate_text};
+use hh_cli::core::agent::AgentEvents;
 use serde_json::json;
 
 #[test]
@@ -32,7 +32,7 @@ fn live_render_accepts_event_callbacks() {
     render.begin_turn();
     render.on_thinking("planning");
     render.on_tool_start("read", &json!({"path":"Cargo.toml"}));
-    render.on_tool_end("read", &hh::tool::ToolResult::ok_text("ok", "ok"));
+    render.on_tool_end("read", &hh_cli::tool::ToolResult::ok_text("ok", "ok"));
     render.on_assistant_delta("hello");
     render.on_assistant_done();
 }

@@ -1,10 +1,10 @@
-use hh::tool::Tool;
-use hh::tool::ToolResult;
-use hh::tool::bash::BashTool;
-use hh::tool::edit::EditTool;
-use hh::tool::fs::{FsGrep, FsRead, FsWrite};
-use hh::tool::question::{QuestionTool, question_result};
-use hh::tool::todo::{TodoReadTool, TodoWriteTool};
+use hh_cli::tool::Tool;
+use hh_cli::tool::ToolResult;
+use hh_cli::tool::bash::BashTool;
+use hh_cli::tool::edit::EditTool;
+use hh_cli::tool::fs::{FsGrep, FsRead, FsWrite};
+use hh_cli::tool::question::{QuestionTool, question_result};
+use hh_cli::tool::todo::{TodoReadTool, TodoWriteTool};
 use serde_json::json;
 
 /// Helper to parse JSON output from a tool result
@@ -346,15 +346,15 @@ async fn question_tool_schema_and_result_payload() {
     let schema = tool.schema();
     assert_eq!(schema.name, "question");
 
-    let questions = vec![hh::core::QuestionPrompt {
+    let questions = vec![hh_cli::core::QuestionPrompt {
         question: "Choose one".to_string(),
         header: "Pick".to_string(),
         options: vec![
-            hh::core::QuestionOption {
+            hh_cli::core::QuestionOption {
                 label: "A".to_string(),
                 description: "Option A".to_string(),
             },
-            hh::core::QuestionOption {
+            hh_cli::core::QuestionOption {
                 label: "B".to_string(),
                 description: "Option B".to_string(),
             },

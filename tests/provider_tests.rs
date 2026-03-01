@@ -1,5 +1,5 @@
-use hh::provider::openai_compatible::OpenAiCompatibleProvider;
-use hh::provider::{ProviderResponse, StreamedToolCall, ToolCall};
+use hh_cli::provider::openai_compatible::OpenAiCompatibleProvider;
+use hh_cli::provider::{ProviderResponse, StreamedToolCall, ToolCall};
 use serde_json::json;
 
 #[test]
@@ -43,8 +43,8 @@ fn streamed_tool_call_invalid_json_falls_back_to_object() {
 #[test]
 fn provider_response_supports_thinking_field() {
     let response = ProviderResponse {
-        assistant_message: hh::provider::Message {
-            role: hh::provider::Role::Assistant,
+        assistant_message: hh_cli::provider::Message {
+            role: hh_cli::provider::Role::Assistant,
             content: "hello".to_string(),
             attachments: Vec::new(),
             tool_call_id: None,

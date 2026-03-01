@@ -1,5 +1,5 @@
-use hh::core::{Message, Role};
-use hh::session::{SessionEvent, SessionStore};
+use hh_cli::core::{Message, Role};
+use hh_cli::session::{SessionEvent, SessionStore};
 
 #[test]
 fn appends_and_replays_messages() {
