@@ -17,7 +17,7 @@ use crate::agent::{AgentLoader, AgentMode, AgentRegistry};
 use crate::cli::agent_init;
 use crate::cli::render;
 use crate::cli::tui::{
-    self, ChatApp, DebugRenderer, ModelOptionView, QuestionKeyResult, ScopedTuiEvent,
+    self, ChatApp, ModelOptionView, QuestionKeyResult, ScopedTuiEvent,
     SubmittedInput, TuiEvent, TuiEventSender,
 };
 use crate::config::Settings;
@@ -65,203 +65,10 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
             cwd,
             event_sender: &event_sender,
             event_rx: &mut event_rx,
-            debug_renderer: None,
             scroll_down_lines: 3,
         },
     )
     .await?;
-
-    Ok(())
-}
-
-/// Run interactive chat with debug frame dumping
-pub async fn run_chat_with_debug(
-    settings: Settings,
-    cwd: &std::path::Path,
-    debug_dir: PathBuf,
-) -> anyhow::Result<()> {
-    // Setup terminal
-    let terminal = tui::setup_terminal()?;
-    let mut tui_guard = tui::TuiGuard::new(terminal);
-
-    // Create debug renderer
-    let mut debug_renderer = DebugRenderer::new(debug_dir.clone())?;
-
-    // Create app state and event channel
-    let mut app = ChatApp::new(build_session_name(cwd), cwd);
-    app.configure_models(
-        settings.selected_model_ref().to_string(),
-        build_model_options(&settings),
-    );
-
-    // Initialize agents
-    let (agent_views, selected_agent) = agent_init::initialize_agents(&settings)?;
-    app.set_agents(agent_views, selected_agent);
-
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
-    let event_sender = TuiEventSender::new(event_tx);
-    initialize_subagent_manager(settings.clone(), cwd.to_path_buf());
-
-    run_interactive_chat_loop(
-        &mut tui_guard,
-        &mut app,
-        InteractiveChatRunner {
-            settings: &settings,
-            cwd,
-            event_sender: &event_sender,
-            event_rx: &mut event_rx,
-            debug_renderer: Some(&mut debug_renderer),
-            scroll_down_lines: 1,
-        },
-    )
-    .await?;
-
-    eprintln!(
-        "Debug: {} frames written to {}",
-        debug_renderer.frame_count(),
-        debug_dir.display()
-    );
-
-    Ok(())
-}
-
-/// Run one prompt in headless debug mode and dump frames to files
-pub async fn run_prompt_with_debug(
-    settings: Settings,
-    cwd: &std::path::Path,
-    output_dir: PathBuf,
-    prompt: String,
-) -> anyhow::Result<()> {
-    // Create debug renderer
-    let mut renderer = DebugRenderer::new(output_dir.clone())?;
-
-    // Create app state and event channel
-    let mut app = ChatApp::new(build_session_name(cwd), cwd);
-    app.configure_models(
-        settings.selected_model_ref().to_string(),
-        build_model_options(&settings),
-    );
-
-    // Initialize agents
-    let (agent_views, selected_agent) = agent_init::initialize_agents(&settings)?;
-    app.set_agents(agent_views, selected_agent);
-
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
-    let event_sender = TuiEventSender::new(event_tx);
-    let subagent_manager = current_subagent_manager(&settings, cwd);
-
-    // Submit the prompt
-    app.messages.push(tui::ChatMessage::User(prompt.clone()));
-    app.set_processing(true);
-
-    // Render initial state with prompt
-    renderer.render(&app)?;
-
-    println!(
-        "Debug mode: writing screen dumps to {}",
-        output_dir.display()
-    );
-
-    // Run agent in background
-    let settings_clone = settings.clone();
-    let model_ref = settings.selected_model_ref().to_string();
-    let cwd_clone = cwd.to_path_buf();
-    let sender_clone = event_sender.clone();
-    let prompt_clone = prompt.clone();
-    let session_id = Uuid::new_v4().to_string();
-
-    let title = fallback_session_title(&prompt);
-    let title_clone = title.clone();
-
-    {
-        let settings = settings.clone();
-        let cwd = cwd.to_path_buf();
-        let session_id = session_id.clone();
-        let model_ref = model_ref.clone();
-        let prompt = prompt.clone();
-        tokio::spawn(async move {
-            let generated = match generate_session_title(&settings, &model_ref, &prompt).await {
-                Ok(title) => title,
-                Err(_) => return,
-            };
-
-            let store =
-                match SessionStore::new(&settings.session.root, &cwd, Some(&session_id), None) {
-                    Ok(store) => store,
-                    Err(_) => return,
-                };
-
-            let _ = store.update_title(generated);
-        });
-    }
-
-    let agent_handle = tokio::spawn(async move {
-        let result = run_agent(
-            settings_clone,
-            &cwd_clone,
-            Message {
-                role: crate::core::Role::User,
-                content: prompt_clone,
-                attachments: Vec::new(),
-                tool_call_id: None,
-            },
-            model_ref,
-            sender_clone.clone(),
-            Arc::clone(&subagent_manager),
-            AgentRunOptions {
-                session_id: Some(session_id),
-                session_title: Some(title_clone),
-                allow_questions: false,
-            },
-        )
-        .await;
-        if let Err(ref e) = result {
-            sender_clone.send(TuiEvent::Error(e.to_string()));
-        }
-        result
-    });
-    drop(event_sender); // Close the channel from this side
-
-    // Main loop - process events and render
-    loop {
-        tokio::select! {
-            event = event_rx.recv() => {
-                if let Some(event) = event {
-                    let is_done_or_error =
-                        matches!(&event.event, TuiEvent::AssistantDone | TuiEvent::Error(_));
-                    if event.session_epoch == app.session_epoch()
-                        && event.run_epoch == app.run_epoch()
-                    {
-                        app.handle_event(&event.event);
-                    }
-
-                    // Render after each event
-                    renderer.render(&app)?;
-
-                    // Check if processing is done
-                    if is_done_or_error {
-                        // Render final state
-                        renderer.render(&app)?;
-                        break;
-                    }
-                } else {
-                    // Channel closed, we're done
-                    break;
-                }
-            }
-        }
-    }
-
-    if let Err(e) = agent_handle.await? {
-        eprintln!("Agent task error: {}", e);
-        return Err(e);
-    }
-
-    println!(
-        "Debug complete: {} frames written to {}",
-        renderer.frame_count(),
-        output_dir.display()
-    );
 
     Ok(())
 }
@@ -975,19 +782,12 @@ fn handle_mouse_event(mouse: MouseEvent) -> Option<InputEvent> {
 async fn run_interactive_chat_loop(
     tui_guard: &mut tui::TuiGuard,
     app: &mut ChatApp,
-    mut runner: InteractiveChatRunner<'_>,
+    runner: InteractiveChatRunner<'_>,
 ) -> anyhow::Result<()> {
-    if let Some(renderer) = runner.debug_renderer.as_deref_mut() {
-        renderer.render(app)?;
-    }
-
     let mut render_tick = tokio::time::interval(Duration::from_secs(1));
 
     loop {
         tui_guard.get().draw(|f| tui::render_app(f, app))?;
-        if let Some(renderer) = runner.debug_renderer.as_deref_mut() {
-            renderer.render(app)?;
-        }
 
         tokio::select! {
             input_result = handle_input_batch() => {
@@ -1078,7 +878,6 @@ struct InteractiveChatRunner<'a> {
     cwd: &'a Path,
     event_sender: &'a TuiEventSender,
     event_rx: &'a mut mpsc::UnboundedReceiver<ScopedTuiEvent>,
-    debug_renderer: Option<&'a mut DebugRenderer>,
     scroll_down_lines: usize,
 }
 
@@ -1321,7 +1120,7 @@ async fn run_agent(
                 let event_sender = question_event_sender.clone();
                 async move {
                     if !allow_questions {
-                        anyhow::bail!("question tool is not available in headless debug mode")
+                        anyhow::bail!("question tool is not available in this mode")
                     }
                     let (tx, rx) = oneshot::channel();
                     event_sender.send(TuiEvent::QuestionPrompt {
