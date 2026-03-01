@@ -1463,7 +1463,7 @@ fn render_processing_indicator(f: &mut Frame, app: &ChatApp, area: Rect, layout:
     ));
     spans.push(Span::raw(PROCESSING_STATUS_GAP));
     spans.push(Span::styled(
-        "esc interrupt",
+        app.processing_interrupt_hint(),
         Style::default().fg(TEXT_MUTED),
     ));
 

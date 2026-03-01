@@ -13,6 +13,7 @@ type QuestionResponder =
 #[derive(Debug)]
 pub struct ScopedTuiEvent {
     pub session_epoch: u64,
+    pub run_epoch: u64,
     pub event: TuiEvent,
 }
 
@@ -48,6 +49,7 @@ pub enum TuiEvent {
 pub struct TuiEventSender {
     tx: Arc<mpsc::UnboundedSender<ScopedTuiEvent>>,
     session_epoch: u64,
+    run_epoch: u64,
 }
 
 impl TuiEventSender {
@@ -55,19 +57,22 @@ impl TuiEventSender {
         Self {
             tx: Arc::new(tx),
             session_epoch: 0,
+            run_epoch: 0,
         }
     }
 
-    pub fn scoped(&self, session_epoch: u64) -> Self {
+    pub fn scoped(&self, session_epoch: u64, run_epoch: u64) -> Self {
         Self {
             tx: Arc::clone(&self.tx),
             session_epoch,
+            run_epoch,
         }
     }
 
     pub fn send(&self, event: TuiEvent) {
         let _ = self.tx.send(ScopedTuiEvent {
             session_epoch: self.session_epoch,
+            run_epoch: self.run_epoch,
             event,
         });
     }

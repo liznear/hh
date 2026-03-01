@@ -213,7 +213,9 @@ pub async fn run_prompt_with_debug(
                 if let Some(event) = event {
                     let is_done_or_error =
                         matches!(&event.event, TuiEvent::AssistantDone | TuiEvent::Error(_));
-                    if event.session_epoch == app.session_epoch() {
+                    if event.session_epoch == app.session_epoch()
+                        && event.run_epoch == app.run_epoch()
+                    {
                         app.handle_event(&event.event);
                     }
 
@@ -307,8 +309,22 @@ where
         return Ok(());
     }
 
+    if app.is_processing && key_event.code != KeyCode::Esc {
+        app.clear_pending_esc_interrupt();
+    }
+
     if app.has_pending_question() {
         let handled = app.handle_question_key(key_event);
+        if handled == QuestionKeyResult::Dismissed {
+            if app.is_processing {
+                if app.should_interrupt_on_esc() {
+                    app.cancel_agent_task();
+                    app.set_processing(false);
+                } else {
+                    app.arm_esc_interrupt();
+                }
+            }
+        }
         if handled != QuestionKeyResult::NotHandled {
             return Ok(());
         }
@@ -352,7 +368,17 @@ where
             app.cycle_agent();
         }
         KeyCode::Esc => {
-            mutate_input(app, ChatApp::clear_input);
+            if app.is_processing {
+                if app.should_interrupt_on_esc() {
+                    app.cancel_agent_task();
+                    app.set_processing(false);
+                } else {
+                    app.arm_esc_interrupt();
+                }
+            } else {
+                // Clear input when not processing
+                mutate_input(app, ChatApp::clear_input);
+            }
         }
         KeyCode::Up => {
             if !app.filtered_commands.is_empty() {
@@ -885,7 +911,7 @@ fn spawn_agent_task(
     event_sender: &TuiEventSender,
     session_id: Option<String>,
     session_title: Option<String>,
-) {
+) -> tokio::task::JoinHandle<()> {
     let settings = settings.clone();
     let cwd = cwd.to_path_buf();
     let sender = event_sender.clone();
@@ -906,7 +932,7 @@ fn spawn_agent_task(
         {
             sender.send(TuiEvent::Error(e.to_string()));
         }
-    });
+    })
 }
 
 fn handle_mouse_event(mouse: MouseEvent) -> Option<InputEvent> {
@@ -1016,6 +1042,7 @@ async fn run_interactive_chat_loop(
             event = runner.event_rx.recv() => {
                 if let Some(event) = event
                     && event.session_epoch == app.session_epoch()
+                    && event.run_epoch == app.run_epoch()
                 {
                     app.handle_event(&event.event);
                 }
@@ -1317,7 +1344,7 @@ fn handle_slash_command(
     cwd: &Path,
     event_sender: &TuiEventSender,
 ) {
-    let scoped_sender = event_sender.scoped(app.session_epoch());
+    let scoped_sender = event_sender.scoped(app.session_epoch(), app.run_epoch());
     let mut parts = input.split_whitespace();
     let command = parts.next().unwrap_or_default();
 
@@ -1621,7 +1648,7 @@ fn handle_chat_message(
     event_sender: &TuiEventSender,
 ) {
     if !input.text.is_empty() || !input.attachments.is_empty() {
-        let scoped_sender = event_sender.scoped(app.session_epoch());
+        let scoped_sender = event_sender.scoped(app.session_epoch(), app.run_epoch());
         let session_id = app.session_id.clone();
         let session_title = if session_id.is_none() {
             Some(fallback_session_title(&input.text))
@@ -1654,7 +1681,7 @@ fn handle_chat_message(
             tool_call_id: None,
         };
 
-        spawn_agent_task(
+        let handle = spawn_agent_task(
             settings,
             cwd,
             message,
@@ -1663,6 +1690,7 @@ fn handle_chat_message(
             Some(current_session_id),
             session_title,
         );
+        app.set_agent_task(handle);
     } else {
         app.set_processing(false);
     }
@@ -2041,20 +2069,24 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let event_sender = TuiEventSender::new(tx);
 
-        let old_scope_sender = event_sender.scoped(app.session_epoch());
+        let old_scope_sender = event_sender.scoped(app.session_epoch(), app.run_epoch());
         app.start_new_session("New Session".to_string());
 
         old_scope_sender.send(TuiEvent::AssistantDelta("stale".to_string()));
         let stale_event = rx.blocking_recv().unwrap();
-        if stale_event.session_epoch == app.session_epoch() {
+        if stale_event.session_epoch == app.session_epoch()
+            && stale_event.run_epoch == app.run_epoch()
+        {
             app.handle_event(&stale_event.event);
         }
         assert!(app.messages.is_empty());
 
-        let current_scope_sender = event_sender.scoped(app.session_epoch());
+        let current_scope_sender = event_sender.scoped(app.session_epoch(), app.run_epoch());
         current_scope_sender.send(TuiEvent::AssistantDelta("fresh".to_string()));
         let fresh_event = rx.blocking_recv().unwrap();
-        if fresh_event.session_epoch == app.session_epoch() {
+        if fresh_event.session_epoch == app.session_epoch()
+            && fresh_event.run_epoch == app.run_epoch()
+        {
             app.handle_event(&fresh_event.event);
         }
 
@@ -2062,6 +2094,37 @@ mod tests {
             app.messages.first(),
             Some(tui::ChatMessage::Assistant(text)) if text == "fresh"
         ));
+    }
+
+    #[test]
+    fn test_set_agent_task_without_existing_task_keeps_run_epoch_and_allows_events() {
+        let temp_dir = tempdir().unwrap();
+        let cwd = temp_dir.path();
+        let mut app = ChatApp::new("Session".to_string(), cwd);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        app.set_processing(true);
+
+        let initial_run_epoch = app.run_epoch();
+        let scoped_sender = event_sender.scoped(app.session_epoch(), app.run_epoch());
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let handle = runtime.block_on(async { tokio::spawn(async {}) });
+        app.set_agent_task(handle);
+
+        assert_eq!(app.run_epoch(), initial_run_epoch);
+
+        scoped_sender.send(TuiEvent::AssistantDone);
+        let event = rx.blocking_recv().expect("event");
+        if event.session_epoch == app.session_epoch() && event.run_epoch == app.run_epoch() {
+            app.handle_event(&event.event);
+        }
+
+        assert!(!app.is_processing);
+        app.cancel_agent_task();
     }
 
     #[test]
@@ -2128,6 +2191,154 @@ mod tests {
             replayed_messages[0].content,
             "Compacted context summary for tests."
         );
+    }
+
+    #[test]
+    fn test_esc_requires_two_presses_to_interrupt_processing() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
+        app.set_processing(true);
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+
+        assert!(app.is_processing);
+        assert!(app.should_interrupt_on_esc());
+        assert_eq!(app.processing_interrupt_hint(), "esc again to interrupt");
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+
+        assert!(!app.is_processing);
+        assert!(!app.should_interrupt_on_esc());
+        assert_eq!(app.processing_interrupt_hint(), "esc interrupt");
+    }
+
+    #[test]
+    fn test_non_esc_key_clears_pending_interrupt_confirmation() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
+        app.set_processing(true);
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        assert!(app.should_interrupt_on_esc());
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+
+        assert!(app.is_processing);
+        assert!(!app.should_interrupt_on_esc());
+        assert_eq!(app.processing_interrupt_hint(), "esc interrupt");
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+
+        assert!(app.is_processing);
+        assert!(app.should_interrupt_on_esc());
+        assert_eq!(app.processing_interrupt_hint(), "esc again to interrupt");
+    }
+
+    #[test]
+    fn test_cancelled_run_ignores_queued_events_from_previous_run_epoch() {
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let event_sender = TuiEventSender::new(tx);
+        let mut app = ChatApp::new("Session".to_string(), cwd);
+        app.set_processing(true);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let handle = runtime.block_on(async {
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            })
+        });
+        app.set_agent_task(handle);
+
+        let old_scope_sender = event_sender.scoped(app.session_epoch(), app.run_epoch());
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+        handle_key_event(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &mut app,
+            &settings,
+            cwd,
+            &event_sender,
+            || Ok((120, 40)),
+        )
+        .unwrap();
+
+        assert!(!app.is_processing);
+
+        old_scope_sender.send(TuiEvent::AssistantDelta("stale-stream".to_string()));
+        let stale_event = rx.blocking_recv().unwrap();
+        if stale_event.session_epoch == app.session_epoch()
+            && stale_event.run_epoch == app.run_epoch()
+        {
+            app.handle_event(&stale_event.event);
+        }
+
+        assert!(!app.messages.iter().any(
+            |message| matches!(message, tui::ChatMessage::Assistant(text) if text.contains("stale-stream"))
+        ));
+
+        app.cancel_agent_task();
     }
 
     #[test]

@@ -890,6 +890,30 @@ fn processing_indicator_uses_block_spinner_glyphs() {
     assert!(!full_text.contains("00s"));
     assert!(!full_text.contains("00m 00s"));
     assert!(full_text.contains("esc interrupt"));
+    assert!(!full_text.contains("esc again to interrupt"));
+}
+
+#[test]
+fn processing_indicator_uses_confirm_interrupt_hint_after_first_esc() {
+    let mut app = ChatApp::default();
+    app.set_processing(true);
+    app.arm_esc_interrupt();
+
+    let backend = TestBackend::new(120, 25);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let full_text = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(full_text.contains("esc again to interrupt"));
+    assert!(!full_text.contains("esc interrupt"));
 }
 
 #[test]

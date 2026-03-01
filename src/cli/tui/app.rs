@@ -233,6 +233,7 @@ pub struct ChatApp {
     pub session_id: Option<String>,
     pub session_name: String,
     session_epoch: u64,
+    run_epoch: u64,
     pub working_directory: String,
     pub git_branch: Option<String>,
     pub context_budget: usize,
@@ -259,6 +260,9 @@ pub struct ChatApp {
     // Agent state
     pub current_agent_name: Option<String>,
     pub available_agents: Vec<AgentOptionView>,
+    // Running agent task handle (for cancellation)
+    agent_task: Option<tokio::task::JoinHandle<()>>,
+    esc_interrupt_pending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,6 +301,7 @@ impl ChatApp {
             session_id: None,
             session_name,
             session_epoch: 0,
+            run_epoch: 0,
             working_directory: cwd.display().to_string(),
             git_branch: detect_git_branch(cwd),
             context_budget: DEFAULT_CONTEXT_LIMIT,
@@ -320,6 +325,8 @@ impl ChatApp {
             pending_question: None,
             current_agent_name: None,
             available_agents: Vec::new(),
+            agent_task: None,
+            esc_interrupt_pending: false,
         }
     }
 
@@ -885,6 +892,9 @@ impl ChatApp {
 
     pub fn set_processing(&mut self, processing: bool) {
         self.is_processing = processing;
+        if !processing {
+            self.clear_pending_esc_interrupt();
+        }
         self.processing_started_at = if processing {
             Some(Instant::now())
         } else {
@@ -896,8 +906,16 @@ impl ChatApp {
         self.session_epoch
     }
 
+    pub fn run_epoch(&self) -> u64 {
+        self.run_epoch
+    }
+
     pub fn bump_session_epoch(&mut self) {
         self.session_epoch = self.session_epoch.wrapping_add(1);
+    }
+
+    pub fn bump_run_epoch(&mut self) {
+        self.run_epoch = self.run_epoch.wrapping_add(1);
     }
 
     pub fn start_new_session(&mut self, session_name: String) {
@@ -913,7 +931,44 @@ impl ChatApp {
         self.sidebar_scroll.reset(false);
         self.set_processing(false);
         self.pending_question = None;
+        self.cancel_agent_task();
         self.mark_dirty();
+    }
+
+    /// Cancel any running agent task
+    pub fn cancel_agent_task(&mut self) {
+        if let Some(handle) = self.agent_task.take() {
+            self.bump_run_epoch();
+            handle.abort();
+        }
+        self.clear_pending_esc_interrupt();
+    }
+
+    /// Set the agent task handle
+    pub fn set_agent_task(&mut self, handle: tokio::task::JoinHandle<()>) {
+        // Cancel any existing task first
+        self.cancel_agent_task();
+        self.agent_task = Some(handle);
+    }
+
+    pub fn arm_esc_interrupt(&mut self) {
+        self.esc_interrupt_pending = true;
+    }
+
+    pub fn clear_pending_esc_interrupt(&mut self) {
+        self.esc_interrupt_pending = false;
+    }
+
+    pub fn should_interrupt_on_esc(&self) -> bool {
+        self.esc_interrupt_pending
+    }
+
+    pub fn processing_interrupt_hint(&self) -> &'static str {
+        if self.esc_interrupt_pending {
+            "esc again to interrupt"
+        } else {
+            "esc interrupt"
+        }
     }
 
     pub fn update_command_filtering(&mut self) {
