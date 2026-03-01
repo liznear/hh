@@ -568,7 +568,7 @@ fn build_message_lines_impl(app: &ChatApp, width: usize, layout: UiLayout) -> Ve
         layout,
     };
 
-    for msg in &app.messages {
+    for (idx, msg) in app.messages.iter().enumerate() {
         match msg {
             ChatMessage::User(text) => {
                 render_user_message_block(&mut lines, text, width, layout, border_color);
@@ -594,6 +594,9 @@ fn build_message_lines_impl(app: &ChatApp, width: usize, layout: UiLayout) -> Ve
                 output,
                 is_error,
             } => {
+                if idx > 0 && matches!(app.messages.get(idx - 1), Some(ChatMessage::Assistant(_))) {
+                    ensure_single_blank_line(&mut lines);
+                }
                 render_tool_call_message(
                     &mut lines,
                     ToolCallMessage {
@@ -613,6 +616,25 @@ fn build_message_lines_impl(app: &ChatApp, width: usize, layout: UiLayout) -> Ve
                     Span::raw(" "),
                     Span::styled(text.clone(), Style::default().fg(Color::Red)),
                 ]));
+            }
+            ChatMessage::Footer {
+                agent_display_name,
+                provider_name,
+                model_name,
+                duration,
+                interrupted,
+            } => {
+                render_footer_block(
+                    &mut lines,
+                    agent_display_name,
+                    provider_name,
+                    model_name,
+                    duration,
+                    *interrupted,
+                    width,
+                    &message_indent,
+                    app.selected_agent(),
+                );
             }
         }
     }
@@ -698,6 +720,60 @@ fn render_compaction_block(
             lines.push(line);
         }
     }
+}
+
+fn render_footer_block(
+    lines: &mut Vec<Line<'static>>,
+    agent_display_name: &str,
+    provider_name: &str,
+    model_name: &str,
+    duration: &str,
+    interrupted: bool,
+    _width: usize,
+    _indent: &str,
+    agent: Option<&super::app::AgentOptionView>,
+) {
+    // Get agent color, default to TEXT_PRIMARY
+    let agent_color = agent
+        .and_then(|a| a.color.as_ref())
+        .and_then(|c| crate::agent::parse_color(c))
+        .unwrap_or(TEXT_PRIMARY);
+
+    // Checkmark or cross symbol with appropriate color
+    let (status_symbol, status_color) = if interrupted {
+        ("✗", Color::Red)
+    } else {
+        ("✓", Color::Rgb(25, 110, 61))
+    };
+
+    // Build footer parts: symbol, agent name, provider, model, duration, interrupted
+    let mut footer_parts: Vec<Span<'static>> = vec![
+        Span::styled(status_symbol, Style::default().fg(status_color)),
+        Span::raw("  "),
+        Span::styled(agent_display_name.to_string(), Style::default().fg(agent_color)),
+        Span::raw("  "),
+        Span::styled(provider_name.to_string(), Style::default().fg(TEXT_MUTED)),
+        Span::raw(" "),
+        Span::styled(model_name.to_string(), Style::default().fg(TEXT_MUTED)),
+        Span::raw("  "),
+        Span::styled(duration.to_string(), Style::default().fg(TEXT_PRIMARY)),
+    ];
+
+    // Add "interrupted" text after duration if interrupted
+    if interrupted {
+        footer_parts.push(Span::raw("  "));
+        footer_parts.push(Span::styled("interrupted", Style::default().fg(Color::Red)));
+    }
+
+    // Add blank line before footer
+    lines.push(Line::from(""));
+
+    // Render footer line with message indentation
+    let mut indent_spans = vec![Span::raw(_indent.to_string())];
+    indent_spans.extend(footer_parts);
+    lines.push(Line::from(indent_spans));
+
+    lines.push(Line::from(""));
 }
 
 /// Wrap text to a given width, returning a vector of lines.

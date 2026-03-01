@@ -110,6 +110,13 @@ pub enum ChatMessage {
         is_error: Option<bool>,
     },
     Error(String),
+    Footer {
+        agent_display_name: String,
+        provider_name: String,
+        model_name: String,
+        duration: String,
+        interrupted: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -263,6 +270,9 @@ pub struct ChatApp {
     // Running agent task handle (for cancellation)
     agent_task: Option<tokio::task::JoinHandle<()>>,
     esc_interrupt_pending: bool,
+    // Footer state for completed agent runs
+    last_run_duration: Option<String>,
+    last_run_interrupted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,6 +337,8 @@ impl ChatApp {
             available_agents: Vec::new(),
             agent_task: None,
             esc_interrupt_pending: false,
+            last_run_duration: None,
+            last_run_interrupted: false,
         }
     }
 
@@ -422,6 +434,38 @@ impl ChatApp {
             }
             TuiEvent::AssistantDone => {
                 self.set_processing(false);
+
+                // Append footer if we have duration info
+                if let (Some(duration), Some(agent)) = (
+                    self.last_run_duration.take(),
+                    self.selected_agent().cloned(),
+                ) {
+                    // Get provider and model names
+                    let provider_name = self
+                        .available_models
+                        .iter()
+                        .find(|model| model.full_id == self.selected_model_ref())
+                        .map(|model| model.provider_name.clone())
+                        .unwrap_or_default();
+                    let model_name = self
+                        .available_models
+                        .iter()
+                        .find(|model| model.full_id == self.selected_model_ref())
+                        .map(|model| model.model_name.clone())
+                        .unwrap_or_default();
+
+                    self.messages.push(ChatMessage::Footer {
+                        agent_display_name: agent.display_name.clone(),
+                        provider_name,
+                        model_name,
+                        duration: duration.clone(),
+                        interrupted: self.last_run_interrupted,
+                    });
+                    self.mark_dirty();
+
+                    // Reset interrupted flag
+                    self.last_run_interrupted = false;
+                }
             }
             TuiEvent::SessionTitle(title) => {
                 self.session_name = title.clone();
@@ -800,6 +844,7 @@ impl ChatApp {
                     name, args, output, ..
                 } => name.len() + args.len() + output.as_ref().map(|s| s.len()).unwrap_or(0),
                 ChatMessage::Error(text) => text.len(),
+                ChatMessage::Footer { .. } => 0,
             };
         }
         let estimated_tokens = chars / 4;
@@ -891,6 +936,21 @@ impl ChatApp {
     }
 
     pub fn set_processing(&mut self, processing: bool) {
+        // Capture final duration and interrupted status when ending processing
+        if !processing && self.is_processing {
+            if let Some(started) = self.processing_started_at {
+                let elapsed_secs = started.elapsed().as_secs();
+                let minutes = elapsed_secs / 60;
+                let seconds = elapsed_secs % 60;
+                self.last_run_duration = if minutes == 0 {
+                    Some(format!("{}s", seconds))
+                } else {
+                    Some(format!("{}m {}s", minutes, seconds))
+                };
+            }
+            self.last_run_interrupted = self.esc_interrupt_pending;
+        }
+
         self.is_processing = processing;
         if !processing {
             self.clear_pending_esc_interrupt();
