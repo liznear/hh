@@ -37,3 +37,8 @@ png = "0.18"
 
 [dev-dependencies]
 tempfile = "3.15"
+criterion = "0.5"
+
+[[bench]]
+name = "tui_baseline"
+harness = false
