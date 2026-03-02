@@ -134,9 +134,7 @@ impl MessageViewportCache {
     }
 
     pub fn mark_tail_dirty(&self) {
-        if !self.needs_rebuild.get() {
-            self.message_dirty_hint.set(MessageDirtyHint::MutateLast);
-        } else if self.message_dirty_hint.get() != MessageDirtyHint::Full {
+        if !(self.needs_rebuild.get() && self.message_dirty_hint.get() == MessageDirtyHint::Full) {
             self.message_dirty_hint.set(MessageDirtyHint::MutateLast);
         }
         self.needs_rebuild.set(true);

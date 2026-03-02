@@ -596,16 +596,14 @@ pub(crate) fn append_message_lines_for_index(
             .unwrap_or(ACCENT)
     };
 
-    render_message_line_item(
-        lines,
-        app,
-        idx,
-        msg,
+    let render_context = MessageRenderContext {
         width,
-        &message_indent,
+        message_indent: &message_indent,
         tool_context,
         border_color,
-    );
+    };
+
+    render_message_line_item(lines, app, idx, msg, render_context);
 }
 
 fn build_message_lines_impl(
@@ -637,23 +635,28 @@ fn build_message_lines_impl(
         style: tool_style,
         layout,
     };
+    let render_context = MessageRenderContext {
+        width,
+        message_indent: &message_indent,
+        tool_context,
+        border_color,
+    };
     let mut message_starts = Vec::with_capacity(app.messages.len());
 
     for (idx, msg) in app.messages.iter().enumerate() {
         message_starts.push(lines.len());
-        render_message_line_item(
-            &mut lines,
-            app,
-            idx,
-            msg,
-            width,
-            &message_indent,
-            tool_context,
-            border_color,
-        );
+        render_message_line_item(&mut lines, app, idx, msg, render_context);
     }
 
     (lines, message_starts)
+}
+
+#[derive(Clone, Copy)]
+struct MessageRenderContext<'a> {
+    width: usize,
+    message_indent: &'a str,
+    tool_context: ToolRenderContext<'a>,
+    border_color: Color,
 }
 
 fn render_message_line_item(
@@ -661,29 +664,49 @@ fn render_message_line_item(
     app: &ChatApp,
     idx: usize,
     msg: &ChatMessage,
-    width: usize,
-    message_indent: &str,
-    tool_context: ToolRenderContext<'_>,
-    border_color: Color,
+    render_context: MessageRenderContext<'_>,
 ) {
     match msg {
         ChatMessage::User(text) => {
-            render_user_message_block(lines, text, width, tool_context.layout, border_color);
+            render_user_message_block(
+                lines,
+                text,
+                render_context.width,
+                render_context.tool_context.layout,
+                render_context.border_color,
+            );
         }
         ChatMessage::Assistant(text) => {
             ensure_single_blank_line(lines);
-            for line in parse_markdown_lines(text, width, message_indent) {
+            for line in
+                parse_markdown_lines(text, render_context.width, render_context.message_indent)
+            {
                 lines.push(line);
             }
         }
         ChatMessage::CompactionPending => {
-            render_compaction_block(lines, None, width, message_indent);
+            render_compaction_block(
+                lines,
+                None,
+                render_context.width,
+                render_context.message_indent,
+            );
         }
         ChatMessage::Compaction(summary) => {
-            render_compaction_block(lines, Some(summary), width, message_indent);
+            render_compaction_block(
+                lines,
+                Some(summary),
+                render_context.width,
+                render_context.message_indent,
+            );
         }
         ChatMessage::Thinking(text) => {
-            render_thinking_block(lines, text, width, message_indent);
+            render_thinking_block(
+                lines,
+                text,
+                render_context.width,
+                render_context.message_indent,
+            );
         }
         ChatMessage::ToolCall {
             name,
@@ -702,13 +725,13 @@ fn render_message_line_item(
                     output: output.as_deref(),
                     is_error: *is_error,
                 },
-                tool_context,
+                render_context.tool_context,
             );
         }
         ChatMessage::Error(text) => {
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::raw(message_indent.to_string()),
+                Span::raw(render_context.message_indent.to_string()),
                 Span::styled("Error:", Style::default().fg(Color::Red).bold()),
                 Span::raw(" "),
                 Span::styled(text.clone(), Style::default().fg(Color::Red)),
@@ -730,7 +753,7 @@ fn render_message_line_item(
                     duration,
                     interrupted: *interrupted,
                 },
-                message_indent,
+                render_context.message_indent,
                 app.selected_agent(),
             );
         }
