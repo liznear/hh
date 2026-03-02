@@ -74,7 +74,7 @@ impl AgentLoader {
         let content = std::fs::read_to_string(path)?;
 
         // Parse YAML frontmatter
-        let (frontmatter, body) = self.parse_frontmatter(&content)?;
+        let (frontmatter, body) = self.parse_frontmatter(&content, path)?;
 
         // Use filename (without extension) as agent name
         let name = path
@@ -89,6 +89,7 @@ impl AgentLoader {
     fn parse_frontmatter(
         &self,
         content: &str,
+        path: &Path,
     ) -> anyhow::Result<(AgentFrontmatter, Option<String>)> {
         // Check for YAML frontmatter delimited by ---
         if !content.starts_with("---") {
@@ -107,8 +108,8 @@ impl AgentLoader {
             None
         };
 
-        let frontmatter: AgentFrontmatter =
-            serde_yaml::from_str(frontmatter_yaml).context("Failed to parse agent frontmatter")?;
+        let frontmatter: AgentFrontmatter = serde_yaml::from_str(frontmatter_yaml)
+            .with_context(|| format!("Failed to parse agent frontmatter in {}", path.display()))?;
 
         Ok((frontmatter, body))
     }
