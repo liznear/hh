@@ -87,6 +87,9 @@ enum InputEvent {
 
 const INPUT_POLL_TIMEOUT: Duration = Duration::from_millis(16);
 const INPUT_BATCH_MAX: usize = 64;
+const EVENT_DRAIN_MAX: usize = 128;
+const STREAM_CHUNK_FLUSH_INTERVAL: Duration = Duration::from_millis(75);
+const STREAM_CHUNK_FLUSH_BYTES: usize = 8192;
 
 async fn handle_input_batch() -> anyhow::Result<Vec<InputEvent>> {
     if !event::poll(INPUT_POLL_TIMEOUT)? {
@@ -680,7 +683,7 @@ fn handle_area_scroll(
     if let Some(sidebar_content) = layout_rects.sidebar_content
         && point_in_rect(x, y, sidebar_content)
     {
-        let total_lines = tui::build_sidebar_lines(app, sidebar_content.width).len();
+        let total_lines = app.get_sidebar_lines(sidebar_content.width).len();
         let visible_height = sidebar_content.height as usize;
 
         // Only scroll if sidebar has scrollable content
@@ -784,14 +787,29 @@ async fn run_interactive_chat_loop(
     app: &mut ChatApp,
     runner: InteractiveChatRunner<'_>,
 ) -> anyhow::Result<()> {
-    let mut render_tick = tokio::time::interval(Duration::from_secs(1));
+    let mut render_tick = tokio::time::interval(Duration::from_millis(100));
+    let mut stream_flush_tick = tokio::time::interval(STREAM_CHUNK_FLUSH_INTERVAL);
+    let mut needs_redraw = true;
+    let mut flush_stream_before_draw = false;
+    let mut pending_assistant_delta = String::new();
+    let mut pending_thinking = String::new();
 
     loop {
-        tui_guard.get().draw(|f| tui::render_app(f, app))?;
+        if needs_redraw {
+            if flush_stream_before_draw {
+                flush_stream_chunks(app, &mut pending_thinking, &mut pending_assistant_delta);
+                flush_stream_before_draw = false;
+            }
+            tui_guard.get().draw(|f| tui::render_app(f, app))?;
+            needs_redraw = false;
+        }
 
         tokio::select! {
             input_result = handle_input_batch() => {
-                for input_event in input_result? {
+                let input_events = input_result?;
+                let mut handled_any_input = false;
+                for input_event in input_events {
+                    handled_any_input = true;
                     match input_event {
                     InputEvent::Key(key_event) => {
                         handle_key_event(
@@ -851,17 +869,62 @@ async fn run_interactive_chat_loop(
                     }
                     }
                 }
+                if handled_any_input {
+                    needs_redraw = true;
+                }
             }
             event = runner.event_rx.recv() => {
                 if let Some(event) = event
                     && event.session_epoch == app.session_epoch()
                     && event.run_epoch == app.run_epoch()
                 {
-                    app.handle_event(&event.event);
+                    let mut handled_non_stream_event = false;
+                    merge_or_handle_event(
+                        app,
+                        event.event,
+                        &mut pending_thinking,
+                        &mut pending_assistant_delta,
+                        &mut handled_non_stream_event,
+                    );
+
+                    for _ in 0..EVENT_DRAIN_MAX {
+                        let Ok(next_event) = runner.event_rx.try_recv() else {
+                            break;
+                        };
+                        if next_event.session_epoch == app.session_epoch()
+                            && next_event.run_epoch == app.run_epoch()
+                        {
+                            merge_or_handle_event(
+                                app,
+                                next_event.event,
+                                &mut pending_thinking,
+                                &mut pending_assistant_delta,
+                                &mut handled_non_stream_event,
+                            );
+                        }
+                    }
+
+                    if handled_non_stream_event {
+                        needs_redraw = true;
+                    }
+                    if pending_assistant_delta.len() >= STREAM_CHUNK_FLUSH_BYTES
+                        || pending_thinking.len() >= STREAM_CHUNK_FLUSH_BYTES
+                    {
+                        flush_stream_before_draw = true;
+                        needs_redraw = true;
+                    }
+                }
+            }
+            _ = stream_flush_tick.tick() => {
+                if !pending_assistant_delta.is_empty() || !pending_thinking.is_empty() {
+                    flush_stream_before_draw = true;
+                    needs_redraw = true;
                 }
             }
             _ = render_tick.tick() => {
-                app.mark_dirty();
+                if app.on_periodic_tick() {
+                    needs_redraw = true;
+                }
             }
         }
 
@@ -871,6 +934,39 @@ async fn run_interactive_chat_loop(
     }
 
     Ok(())
+}
+
+fn merge_or_handle_event(
+    app: &mut ChatApp,
+    event: TuiEvent,
+    pending_thinking: &mut String,
+    pending_assistant_delta: &mut String,
+    handled_non_stream_event: &mut bool,
+) {
+    match event {
+        TuiEvent::Thinking(chunk) => pending_thinking.push_str(&chunk),
+        TuiEvent::AssistantDelta(chunk) => pending_assistant_delta.push_str(&chunk),
+        other => {
+            flush_stream_chunks(app, pending_thinking, pending_assistant_delta);
+            app.handle_event(&other);
+            *handled_non_stream_event = true;
+        }
+    }
+}
+
+fn flush_stream_chunks(
+    app: &mut ChatApp,
+    pending_thinking: &mut String,
+    pending_assistant_delta: &mut String,
+) {
+    if !pending_thinking.is_empty() {
+        let chunk = std::mem::take(pending_thinking);
+        app.handle_event(&TuiEvent::Thinking(chunk));
+    }
+    if !pending_assistant_delta.is_empty() {
+        let chunk = std::mem::take(pending_assistant_delta);
+        app.handle_event(&TuiEvent::AssistantDelta(chunk));
+    }
 }
 
 struct InteractiveChatRunner<'a> {
@@ -1131,7 +1227,10 @@ async fn run_agent(
                         Err(anyhow::anyhow!("approval prompt was cancelled"))
                     })?;
 
-                    Ok(parse_approval_choice(&answers).unwrap_or(crate::core::ApprovalChoice::Deny))
+                    Ok(
+                        parse_approval_choice(&answers)
+                            .unwrap_or(crate::core::ApprovalChoice::Deny),
+                    )
                 }
             },
             move |questions| {
@@ -1224,7 +1323,9 @@ fn validate_image_input_model_support(
     )
 }
 
-fn approval_request_to_question_prompt(request: &crate::core::ApprovalRequest) -> crate::core::QuestionPrompt {
+fn approval_request_to_question_prompt(
+    request: &crate::core::ApprovalRequest,
+) -> crate::core::QuestionPrompt {
     crate::core::QuestionPrompt {
         question: request.body.clone(),
         header: request.title.clone(),
@@ -1247,7 +1348,9 @@ fn approval_request_to_question_prompt(request: &crate::core::ApprovalRequest) -
     }
 }
 
-fn parse_approval_choice(answers: &crate::core::QuestionAnswers) -> Option<crate::core::ApprovalChoice> {
+fn parse_approval_choice(
+    answers: &crate::core::QuestionAnswers,
+) -> Option<crate::core::ApprovalChoice> {
     let label = answers.first()?.first()?.as_str();
     match label {
         "Allow Once" => Some(crate::core::ApprovalChoice::AllowOnce),

@@ -904,8 +904,8 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
         requests: Arc::new(Mutex::new(Vec::new())),
     };
 
-    let session1 = SessionStore::new(temp.path(), &cwd, Some("persist-tools"), None)
-        .expect("session1");
+    let session1 =
+        SessionStore::new(temp.path(), &cwd, Some("persist-tools"), None).expect("session1");
     let tools1 = ToolRegistry::new(&settings, &cwd);
     let schemas1 = tools1.schemas();
     let agent1 = AgentLoop {
@@ -977,8 +977,8 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
         requests: Arc::new(Mutex::new(Vec::new())),
     };
 
-    let session2 = SessionStore::new(temp.path(), &cwd, Some("persist-tools"), None)
-        .expect("session2");
+    let session2 =
+        SessionStore::new(temp.path(), &cwd, Some("persist-tools"), None).expect("session2");
     let tools2 = ToolRegistry::new(&settings, &cwd);
     let schemas2 = tools2.schemas();
     let agent2 = AgentLoop {

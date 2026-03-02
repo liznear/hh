@@ -42,11 +42,7 @@ where
     A: ApprovalPolicy,
     S: SessionSink + SessionReader,
 {
-    pub async fn run<AP, APFut>(
-        &self,
-        prompt: Message,
-        mut approve: AP,
-    ) -> anyhow::Result<String>
+    pub async fn run<AP, APFut>(&self, prompt: Message, mut approve: AP) -> anyhow::Result<String>
     where
         AP: FnMut(ApprovalRequest) -> APFut,
         APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
@@ -77,11 +73,7 @@ where
         };
         let mut session_allowed_tools = std::collections::HashSet::<String>::new();
 
-        restore_session_approvals(
-            &replayed_events,
-            &self.tools,
-            &mut session_allowed_tools,
-        )?;
+        restore_session_approvals(&replayed_events, &self.tools, &mut session_allowed_tools)?;
 
         let mut tool_name_by_call_id = std::collections::HashMap::new();
         for event in &replayed_events {

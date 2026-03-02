@@ -15,6 +15,7 @@ type QuestionResponder = std::sync::Arc<
 use super::commands::{SlashCommand, get_default_commands};
 use super::event::{SubagentEventItem, TuiEvent};
 use super::tool_render::render_tool_result;
+use super::viewport_cache::MessageViewportCache;
 use crate::core::MessageAttachment;
 
 const SIDEBAR_WIDTH: u16 = 38;
@@ -271,10 +272,11 @@ pub struct ChatApp {
     processing_started_at: Option<Instant>,
     pub todo_items: Vec<TodoItemView>,
     pub subagent_items: Vec<SubagentItemView>,
-    // Cached rendered lines (rebuilt only when messages change)
-    pub cached_lines: RefCell<Vec<Line<'static>>>,
-    pub cached_width: RefCell<usize>,
-    pub needs_rebuild: RefCell<bool>,
+    message_viewport: MessageViewportCache,
+    pub cached_sidebar_lines: RefCell<Vec<Line<'static>>>,
+    pub cached_sidebar_width: RefCell<u16>,
+    pub sidebar_needs_rebuild: RefCell<bool>,
+    pub cached_context_usage_estimate: RefCell<Option<usize>>,
     pub available_sessions: Vec<SessionMetadata>,
     pub is_picking_session: bool,
     pub commands: Vec<SlashCommand>,
@@ -343,9 +345,11 @@ impl ChatApp {
             processing_started_at: None,
             todo_items: Vec::new(),
             subagent_items: Vec::new(),
-            cached_lines: RefCell::new(Vec::new()),
-            cached_width: RefCell::new(0),
-            needs_rebuild: RefCell::new(true),
+            message_viewport: MessageViewportCache::new(),
+            cached_sidebar_lines: RefCell::new(Vec::new()),
+            cached_sidebar_width: RefCell::new(0),
+            sidebar_needs_rebuild: RefCell::new(true),
+            cached_context_usage_estimate: RefCell::new(None),
             available_sessions: Vec::new(),
             is_picking_session: false,
             commands,
@@ -414,8 +418,11 @@ impl ChatApp {
     pub fn handle_event(&mut self, event: &TuiEvent) {
         match event {
             TuiEvent::Thinking(text) => {
-                self.append_thinking_delta(text);
-                self.mark_dirty();
+                if self.append_thinking_delta(text) {
+                    self.mark_message_tail_dirty();
+                } else {
+                    self.mark_message_dirty();
+                }
             }
             TuiEvent::ToolStart { name, args } => {
                 if !self.is_duplicate_pending_tool_call(name, args) {
@@ -449,14 +456,15 @@ impl ChatApp {
             TuiEvent::AssistantDelta(delta) => {
                 if let Some(ChatMessage::Assistant(existing)) = self.messages.last_mut() {
                     existing.push_str(delta);
-                    self.mark_dirty();
+                    self.mark_message_tail_dirty();
                     return;
                 }
                 self.messages.push(ChatMessage::Assistant(delta.clone()));
-                self.mark_dirty();
+                self.mark_message_dirty();
             }
             TuiEvent::ContextUsage(tokens) => {
                 self.last_context_tokens = Some(*tokens);
+                self.mark_sidebar_dirty();
             }
             TuiEvent::AssistantDone => {
                 self.set_processing(false);
@@ -823,16 +831,31 @@ impl ChatApp {
 
     /// Get or rebuild cached lines for the given width (interior mutability)
     pub fn get_lines(&self, width: usize) -> std::cell::Ref<'_, Vec<Line<'static>>> {
-        let needs_rebuild = *self.needs_rebuild.borrow();
-        let cached_width = *self.cached_width.borrow();
+        self.message_viewport.get_lines(self, width)
+    }
+
+    pub fn get_visible_lines(
+        &self,
+        wrap_width: usize,
+        visible_height: usize,
+        scroll_offset: usize,
+    ) -> std::cell::Ref<'_, Vec<Line<'static>>> {
+        self.message_viewport
+            .get_visible_lines(self, wrap_width, visible_height, scroll_offset)
+    }
+
+    pub fn get_sidebar_lines(&self, width: u16) -> std::cell::Ref<'_, Vec<Line<'static>>> {
+        let needs_rebuild = *self.sidebar_needs_rebuild.borrow();
+        let cached_width = *self.cached_sidebar_width.borrow();
 
         if needs_rebuild || cached_width != width {
-            let lines = super::ui::build_message_lines(self, width);
-            *self.cached_lines.borrow_mut() = lines;
-            *self.cached_width.borrow_mut() = width;
-            *self.needs_rebuild.borrow_mut() = false;
+            let lines = super::ui::build_sidebar_lines(self, width);
+            *self.cached_sidebar_lines.borrow_mut() = lines;
+            *self.cached_sidebar_width.borrow_mut() = width;
+            *self.sidebar_needs_rebuild.borrow_mut() = false;
         }
-        self.cached_lines.borrow()
+
+        self.cached_sidebar_lines.borrow()
     }
 
     pub fn progress_panel_height(&self) -> u16 {
@@ -857,6 +880,10 @@ impl ChatApp {
             return (tokens, self.context_budget);
         }
 
+        if let Some(estimated_tokens) = *self.cached_context_usage_estimate.borrow() {
+            return (estimated_tokens, self.context_budget);
+        }
+
         let boundary = self
             .messages
             .iter()
@@ -878,6 +905,7 @@ impl ChatApp {
             };
         }
         let estimated_tokens = chars / 4;
+        *self.cached_context_usage_estimate.borrow_mut() = Some(estimated_tokens);
         (estimated_tokens, self.context_budget)
     }
 
@@ -914,17 +942,18 @@ impl ChatApp {
         }
     }
 
-    fn append_thinking_delta(&mut self, delta: &str) {
+    fn append_thinking_delta(&mut self, delta: &str) -> bool {
         if delta.is_empty() {
-            return;
+            return false;
         }
 
         if let Some(ChatMessage::Thinking(existing)) = self.messages.last_mut() {
             existing.push_str(delta);
-            return;
+            return true;
         }
 
         self.messages.push(ChatMessage::Thinking(delta.to_string()));
+        false
     }
 
     fn is_duplicate_pending_tool_call(&self, name: &str, args: &serde_json::Value) -> bool {
@@ -1119,7 +1148,21 @@ impl ChatApp {
     }
 
     pub fn mark_dirty(&self) {
-        *self.needs_rebuild.borrow_mut() = true;
+        self.mark_message_dirty();
+        self.mark_sidebar_dirty();
+    }
+
+    pub fn mark_message_dirty(&self) {
+        self.message_viewport.mark_full_dirty();
+    }
+
+    pub fn mark_message_tail_dirty(&self) {
+        self.message_viewport.mark_tail_dirty();
+    }
+
+    pub fn mark_sidebar_dirty(&self) {
+        *self.sidebar_needs_rebuild.borrow_mut() = true;
+        *self.cached_context_usage_estimate.borrow_mut() = None;
     }
 
     pub fn configure_models(
@@ -1136,6 +1179,7 @@ impl ChatApp {
             .map(|model| model.max_context_size)
             .unwrap_or(DEFAULT_CONTEXT_LIMIT);
         self.last_context_tokens = None;
+        self.mark_sidebar_dirty();
     }
 
     pub fn selected_model_ref(&self) -> &str {
@@ -1151,6 +1195,7 @@ impl ChatApp {
             .map(|model| model.max_context_size)
             .unwrap_or(DEFAULT_CONTEXT_LIMIT);
         self.last_context_tokens = None;
+        self.mark_sidebar_dirty();
     }
 
     pub fn insert_char(&mut self, ch: char) {
@@ -1322,6 +1367,17 @@ impl ChatApp {
             y,
             expires_at: Instant::now() + std::time::Duration::from_secs(1),
         });
+    }
+
+    pub fn on_periodic_tick(&mut self) -> bool {
+        let mut needs_redraw = self.is_processing;
+        if let Some(notice) = self.clipboard_notice
+            && Instant::now() > notice.expires_at
+        {
+            self.clipboard_notice = None;
+            needs_redraw = true;
+        }
+        needs_redraw
     }
 
     pub fn active_clipboard_notice(&self) -> Option<ClipboardNotice> {

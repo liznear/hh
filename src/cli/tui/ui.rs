@@ -318,12 +318,12 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
     let content = inset_rect(inner, 2, 0);
     f.render_widget(block, area);
 
-    let lines = build_sidebar_lines(app, content.width);
+    let lines = app.get_sidebar_lines(content.width);
     let scroll_offset = app
         .sidebar_scroll
         .effective_offset(lines.len(), content.height as usize);
 
-    let sidebar = Paragraph::new(Text::from(lines))
+    let sidebar = Paragraph::new(Text::from(lines.to_vec()))
         .style(Style::default().bg(SIDEBAR_BG))
         .wrap(Wrap { trim: true })
         .scroll((scroll_offset as u16, 0));
@@ -438,23 +438,28 @@ fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
     let scroll_offset = app
         .message_scroll
         .effective_offset(total_lines, visible_height);
+    drop(lines);
 
-    let mut rendered_lines = lines.to_vec();
-    apply_selection_highlight(&mut rendered_lines, app);
-    let text = Text::from(rendered_lines);
+    let rendered_lines = app.get_visible_lines(wrap_width, visible_height, scroll_offset);
+    let text = Text::from(rendered_lines.to_vec());
     let paragraph = Paragraph::new(text)
         .style(Style::default().bg(PAGE_BG).fg(TEXT_PRIMARY))
-        .scroll((scroll_offset as u16, 0));
+        .scroll((0, 0));
 
     f.render_widget(paragraph, content);
 }
 
-fn apply_selection_highlight(lines: &mut [Line<'static>], app: &ChatApp) {
+pub(crate) fn apply_selection_highlight(
+    lines: &mut [Line<'static>],
+    app: &ChatApp,
+    line_offset: usize,
+) {
     let Some((start, end)) = app.text_selection.get_range() else {
         return;
     };
 
-    for (line_idx, line) in lines.iter_mut().enumerate() {
+    for (visible_idx, line) in lines.iter_mut().enumerate() {
+        let line_idx = line_offset.saturating_add(visible_idx);
         if line_idx < start.line || line_idx > end.line {
             continue;
         }
@@ -548,10 +553,66 @@ fn char_slice(input: &str, start: usize, end: usize) -> String {
 
 /// Build message lines (used for caching and scroll bounds)
 pub fn build_message_lines(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
+    build_message_lines_with_starts(app, width).0
+}
+
+pub(crate) fn build_message_lines_with_starts(
+    app: &ChatApp,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<usize>) {
     build_message_lines_impl(app, width, UiLayout::default())
 }
 
-fn build_message_lines_impl(app: &ChatApp, width: usize, layout: UiLayout) -> Vec<Line<'static>> {
+pub(crate) fn append_message_lines_for_index(
+    lines: &mut Vec<Line<'static>>,
+    app: &ChatApp,
+    width: usize,
+    idx: usize,
+) {
+    let Some(msg) = app.messages.get(idx) else {
+        return;
+    };
+    let layout = UiLayout::default();
+    let message_indent = layout.message_indent();
+    let tool_done_continuation = layout.message_child_indent();
+    let tool_pending_prefix = format!("{message_indent}{TOOL_PENDING_MARKER}");
+    let tool_pending_continuation = " ".repeat(tool_pending_prefix.chars().count());
+    let tool_style = ToolCallRenderStyle {
+        done_continuation: &tool_done_continuation,
+        pending_prefix: &tool_pending_prefix,
+        pending_continuation: &tool_pending_continuation,
+    };
+    let tool_context = ToolRenderContext {
+        available_width: width.saturating_sub(4).max(1),
+        style: tool_style,
+        layout,
+    };
+    let border_color = if app.has_pending_question() {
+        QUESTION_BORDER
+    } else {
+        app.selected_agent()
+            .and_then(|agent| agent.color.as_ref())
+            .and_then(|c| crate::agent::parse_color(c))
+            .unwrap_or(ACCENT)
+    };
+
+    render_message_line_item(
+        lines,
+        app,
+        idx,
+        msg,
+        width,
+        &message_indent,
+        tool_context,
+        border_color,
+    );
+}
+
+fn build_message_lines_impl(
+    app: &ChatApp,
+    width: usize,
+    layout: UiLayout,
+) -> (Vec<Line<'static>>, Vec<usize>) {
     // Get agent color for user message borders
     let border_color = if app.has_pending_question() {
         QUESTION_BORDER
@@ -576,80 +637,104 @@ fn build_message_lines_impl(app: &ChatApp, width: usize, layout: UiLayout) -> Ve
         style: tool_style,
         layout,
     };
+    let mut message_starts = Vec::with_capacity(app.messages.len());
 
     for (idx, msg) in app.messages.iter().enumerate() {
-        match msg {
-            ChatMessage::User(text) => {
-                render_user_message_block(&mut lines, text, width, layout, border_color);
-            }
-            ChatMessage::Assistant(text) => {
-                ensure_single_blank_line(&mut lines);
-                for line in parse_markdown_lines(text, width, &message_indent) {
-                    lines.push(line);
-                }
-            }
-            ChatMessage::CompactionPending => {
-                render_compaction_block(&mut lines, None, width, &message_indent);
-            }
-            ChatMessage::Compaction(summary) => {
-                render_compaction_block(&mut lines, Some(summary), width, &message_indent);
-            }
-            ChatMessage::Thinking(text) => {
-                render_thinking_block(&mut lines, text, width, &message_indent);
-            }
-            ChatMessage::ToolCall {
-                name,
-                args,
-                output,
-                is_error,
-            } => {
-                if idx > 0 && matches!(app.messages.get(idx - 1), Some(ChatMessage::Assistant(_))) {
-                    ensure_single_blank_line(&mut lines);
-                }
-                render_tool_call_message(
-                    &mut lines,
-                    ToolCallMessage {
-                        name,
-                        args,
-                        output: output.as_deref(),
-                        is_error: *is_error,
-                    },
-                    tool_context,
-                );
-            }
-            ChatMessage::Error(text) => {
-                lines.push(Line::from(""));
-                lines.push(Line::from(vec![
-                    Span::raw(message_indent.clone()),
-                    Span::styled("Error:", Style::default().fg(Color::Red).bold()),
-                    Span::raw(" "),
-                    Span::styled(text.clone(), Style::default().fg(Color::Red)),
-                ]));
-            }
-            ChatMessage::Footer {
-                agent_display_name,
-                provider_name,
-                model_name,
-                duration,
-                interrupted,
-            } => {
-                render_footer_block(
-                    &mut lines,
-                    FooterBlock {
-                        agent_display_name,
-                        provider_name,
-                        model_name,
-                        duration,
-                        interrupted: *interrupted,
-                    },
-                    &message_indent,
-                    app.selected_agent(),
-                );
-            }
-        }
+        message_starts.push(lines.len());
+        render_message_line_item(
+            &mut lines,
+            app,
+            idx,
+            msg,
+            width,
+            &message_indent,
+            tool_context,
+            border_color,
+        );
     }
 
-    lines
+    (lines, message_starts)
+}
+
+fn render_message_line_item(
+    lines: &mut Vec<Line<'static>>,
+    app: &ChatApp,
+    idx: usize,
+    msg: &ChatMessage,
+    width: usize,
+    message_indent: &str,
+    tool_context: ToolRenderContext<'_>,
+    border_color: Color,
+) {
+    match msg {
+        ChatMessage::User(text) => {
+            render_user_message_block(lines, text, width, tool_context.layout, border_color);
+        }
+        ChatMessage::Assistant(text) => {
+            ensure_single_blank_line(lines);
+            for line in parse_markdown_lines(text, width, message_indent) {
+                lines.push(line);
+            }
+        }
+        ChatMessage::CompactionPending => {
+            render_compaction_block(lines, None, width, message_indent);
+        }
+        ChatMessage::Compaction(summary) => {
+            render_compaction_block(lines, Some(summary), width, message_indent);
+        }
+        ChatMessage::Thinking(text) => {
+            render_thinking_block(lines, text, width, message_indent);
+        }
+        ChatMessage::ToolCall {
+            name,
+            args,
+            output,
+            is_error,
+        } => {
+            if idx > 0 && matches!(app.messages.get(idx - 1), Some(ChatMessage::Assistant(_))) {
+                ensure_single_blank_line(lines);
+            }
+            render_tool_call_message(
+                lines,
+                ToolCallMessage {
+                    name,
+                    args,
+                    output: output.as_deref(),
+                    is_error: *is_error,
+                },
+                tool_context,
+            );
+        }
+        ChatMessage::Error(text) => {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::raw(message_indent.to_string()),
+                Span::styled("Error:", Style::default().fg(Color::Red).bold()),
+                Span::raw(" "),
+                Span::styled(text.clone(), Style::default().fg(Color::Red)),
+            ]));
+        }
+        ChatMessage::Footer {
+            agent_display_name,
+            provider_name,
+            model_name,
+            duration,
+            interrupted,
+        } => {
+            render_footer_block(
+                lines,
+                FooterBlock {
+                    agent_display_name,
+                    provider_name,
+                    model_name,
+                    duration,
+                    interrupted: *interrupted,
+                },
+                message_indent,
+                app.selected_agent(),
+            );
+        }
+    }
 }
 
 /// Parse markdown text into styled lines with wrapping
