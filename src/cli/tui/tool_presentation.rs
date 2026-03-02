@@ -84,6 +84,10 @@ const TOOL_PRESENTATIONS: &[ToolPresentation] = &[
         tool_name: "task",
         render_start: render_task_start,
     },
+    ToolPresentation {
+        tool_name: "skill",
+        render_start: render_skill_start,
+    },
 ];
 
 fn render_read_start(args: &Value) -> ToolCallStartView {
@@ -178,6 +182,13 @@ fn render_task_start(args: &Value) -> ToolCallStartView {
     }
 }
 
+fn render_skill_start(args: &Value) -> ToolCallStartView {
+    let skill_name = json_str(args, "name").unwrap_or_else(|| compact_json(args));
+    ToolCallStartView {
+        line: format!("Skill \"{}\"", skill_name),
+    }
+}
+
 fn render_action_with_field(action: &str, key: &str, args: &Value) -> ToolCallStartView {
     render_action_with_aliases(action, &[key], args)
 }
@@ -261,5 +272,11 @@ mod tests {
     fn unknown_tool_uses_fallback() {
         let rendered = render_tool_start("custom_tool", &json!({"foo":"bar"}));
         assert_eq!(rendered.line, "Custom Tool {\"foo\":\"bar\"}");
+    }
+
+    #[test]
+    fn skill_tool_renders_name_in_quotes() {
+        let rendered = render_tool_start("skill", &json!({"name":"cleanup"}));
+        assert_eq!(rendered.line, "Skill \"cleanup\"");
     }
 }
