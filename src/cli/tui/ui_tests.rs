@@ -349,6 +349,28 @@ fn thinking_has_one_blank_line_after_it() {
 }
 
 #[test]
+fn thinking_with_trailing_newlines_has_one_blank_line_after_it() {
+    let mut app = ChatApp::default();
+    app.messages
+        .push(ChatMessage::Thinking("thinking\n\n".to_string()));
+    app.messages
+        .push(ChatMessage::Assistant("answer".to_string()));
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+
+    let think_idx = rendered
+        .iter()
+        .position(|line| line.contains("Thinking:"))
+        .expect("thinking line");
+
+    assert_eq!(rendered[think_idx + 1], "");
+    assert_ne!(rendered[think_idx + 2], "");
+}
+
+#[test]
 fn thinking_continuation_lines_use_message_indent() {
     let mut app = ChatApp::default();
     app.messages.push(ChatMessage::Thinking(

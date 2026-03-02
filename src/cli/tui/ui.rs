@@ -772,6 +772,8 @@ fn parse_markdown_lines_unindented(text: &str, width: usize) -> Vec<Line<'static
 fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usize, indent: &str) {
     ensure_single_blank_line(lines);
 
+    let text = text.trim_end_matches(['\n', '\r']);
+
     let label = format!("{indent}Thinking: ");
     let label_width = label.chars().count();
     let wrapped = parse_markdown_lines_unindented(text, width.saturating_sub(label_width).max(1));
