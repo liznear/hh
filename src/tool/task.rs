@@ -63,8 +63,6 @@ struct TaskToolArgs {
     description: String,
     prompt: String,
     subagent_type: String,
-    #[serde(default)]
-    task_id: Option<String>,
 }
 
 #[async_trait]
@@ -86,7 +84,7 @@ impl Tool for TaskTool {
         ToolSchema {
             name: "task".to_string(),
             description: format!(
-                "Spawn or resume a sub-agent task.\n\nParameter contract:\n- `name` (required): human-readable task label shown in UI.\n- `description` (required): short statement of delegated intent.\n- `prompt` (required): full instructions for the child agent.\n- `subagent_type` (required): which registered sub-agent to run.\n- `task_id` (optional): if provided, resume that existing child task in this parent session; if omitted, create a new task.\n\nReturn semantics:\n- Returns terminal status for this task (`done`/`error`/`cancelled`) after execution completes.\n\n{}",
+                "Spawn a sub-agent task.\n\nParameter contract:\n- `name` (required): human-readable task label shown in UI.\n- `description` (required): short statement of delegated intent.\n- `prompt` (required): full instructions for the child agent.\n- `subagent_type` (required): which registered sub-agent to run.\n\nReturn semantics:\n- Returns terminal status for this task (`done`/`error`/`cancelled`) after execution completes.\n\n{}",
                 format_available_subagents(&self.available_subagents),
             ),
             capability: Some("task".to_string()),
@@ -106,11 +104,7 @@ impl Tool for TaskTool {
                         "type": "string",
                         "description": "Required. Full prompt/instructions executed by the selected sub-agent. Ask the child to keep output concise (short summary with only essential facts)."
                     },
-                    "subagent_type": subagent_type_schema,
-                    "task_id": {
-                        "type": "string",
-                        "description": "Optional. Existing task id to resume within the current parent session; omit to start a new task"
-                    }
+                    "subagent_type": subagent_type_schema
                 },
                 "required": ["name", "description", "prompt", "subagent_type"],
                 "additionalProperties": false
@@ -170,7 +164,7 @@ impl Tool for TaskTool {
                     description: parsed.description,
                     prompt: parsed.prompt.clone(),
                     subagent_type: parsed.subagent_type.clone(),
-                    resume_task_id: parsed.task_id,
+                    resume_task_id: None,
                     parent_session_id: self.context.parent_session_id.clone(),
                     parent_task_id: self.context.parent_task_id.clone(),
                     depth: self.context.depth,
