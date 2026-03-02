@@ -4,8 +4,9 @@ use anyhow::Context;
 use std::{env, fs, path::PathBuf};
 
 pub fn global_config_path() -> PathBuf {
-    let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join("hh/config.json")
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    // Use ~/.config/hh/config.json consistently across platforms
+    home.join(".config/hh/config.json")
 }
 
 pub fn project_config_path(cwd: &std::path::Path) -> PathBuf {
@@ -48,12 +49,37 @@ pub fn load_settings(
 }
 
 fn merge_settings(base: &mut Settings, override_with: Settings) {
-    base.models = override_with.models;
-    base.providers = override_with.providers;
-    base.agent = override_with.agent;
+    // Merge models - project config overrides global config if set
+    if !override_with.models.default.trim().is_empty() {
+        base.models = override_with.models;
+    }
+
+    // Merge providers - merge maps instead of replacing
+    for (provider_id, provider_config) in override_with.providers {
+        base.providers.insert(provider_id, provider_config);
+    }
+
+    // Merge agent settings - override with non-zero values
+    if override_with.agent.max_steps > 0 {
+        base.agent.max_steps = override_with.agent.max_steps;
+    }
+    if override_with.agent.sub_agent_max_depth > 0 {
+        base.agent.sub_agent_max_depth = override_with.agent.sub_agent_max_depth;
+    }
+    if override_with.agent.system_prompt.is_some() {
+        base.agent.system_prompt = override_with.agent.system_prompt;
+    }
+
+    // Merge tools settings
     base.tools = override_with.tools;
+
+    // Merge permission settings
     base.permission = override_with.permission;
-    base.session.root = expand_path(&override_with.session.root);
+
+    // Merge session settings - project config overrides
+    if !override_with.session.root.as_os_str().is_empty() {
+        base.session.root = expand_path(&override_with.session.root);
+    }
 }
 
 fn merge_settings_file(settings: &mut Settings, path: &std::path::Path) -> anyhow::Result<()> {
