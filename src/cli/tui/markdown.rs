@@ -21,8 +21,11 @@ pub fn markdown_to_lines_with_indent(
     let mut in_code_block = false;
     let mut code_fence = CodeFence::default();
     let mut code_lines: Vec<String> = Vec::new();
+    let lines: Vec<&str> = markdown.lines().collect();
+    let mut index = 0;
 
-    for line in markdown.lines() {
+    while index < lines.len() {
+        let line = lines[index];
         if let Some(fence) = parse_code_fence(line) {
             if in_code_block {
                 rendered.extend(render_code_block(&code_lines, &code_fence, width, indent));
@@ -33,15 +36,24 @@ pub fn markdown_to_lines_with_indent(
                 in_code_block = true;
                 code_fence = fence;
             }
+            index += 1;
             continue;
         }
 
         if in_code_block {
             code_lines.push(line.to_string());
+            index += 1;
+            continue;
+        }
+
+        if let Some((table_lines, consumed)) = parse_table(&lines[index..]) {
+            rendered.extend(render_table(&table_lines, width, indent));
+            index += consumed;
             continue;
         }
 
         rendered.extend(render_text_line(line, width, indent));
+        index += 1;
     }
 
     if in_code_block {
@@ -91,6 +103,173 @@ fn render_text_line(line: &str, width: usize, indent: &str) -> Vec<Line<'static>
             Line::from(indented)
         })
         .collect()
+}
+
+#[derive(Clone)]
+struct TableRow {
+    cells: Vec<String>,
+}
+
+fn parse_table(lines: &[&str]) -> Option<(Vec<TableRow>, usize)> {
+    if lines.len() < 2 {
+        return None;
+    }
+
+    let header = parse_table_row(lines[0])?;
+    let separator = parse_table_row(lines[1])?;
+    if header.cells.is_empty() || separator.cells.len() != header.cells.len() {
+        return None;
+    }
+
+    if !separator
+        .cells
+        .iter()
+        .all(|cell| is_table_separator_cell(cell))
+    {
+        return None;
+    }
+
+    let mut rows = vec![header];
+    let mut consumed = 2;
+
+    for line in &lines[2..] {
+        let Some(row) = parse_table_row(line) else {
+            break;
+        };
+        if row.cells.len() != rows[0].cells.len() {
+            break;
+        }
+        rows.push(row);
+        consumed += 1;
+    }
+
+    Some((rows, consumed))
+}
+
+fn parse_table_row(line: &str) -> Option<TableRow> {
+    let trimmed = line.trim();
+    if trimmed.len() < 2 || !trimmed.contains('|') {
+        return None;
+    }
+
+    let inner = trimmed
+        .strip_prefix('|')
+        .and_then(|line| line.strip_suffix('|'))
+        .unwrap_or(trimmed);
+    let cells = inner
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect();
+
+    Some(TableRow { cells })
+}
+
+fn is_table_separator_cell(cell: &str) -> bool {
+    let trimmed = cell.trim();
+    !trimmed.is_empty()
+        && trimmed.chars().all(|ch| matches!(ch, '-' | ':' | ' '))
+        && trimmed.chars().filter(|ch| *ch == '-').count() >= 3
+}
+
+fn render_table(rows: &[TableRow], width: usize, indent: &str) -> Vec<Line<'static>> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let column_count = rows[0].cells.len();
+    let mut column_widths = vec![3; column_count];
+    for row in rows {
+        for (index, cell) in row.cells.iter().enumerate() {
+            column_widths[index] = column_widths[index].max(cell.chars().count());
+        }
+    }
+
+    let indent_width = indent.chars().count();
+    let min_table_width = column_count * 4 + 1;
+    let max_table_width = width.saturating_sub(indent_width).max(min_table_width);
+    shrink_column_widths(&mut column_widths, max_table_width);
+
+    let mut rendered = Vec::with_capacity(rows.len() + 3);
+    rendered.push(render_table_border(indent, &column_widths, '┌', '┬', '┐'));
+    rendered.push(render_table_row(indent, &rows[0], &column_widths, true));
+
+    if rows.len() > 1 {
+        rendered.push(render_table_border(indent, &column_widths, '├', '┼', '┤'));
+        for row in &rows[1..] {
+            rendered.push(render_table_row(indent, row, &column_widths, false));
+        }
+    }
+
+    rendered.push(render_table_border(indent, &column_widths, '└', '┴', '┘'));
+    rendered
+}
+
+fn shrink_column_widths(widths: &mut [usize], max_table_width: usize) {
+    let min_width = 3;
+    while table_total_width(widths) > max_table_width {
+        let Some((index, current_width)) = widths
+            .iter()
+            .copied()
+            .enumerate()
+            .max_by_key(|(_, width)| *width)
+        else {
+            break;
+        };
+
+        if current_width <= min_width {
+            break;
+        }
+
+        widths[index] -= 1;
+    }
+}
+
+fn table_total_width(widths: &[usize]) -> usize {
+    widths.iter().sum::<usize>() + widths.len() * 3 + 1
+}
+
+fn render_table_border(
+    indent: &str,
+    widths: &[usize],
+    left: char,
+    middle: char,
+    right: char,
+) -> Line<'static> {
+    let mut text = String::with_capacity(indent.len() + table_total_width(widths));
+    text.push_str(indent);
+    text.push(left);
+    for (index, width) in widths.iter().enumerate() {
+        text.push_str(&"─".repeat(*width + 2));
+        text.push(if index + 1 == widths.len() {
+            right
+        } else {
+            middle
+        });
+    }
+    Line::raw(text)
+}
+
+fn render_table_row(indent: &str, row: &TableRow, widths: &[usize], header: bool) -> Line<'static> {
+    let mut spans = vec![Span::raw(indent.to_string()), Span::raw("│ ")];
+
+    for (index, (cell, width)) in row.cells.iter().zip(widths.iter()).enumerate() {
+        let parsed = parse_inline_markdown_spans(cell);
+        let (mut clipped, used) = truncate_spans_to_width(parsed, *width);
+        if header {
+            for span in &mut clipped {
+                *span = Span::styled(span.content.clone().into_owned(), span.style.bold());
+            }
+        }
+        spans.extend(clipped);
+        spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+        spans.push(Span::raw(if index + 1 == widths.len() {
+            " │"
+        } else {
+            " │ "
+        }));
+    }
+
+    Line::from(spans)
 }
 
 const CODE_BLOCK_BG: Color = Color::Rgb(236, 240, 248);
@@ -444,6 +623,8 @@ fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> 
 
 #[cfg(test)]
 mod tests {
+    use ratatui::style::Color;
+
     use super::{CODE_BLOCK_BG, markdown_to_lines_with_indent};
 
     const TEST_INDENT: &str = "    ";
@@ -552,6 +733,43 @@ mod tests {
             rendered
                 .iter()
                 .any(|line| line.contains("rust  src/cli/chat.rs:508"))
+        );
+    }
+
+    #[test]
+    fn renders_markdown_tables_with_borders() {
+        let markdown = "| Name | Value |\n| --- | --- |\n| foo | bar |";
+        let lines = markdown_to_lines_with_indent(markdown, 80, TEST_INDENT);
+        let rendered: Vec<String> = lines.iter().map(line_text).collect();
+
+        assert!(rendered.iter().any(|line| line.contains("┌")));
+        assert!(rendered.iter().any(|line| line.contains("│ Name")));
+        assert!(rendered.iter().any(|line| line.contains("│ foo")));
+        assert!(rendered.iter().any(|line| line.contains("└")));
+    }
+
+    #[test]
+    fn keeps_inline_markdown_inside_table_cells() {
+        let markdown = "| Header | Value |\n| --- | --- |\n| **bold** | `code` |";
+        let lines = markdown_to_lines_with_indent(markdown, 80, TEST_INDENT);
+        let row = lines
+            .iter()
+            .find(|line| line_text(line).contains("bold") && line_text(line).contains("code"))
+            .expect("expected table row");
+
+        assert!(row.spans.iter().all(|span| !span.content.contains("**")));
+        assert!(row.spans.iter().all(|span| !span.content.contains('`')));
+        assert!(row.spans.iter().any(|span| {
+            span.content.contains("bold")
+                && span
+                    .style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::BOLD)
+        }));
+        assert!(
+            row.spans
+                .iter()
+                .any(|span| span.content.contains("code") && span.style.fg == Some(Color::Yellow))
         );
     }
 }
