@@ -38,7 +38,7 @@ fn test_tool_start_rendering() {
 
     // Verify content of first line
     let spans = &lines[0].spans;
-    // Expected: -> (muted), Test Tool "arg1" (secondary)
+    // Expected: → (muted), Test Tool "arg1" (secondary)
     assert!(spans.iter().any(|s| s.content.contains("Test Tool")));
     assert!(spans.iter().any(|s| s.content.contains("arg1")));
 }
@@ -184,7 +184,7 @@ fn test_duplicate_pending_tool_start_is_deduped() {
         "Expected completed status marker"
     );
     assert!(
-        rendered.iter().all(|line| !line.contains("->")),
+        rendered.iter().all(|line| !line.contains('→')),
         "Expected no pending marker to remain"
     );
 }

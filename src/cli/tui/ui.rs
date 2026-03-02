@@ -17,7 +17,7 @@ use super::tool_presentation::render_tool_start;
 const MAX_TOOL_OUTPUT_LEN: usize = 200;
 const MIN_DIFF_COLUMN_WIDTH: usize = 24;
 const DIFF_LINE_NUMBER_WIDTH: usize = 4;
-const TOOL_PENDING_MARKER: &str = "-> ";
+const TOOL_PENDING_MARKER: &str = "→ ";
 const PROCESSING_STATUS_GAP: &str = "  ";
 const SIDEBAR_INDENT: &str = "  ";
 const SIDEBAR_LABEL_INDENT: &str = " ";
