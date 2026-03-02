@@ -76,11 +76,7 @@ impl OpenAiCompatibleProvider {
             Vec::new()
         };
 
-        let messages = req
-            .messages
-            .iter()
-            .map(|message| message_to_wire(message, image_url_as_object, image_data_format))
-            .collect::<Vec<_>>();
+        let messages = messages_to_wire(&req.messages, image_url_as_object, image_data_format);
 
         let mut body = json!({
             "model": requested_model,
@@ -411,6 +407,54 @@ fn message_to_wire(
     wire
 }
 
+fn messages_to_wire(
+    messages: &[Message],
+    image_url_as_object: bool,
+    image_data_format: ImageDataFormat,
+) -> Vec<Value> {
+    let mut wire_messages = Vec::with_capacity(messages.len());
+    let mut known_tool_call_ids = std::collections::HashSet::<String>::new();
+
+    for message in messages {
+        if matches!(message.role, Role::Tool)
+            && let Some(call_id) = message
+                .tool_call_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+            && !known_tool_call_ids.contains(call_id)
+        {
+            wire_messages.push(synthetic_assistant_tool_call(call_id));
+            known_tool_call_ids.insert(call_id.to_string());
+        }
+
+        wire_messages.push(message_to_wire(
+            message,
+            image_url_as_object,
+            image_data_format,
+        ));
+    }
+
+    wire_messages
+}
+
+fn synthetic_assistant_tool_call(call_id: &str) -> Value {
+    json!({
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": "tool_result",
+                    "arguments": "{}"
+                }
+            }
+        ]
+    })
+}
+
 fn has_image_attachments(req: &ProviderRequest) -> bool {
     req.messages
         .iter()
@@ -587,5 +631,50 @@ fn apply_stream_chunk<F>(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn messages_to_wire_inserts_synthetic_assistant_for_tool_message() {
+        let messages = vec![
+            Message {
+                role: Role::User,
+                content: "hello".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            Message {
+                role: Role::Tool,
+                content: "ok".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: Some("call_123".to_string()),
+            },
+        ];
+
+        let wire = messages_to_wire(&messages, true, ImageDataFormat::DataUrl);
+        assert_eq!(wire.len(), 3);
+        assert_eq!(wire[1]["role"], "assistant");
+        assert_eq!(wire[1]["tool_calls"][0]["id"], "call_123");
+        assert_eq!(wire[2]["role"], "tool");
+        assert_eq!(wire[2]["tool_call_id"], "call_123");
+    }
+
+    #[test]
+    fn messages_to_wire_skips_synthetic_when_tool_call_id_missing() {
+        let messages = vec![Message {
+            role: Role::Tool,
+            content: "ok".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+        }];
+
+        let wire = messages_to_wire(&messages, true, ImageDataFormat::DataUrl);
+        assert_eq!(wire.len(), 1);
+        assert_eq!(wire[0]["role"], "tool");
+        assert!(wire[0].get("tool_call_id").is_none());
     }
 }
