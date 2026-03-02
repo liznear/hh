@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::path::Path;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::text::Line;
@@ -300,6 +300,7 @@ pub struct ChatApp {
     // Footer state for completed agent runs
     last_run_duration: Option<String>,
     last_run_interrupted: bool,
+    last_timer_refresh_second: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -369,6 +370,7 @@ impl ChatApp {
             esc_interrupt_pending: false,
             last_run_duration: None,
             last_run_interrupted: false,
+            last_timer_refresh_second: None,
         }
     }
 
@@ -1051,8 +1053,12 @@ impl ChatApp {
         self.is_processing = processing;
         if !processing {
             self.clear_pending_esc_interrupt();
+            self.last_timer_refresh_second = None;
         }
         self.processing_started_at = if processing {
+            self.last_timer_refresh_second = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(Some(0), |duration| Some(duration.as_secs()));
             Some(Instant::now())
         } else {
             None
@@ -1377,6 +1383,18 @@ impl ChatApp {
             self.clipboard_notice = None;
             needs_redraw = true;
         }
+
+        if self.is_processing {
+            let now_second = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_secs());
+            if self.last_timer_refresh_second != Some(now_second) {
+                self.last_timer_refresh_second = Some(now_second);
+                self.mark_message_dirty();
+                needs_redraw = true;
+            }
+        }
+
         needs_redraw
     }
 
@@ -1574,6 +1592,20 @@ fn to_subagent_item_view(item: &SubagentEventItem) -> Option<SubagentItemView> {
 impl Default for ChatApp {
     fn default() -> Self {
         Self::new("Session".to_string(), Path::new("."))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChatApp;
+
+    #[test]
+    fn periodic_tick_marks_redraw_when_processing_second_changes() {
+        let mut app = ChatApp::default();
+        app.set_processing(true);
+        app.last_timer_refresh_second = Some(0);
+
+        assert!(app.on_periodic_tick());
     }
 }
 
