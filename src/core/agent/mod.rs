@@ -187,7 +187,10 @@ where
                 self.session
                     .append(&SessionEvent::ToolCall { call: call.clone() })?;
 
-                match self.approvals.decision_for_tool(&call.name) {
+                match self
+                    .approvals
+                    .decision_for_tool_call(&call.name, &call.arguments)
+                {
                     ApprovalDecision::Deny => {
                         let output = format!("tool denied: {}", call.name);
                         self.record_tool_error(&call, output, &mut state)?;
@@ -196,20 +199,13 @@ where
                     ApprovalDecision::Ask => {
                         if !session_allowed_tools.contains(&call.name) {
                             self.events.on_tool_start(&call.name, &call.arguments);
-                            let choice = approve(ApprovalRequest {
-                                title: "Tool Execution Approval".to_string(),
-                                body: format!(
-                                    "Allow tool `{}` to execute with the current arguments?",
-                                    call.name
-                                ),
-                                action: serde_json::json!({
-                                    "operation": "tool_execution",
-                                    "tool_name": call.name,
-                                }),
-                            })
-                            .await?;
+                            let request = build_tool_execution_approval_request(&call);
+                            let choice = approve(request.clone()).await?;
 
-                            if choice == ApprovalChoice::AllowSession {
+                            if matches!(
+                                choice,
+                                ApprovalChoice::AllowSession | ApprovalChoice::AllowAlways
+                            ) {
                                 session_allowed_tools.insert(call.name.clone());
                             }
 
@@ -218,10 +214,7 @@ where
                                 id: event_id(),
                                 tool_name: call.name.clone(),
                                 approved,
-                                action: Some(serde_json::json!({
-                                    "operation": "tool_execution",
-                                    "tool_name": call.name,
-                                })),
+                                action: Some(request.action.clone()),
                                 choice: Some(choice),
                             })?;
                             if !approved {
@@ -408,6 +401,108 @@ fn decorate_tool_start_args(name: &str, args: &serde_json::Value) -> serde_json:
     serde_json::Value::Object(obj)
 }
 
+fn build_tool_execution_approval_request(call: &ToolCall) -> ApprovalRequest {
+    let permission_rule = suggested_permission_rule(call);
+    let approval_kind = if call.name == "bash" {
+        "bash"
+    } else if is_file_write_tool(&call.name) {
+        "file_write"
+    } else {
+        "generic"
+    };
+
+    let stated_purpose = call
+        .arguments
+        .get("description")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.trim_end_matches('.'));
+
+    let body = match call.name.as_str() {
+        "bash" => {
+            let command = call
+                .arguments
+                .get("command")
+                .and_then(|value| value.as_str())
+                .unwrap_or("<unknown command>");
+            if let Some(purpose) = stated_purpose {
+                format!("Allow `{command}` to {purpose}")
+            } else {
+                format!("Allow `{command}` for the requested task")
+            }
+        }
+        "write" | "edit" => {
+            let path = call
+                .arguments
+                .get("path")
+                .and_then(|value| value.as_str())
+                .unwrap_or("<unknown path>");
+            if let Some(purpose) = stated_purpose {
+                format!("Allow writing `{path}` to {purpose}")
+            } else {
+                format!("Allow writing `{path}`")
+            }
+        }
+        _ => {
+            if let Some(purpose) = stated_purpose {
+                format!("Allow tool `{}` to {purpose}", call.name)
+            } else {
+                format!("Allow tool `{}` with current arguments", call.name)
+            }
+        }
+    };
+
+    ApprovalRequest {
+        title: "Tool Execution Approval".to_string(),
+        body,
+        action: serde_json::json!({
+            "operation": "tool_execution",
+            "tool_name": call.name,
+            "approval_kind": approval_kind,
+            "permission_rule": permission_rule,
+        }),
+    }
+}
+
+fn is_file_write_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "write" | "edit")
+}
+
+fn suggested_permission_rule(call: &ToolCall) -> Option<String> {
+    match call.name.as_str() {
+        "bash" => {
+            let command = call.arguments.get("command")?.as_str()?.trim();
+            if command.is_empty() {
+                return None;
+            }
+            Some(format!("Bash({command}*)"))
+        }
+        "write" | "edit" => {
+            let path = call.arguments.get("path")?.as_str()?.trim();
+            if path.is_empty() {
+                return None;
+            }
+            Some(format!("Edit({})", normalize_path_pattern(path)))
+        }
+        _ => None,
+    }
+}
+
+fn normalize_path_pattern(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    if std::path::Path::new(&path).is_absolute() {
+        return format!("//{}", path.trim_start_matches('/'));
+    }
+    if path.starts_with("./") {
+        return path;
+    }
+    if path.starts_with('/') {
+        return path;
+    }
+    format!("./{path}")
+}
+
 fn restore_session_approvals<T: ToolExecutor>(
     replayed_events: &[SessionEvent],
     tools: &T,
@@ -417,12 +512,19 @@ fn restore_session_approvals<T: ToolExecutor>(
         let SessionEvent::Approval {
             approved: true,
             action: Some(action),
-            choice: Some(ApprovalChoice::AllowSession),
+            choice: Some(choice),
             ..
         } = event
         else {
             continue;
         };
+
+        if !matches!(
+            choice,
+            ApprovalChoice::AllowSession | ApprovalChoice::AllowAlways
+        ) {
+            continue;
+        }
 
         if let Some(tool_name) = action.get("tool_name").and_then(|value| value.as_str())
             && action

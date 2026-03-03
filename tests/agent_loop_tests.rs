@@ -117,7 +117,7 @@ async fn agent_loop_stops_on_final_answer() {
     let agent = AgentLoop {
         provider,
         tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
         max_steps: 3,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
@@ -199,7 +199,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
     let agent = AgentLoop {
         provider,
         tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
         max_steps: 4,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
@@ -269,7 +269,7 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
     let agent = AgentLoop {
         provider,
         tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
         max_steps: 3,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
@@ -365,7 +365,7 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
     let agent = AgentLoop {
         provider,
         tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
         max_steps: 0,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
@@ -424,7 +424,7 @@ async fn agent_loop_respects_max_steps_when_set() {
     let agent = AgentLoop {
         provider,
         tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
         max_steps: 1,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
@@ -506,7 +506,7 @@ async fn agent_loop_injects_runtime_todo_state_message() {
     let agent = AgentLoop {
         provider,
         tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
         max_steps: 4,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
@@ -613,7 +613,7 @@ async fn agent_loop_todo_read_returns_current_runtime_snapshot() {
     let agent = AgentLoop {
         provider,
         tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
         max_steps: 4,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
@@ -718,7 +718,7 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
     let agent = AgentLoop {
         provider,
         tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
         max_steps: 4,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
@@ -818,7 +818,7 @@ async fn allow_session_choice_is_remembered_for_ask_policy_tools() {
     let agent = AgentLoop {
         provider,
         tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
         max_steps: 4,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
@@ -860,6 +860,179 @@ async fn allow_session_choice_is_remembered_for_ask_policy_tools() {
         std::fs::read_to_string(cwd.join("b.txt")).expect("read b.txt"),
         "two"
     );
+}
+
+#[tokio::test]
+async fn allow_always_choice_is_remembered_for_current_session() {
+    let provider = MockProvider {
+        responses: Arc::new(Mutex::new(vec![
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "writing files".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![
+                    ToolCall {
+                        id: "call-1".to_string(),
+                        name: "write".to_string(),
+                        arguments: json!({"path":"a.txt","content":"one"}),
+                    },
+                    ToolCall {
+                        id: "call-2".to_string(),
+                        name: "write".to_string(),
+                        arguments: json!({"path":"b.txt","content":"two"}),
+                    },
+                ],
+                done: false,
+                thinking: None,
+                context_tokens: None,
+            },
+            ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "done".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                },
+                tool_calls: vec![],
+                done: true,
+                thinking: None,
+                context_tokens: None,
+            },
+        ])),
+        stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("ws");
+    std::fs::create_dir_all(&cwd).expect("mkdir");
+
+    let settings = Settings::default();
+    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
+    let tools = ToolRegistry::new(&settings, &cwd);
+    let schemas = tools.schemas();
+
+    let agent = AgentLoop {
+        provider,
+        tools,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
+        max_steps: 4,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.selected_model_ref().to_string(),
+        session,
+        events: NoopEvents,
+    };
+
+    let approval_count = Arc::new(Mutex::new(0usize));
+    let approval_count_for_handler = Arc::clone(&approval_count);
+
+    let out = agent
+        .run(
+            Message {
+                role: Role::User,
+                content: "write two files".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            move |_request| {
+                let approval_count = Arc::clone(&approval_count_for_handler);
+                async move {
+                    *approval_count.lock().expect("approval count") += 1;
+                    Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                        hh_cli::core::ApprovalChoice::AllowAlways,
+                    )
+                }
+            },
+        )
+        .await
+        .expect("run");
+
+    assert_eq!(out, "done");
+    assert_eq!(*approval_count.lock().expect("approval count"), 1);
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("a.txt")).expect("read a.txt"),
+        "one"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("b.txt")).expect("read b.txt"),
+        "two"
+    );
+}
+
+#[tokio::test]
+async fn bash_approval_request_includes_llm_stated_purpose() {
+    let provider = MockProvider {
+        responses: Arc::new(Mutex::new(vec![ProviderResponse {
+            assistant_message: Message {
+                role: Role::Assistant,
+                content: "checking changes".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            tool_calls: vec![ToolCall {
+                id: "call-1".to_string(),
+                name: "bash".to_string(),
+                arguments: json!({
+                    "command": "git diff --name-only",
+                    "description": "inspect modified files"
+                }),
+            }],
+            done: false,
+            thinking: None,
+            context_tokens: None,
+        }])),
+        stream_events: vec![],
+        requests: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("ws");
+    std::fs::create_dir_all(&cwd).expect("mkdir");
+
+    let mut settings = Settings::default();
+    settings.permissions.bash = "ask".to_string();
+    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
+    let tools = ToolRegistry::new(&settings, &cwd);
+    let schemas = tools.schemas();
+
+    let agent = AgentLoop {
+        provider,
+        tools,
+        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
+        max_steps: 1,
+        system_prompt: settings.agent.resolved_system_prompt(),
+        model: settings.selected_model_ref().to_string(),
+        session,
+        events: NoopEvents,
+    };
+
+    let captured = Arc::new(Mutex::new(String::new()));
+    let captured_for_handler = Arc::clone(&captured);
+    let _ = agent
+        .run(
+            Message {
+                role: Role::User,
+                content: "show changed files".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            move |request| {
+                let captured_for_handler = Arc::clone(&captured_for_handler);
+                async move {
+                    *captured_for_handler.lock().expect("capture") = request.body;
+                    Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                        hh_cli::core::ApprovalChoice::Deny,
+                    )
+                }
+            },
+        )
+        .await;
+
+    let body = captured.lock().expect("captured body").clone();
+    assert!(body.contains("Allow `git diff --name-only` to inspect modified files"));
 }
 
 #[tokio::test]
@@ -911,7 +1084,7 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
     let agent1 = AgentLoop {
         provider: provider1,
         tools: tools1,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas1),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas1, &cwd),
         max_steps: 4,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
@@ -984,7 +1157,7 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
     let agent2 = AgentLoop {
         provider: provider2,
         tools: tools2,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas2),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas2, &cwd),
         max_steps: 4,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
@@ -1080,7 +1253,7 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
     let agent1 = AgentLoop {
         provider: provider1,
         tools: tools1,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas1),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas1, &cwd),
         max_steps: 4,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
@@ -1153,7 +1326,7 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
     let agent2 = AgentLoop {
         provider: provider2,
         tools: tools2,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas2),
+        approvals: PermissionMatcher::new(settings.clone(), &schemas2, &cwd),
         max_steps: 4,
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),

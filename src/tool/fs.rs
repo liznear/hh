@@ -137,7 +137,7 @@ impl FileAccessController {
         {
             Ok(target)
         } else {
-            let suggested_folder = suggested_folder_for_target(&target);
+            let suggested_folder = suggested_folder_for_target(&checked_target);
             Err(FileAccessError::OutsideAllowedFolders {
                 target,
                 suggested_folder,
@@ -165,7 +165,7 @@ impl FileAccessController {
         {
             Ok(target)
         } else {
-            let suggested_folder = suggested_folder_for_target(&target);
+            let suggested_folder = suggested_folder_for_target(&checked_target);
             Err(FileAccessError::OutsideAllowedFolders {
                 target,
                 suggested_folder,

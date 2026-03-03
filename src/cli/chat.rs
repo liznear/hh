@@ -20,7 +20,7 @@ use crate::cli::tui::{
     self, ChatApp, ModelOptionView, QuestionKeyResult, ScopedTuiEvent, SubmittedInput, TuiEvent,
     TuiEventSender,
 };
-use crate::config::Settings;
+use crate::config::{Settings, upsert_local_permission_rule};
 use crate::core::agent::subagent_manager::{
     SubagentExecutionRequest, SubagentExecutionResult, SubagentExecutor, SubagentManager,
     SubagentStatus,
@@ -1215,6 +1215,7 @@ async fn run_agent(
             prompt,
             move |request| {
                 let event_sender = approval_event_sender.clone();
+                let cwd = cwd.to_path_buf();
                 async move {
                     let question = approval_request_to_question_prompt(&request);
                     let (tx, rx) = oneshot::channel();
@@ -1227,10 +1228,10 @@ async fn run_agent(
                         Err(anyhow::anyhow!("approval prompt was cancelled"))
                     })?;
 
-                    Ok(
-                        parse_approval_choice(&answers)
-                            .unwrap_or(crate::core::ApprovalChoice::Deny),
-                    )
+                    let choice = parse_approval_choice(&request, &answers)
+                        .unwrap_or(crate::core::ApprovalChoice::Deny);
+                    persist_approval_choice_if_needed(&cwd, &request, choice)?;
+                    Ok(choice)
                 }
             },
             move |questions| {
@@ -1326,37 +1327,119 @@ fn validate_image_input_model_support(
 fn approval_request_to_question_prompt(
     request: &crate::core::ApprovalRequest,
 ) -> crate::core::QuestionPrompt {
-    crate::core::QuestionPrompt {
-        question: request.body.clone(),
-        header: request.title.clone(),
-        options: vec![
+    let is_bash = request
+        .action
+        .get("approval_kind")
+        .and_then(|value| value.as_str())
+        == Some("bash");
+
+    let permission_rule = request
+        .action
+        .get("permission_rule")
+        .and_then(|value| value.as_str());
+    let allow_desc = permission_rule
+        .map(|rule| format!("Persist allow rule `{rule}` in .hh/config.local.json."))
+        .unwrap_or_else(|| "Persist an allow rule in .hh/config.local.json.".to_string());
+    let deny_desc = permission_rule
+        .map(|rule| format!("Reject and persist deny rule `{rule}` in .hh/config.local.json."))
+        .unwrap_or_else(|| "Reject and persist a deny rule in .hh/config.local.json.".to_string());
+
+    let options = if is_bash {
+        vec![
+            crate::core::QuestionOption {
+                label: "Allow Once".to_string(),
+                description: "Approve this command a single time.".to_string(),
+            },
+            crate::core::QuestionOption {
+                label: "Always Allow".to_string(),
+                description: allow_desc,
+            },
+            crate::core::QuestionOption {
+                label: "Deny".to_string(),
+                description: deny_desc,
+            },
+        ]
+    } else {
+        vec![
             crate::core::QuestionOption {
                 label: "Allow Once".to_string(),
                 description: "Approve this action a single time.".to_string(),
             },
             crate::core::QuestionOption {
-                label: "Always Allow in Session".to_string(),
+                label: "Always Allow in this Session".to_string(),
                 description: "Remember this approval for the current session.".to_string(),
             },
             crate::core::QuestionOption {
                 label: "Deny".to_string(),
                 description: "Reject the action.".to_string(),
             },
-        ],
+        ]
+    };
+
+    crate::core::QuestionPrompt {
+        question: request.body.clone(),
+        header: request.title.clone(),
+        options,
         multiple: false,
         custom: false,
     }
 }
 
 fn parse_approval_choice(
+    request: &crate::core::ApprovalRequest,
     answers: &crate::core::QuestionAnswers,
 ) -> Option<crate::core::ApprovalChoice> {
+    let is_bash = request
+        .action
+        .get("approval_kind")
+        .and_then(|value| value.as_str())
+        == Some("bash");
     let label = answers.first()?.first()?.as_str();
-    match label {
-        "Allow Once" => Some(crate::core::ApprovalChoice::AllowOnce),
-        "Always Allow in Session" => Some(crate::core::ApprovalChoice::AllowSession),
-        "Deny" => Some(crate::core::ApprovalChoice::Deny),
-        _ => None,
+    if is_bash {
+        match label {
+            "Allow Once" => Some(crate::core::ApprovalChoice::AllowOnce),
+            "Always Allow" => Some(crate::core::ApprovalChoice::AllowAlways),
+            "Deny" => Some(crate::core::ApprovalChoice::Deny),
+            _ => None,
+        }
+    } else {
+        match label {
+            "Allow Once" => Some(crate::core::ApprovalChoice::AllowOnce),
+            "Always Allow in this Session" => Some(crate::core::ApprovalChoice::AllowSession),
+            "Deny" => Some(crate::core::ApprovalChoice::Deny),
+            _ => None,
+        }
+    }
+}
+
+fn persist_approval_choice_if_needed(
+    cwd: &Path,
+    request: &crate::core::ApprovalRequest,
+    choice: crate::core::ApprovalChoice,
+) -> anyhow::Result<()> {
+    let is_bash = request
+        .action
+        .get("approval_kind")
+        .and_then(|value| value.as_str())
+        == Some("bash");
+    if !is_bash {
+        return Ok(());
+    }
+
+    let Some(rule) = request
+        .action
+        .get("permission_rule")
+        .and_then(|value| value.as_str())
+    else {
+        return Ok(());
+    };
+
+    match choice {
+        crate::core::ApprovalChoice::AllowAlways => {
+            upsert_local_permission_rule(cwd, "allow", rule)
+        }
+        crate::core::ApprovalChoice::Deny => upsert_local_permission_rule(cwd, "deny", rule),
+        _ => Ok(()),
     }
 }
 
@@ -1426,8 +1509,16 @@ where
                 attachments: Vec::new(),
                 tool_call_id: None,
             },
-            |request| async move {
-                Ok::<crate::core::ApprovalChoice, anyhow::Error>(render::prompt_approval(&request)?)
+            |request| {
+                let cwd = cwd.to_path_buf();
+                async move {
+                    let question = approval_request_to_question_prompt(&request);
+                    let answers = render::ask_questions(&[question])?;
+                    let choice = parse_approval_choice(&request, &answers)
+                        .unwrap_or(crate::core::ApprovalChoice::Deny);
+                    persist_approval_choice_if_needed(&cwd, &request, choice)?;
+                    Ok::<crate::core::ApprovalChoice, anyhow::Error>(choice)
+                }
             },
             |questions| async move { Ok(render::ask_questions(&questions)?) },
         )
@@ -1497,7 +1588,7 @@ where
 
     let tool_registry = ToolRegistry::new_with_context(&settings, cwd, tool_context);
     let tool_schemas = tool_registry.schemas();
-    let permissions = PermissionMatcher::new(settings.clone(), &tool_schemas);
+    let permissions = PermissionMatcher::new(settings.clone(), &tool_schemas, cwd);
 
     Ok(AgentLoop {
         provider,
@@ -2175,7 +2266,7 @@ mod tests {
                 root: root.to_path_buf(),
             },
             tools: Default::default(),
-            permission: Default::default(),
+            permissions: Default::default(),
             selected_agent: None,
             agents: BTreeMap::new(),
         }
@@ -3179,5 +3270,50 @@ mod tests {
 
         assert!(!app.message_scroll.auto_follow);
         assert!(app.message_scroll.offset > 0);
+    }
+
+    #[test]
+    fn bash_approval_prompt_uses_always_allow_option() {
+        let request = crate::core::ApprovalRequest {
+            title: "Tool Execution Approval".to_string(),
+            body: "Allow `git diff --name-only`".to_string(),
+            action: serde_json::json!({
+                "operation": "tool_execution",
+                "tool_name": "bash",
+                "approval_kind": "bash",
+                "permission_rule": "Bash(git status*)"
+            }),
+        };
+
+        let prompt = approval_request_to_question_prompt(&request);
+        assert_eq!(prompt.question, "Allow `git diff --name-only`");
+        assert_eq!(prompt.options[1].label, "Always Allow");
+        assert!(prompt.options[1].description.contains("Bash(git status*)"));
+    }
+
+    #[test]
+    fn persist_bash_always_allow_updates_local_config() {
+        let temp_dir = tempdir().expect("tempdir");
+        let request = crate::core::ApprovalRequest {
+            title: "Tool Execution Approval".to_string(),
+            body: "Allow bash?".to_string(),
+            action: serde_json::json!({
+                "operation": "tool_execution",
+                "tool_name": "bash",
+                "approval_kind": "bash",
+                "permission_rule": "Bash(git status*)"
+            }),
+        };
+
+        persist_approval_choice_if_needed(
+            temp_dir.path(),
+            &request,
+            crate::core::ApprovalChoice::AllowAlways,
+        )
+        .expect("persist approval");
+
+        let local = std::fs::read_to_string(temp_dir.path().join(".hh/config.local.json"))
+            .expect("read local config");
+        assert!(local.contains("Bash(git status*)"));
     }
 }

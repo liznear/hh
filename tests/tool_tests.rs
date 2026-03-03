@@ -7,6 +7,9 @@ use hh_cli::tool::question::{QuestionTool, question_result};
 use hh_cli::tool::todo::{TodoReadTool, TodoWriteTool};
 use serde_json::json;
 
+#[cfg(unix)]
+use std::os::unix::fs as unix_fs;
+
 /// Helper to parse JSON output from a tool result
 fn parse_json_output(result: ToolResult) -> serde_json::Value {
     serde_json::from_str(&result.output).expect("json output")
@@ -76,6 +79,32 @@ async fn fs_read_returns_file_content() {
     assert_eq!(output["start"], 0);
     assert_eq!(output["end"], 1);
     assert_eq!(output["total_lines"], 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn fs_read_symlink_outside_workspace_requests_canonical_parent_folder() {
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let outside_file = outside.path().join("target.txt");
+    std::fs::write(&outside_file, "secret").expect("write outside file");
+
+    let symlink_path = workspace.path().join("link.txt");
+    unix_fs::symlink(&outside_file, &symlink_path).expect("create symlink");
+
+    let access = FileAccessController::new(workspace.path().to_path_buf()).expect("access");
+    let read_tool = FsRead::new(access);
+    let res = read_tool
+        .execute(json!({"path": symlink_path.display().to_string()}))
+        .await;
+
+    assert!(res.is_error);
+    assert_eq!(res.summary, "approval_required");
+    assert_eq!(res.payload["action"]["operation"], "allow_folder");
+    assert_eq!(
+        res.payload["action"]["folder"],
+        outside.path().display().to_string()
+    );
 }
 
 #[tokio::test]

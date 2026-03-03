@@ -94,9 +94,12 @@ The `task` tool is runtime-context dependent and may not appear in `hh tools` ou
 `hh` uses JSON config files:
 
 - Global: `~/.config/hh/config.json`
+- Claude project: `.claude/settings.json`
 - Project: `.hh/config.json`
+- Claude local project override: `.claude/settings.local.json`
+- Local project override: `.hh/config.local.json`
 
-Project config overrides global config.
+Precedence (lowest -> highest): global, `.claude/settings.json`, `.hh/config.json`, `.claude/settings.local.json`, `.hh/config.local.json`.
 
 ### Key Settings
 
@@ -104,7 +107,7 @@ Project config overrides global config.
 - `providers` - provider definitions (`base_url`, `api_key_env`, model metadata)
 - `agent` - runtime limits and behavior (`max_steps`, sub-agent settings, optional `system_prompt`)
 - `tools` - enable/disable tool groups (`fs`, `bash`, `web`)
-- `permission` - per-tool policies (`allow`/`ask`/`deny`)
+- `permissions` - per-tool policies (`allow`/`ask`/`deny`)
 - `session.root` - session storage root
 - `agents` - per-agent overrides (for example model selection)
 

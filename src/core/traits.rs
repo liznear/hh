@@ -15,6 +15,7 @@ pub enum ApprovalDecision {
 pub enum ApprovalChoice {
     AllowOnce,
     AllowSession,
+    AllowAlways,
     Deny,
 }
 
@@ -82,7 +83,7 @@ pub trait ToolExecutor: Send + Sync {
 }
 
 pub trait ApprovalPolicy: Send + Sync {
-    fn decision_for_tool(&self, tool_name: &str) -> ApprovalDecision;
+    fn decision_for_tool_call(&self, tool_name: &str, args: &Value) -> ApprovalDecision;
 }
 
 pub trait SessionSink: Send + Sync {

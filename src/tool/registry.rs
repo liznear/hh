@@ -158,6 +158,12 @@ impl ToolExecutor for ToolRegistry {
                     .map_err(|err| anyhow::anyhow!(err))?;
                 Ok(true)
             }
+            ApprovalChoice::AllowAlways => {
+                file_access
+                    .allow_folder_for_session(folder_path)
+                    .map_err(|err| anyhow::anyhow!(err))?;
+                Ok(true)
+            }
             ApprovalChoice::Deny => Ok(false),
         }
     }

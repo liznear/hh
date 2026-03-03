@@ -1,11 +1,11 @@
 use crate::agent::{AgentLoader, AgentRegistry};
 use crate::config::settings::Settings;
 use anyhow::Context;
+use serde_json::Value;
 use std::{env, fs, path::PathBuf};
 
 pub fn global_config_path() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    // Use ~/.config/hh/config.json consistently across platforms
     home.join(".config/hh/config.json")
 }
 
@@ -13,14 +13,32 @@ pub fn project_config_path(cwd: &std::path::Path) -> PathBuf {
     cwd.join(".hh/config.json")
 }
 
+pub fn claude_project_config_path(cwd: &std::path::Path) -> PathBuf {
+    cwd.join(".claude/settings.json")
+}
+
+pub fn local_config_path(cwd: &std::path::Path) -> PathBuf {
+    cwd.join(".hh/config.local.json")
+}
+
+pub fn claude_local_config_path(cwd: &std::path::Path) -> PathBuf {
+    cwd.join(".claude/settings.local.json")
+}
+
 pub fn load_settings(
     cwd: &std::path::Path,
     agent_name: Option<String>,
 ) -> anyhow::Result<Settings> {
-    let mut settings = Settings::default();
+    let mut merged = serde_json::to_value(Settings::default()).context("serialize defaults")?;
+    merge_settings_file(&mut merged, &global_config_path())?;
+    merge_settings_file(&mut merged, &claude_project_config_path(cwd))?;
+    merge_settings_file(&mut merged, &project_config_path(cwd))?;
+    merge_settings_file(&mut merged, &claude_local_config_path(cwd))?;
+    merge_settings_file(&mut merged, &local_config_path(cwd))?;
 
-    merge_settings_file(&mut settings, &global_config_path())?;
-    merge_settings_file(&mut settings, &project_config_path(cwd))?;
+    let mut settings: Settings =
+        serde_json::from_value(merged).context("deserialize merged settings")?;
+    settings.session.root = expand_path(&settings.session.root);
 
     settings.normalize_models();
     override_from_env(&mut settings.models.default, "HH_MODEL");
@@ -48,52 +66,62 @@ pub fn load_settings(
     Ok(settings)
 }
 
-fn merge_settings(base: &mut Settings, override_with: Settings) {
-    // Merge models - project config overrides global config if set
-    if !override_with.models.default.trim().is_empty() {
-        base.models = override_with.models;
-    }
-
-    // Merge providers - merge maps instead of replacing
-    for (provider_id, provider_config) in override_with.providers {
-        base.providers.insert(provider_id, provider_config);
-    }
-
-    // Merge agent settings - override with non-zero values
-    if override_with.agent.max_steps > 0 {
-        base.agent.max_steps = override_with.agent.max_steps;
-    }
-    if override_with.agent.sub_agent_max_depth > 0 {
-        base.agent.sub_agent_max_depth = override_with.agent.sub_agent_max_depth;
-    }
-    if override_with.agent.system_prompt.is_some() {
-        base.agent.system_prompt = override_with.agent.system_prompt;
-    }
-
-    // Merge tools settings
-    base.tools = override_with.tools;
-
-    // Merge permission settings
-    base.permission = override_with.permission;
-
-    // Merge session settings - project config overrides
-    if !override_with.session.root.as_os_str().is_empty() {
-        base.session.root = expand_path(&override_with.session.root);
-    }
-}
-
-fn merge_settings_file(settings: &mut Settings, path: &std::path::Path) -> anyhow::Result<()> {
+fn merge_settings_file(base: &mut Value, path: &std::path::Path) -> anyhow::Result<()> {
     if !path.exists() {
         return Ok(());
     }
 
     let content =
         fs::read_to_string(path).with_context(|| format!("failed reading {}", path.display()))?;
-    let value: Settings = serde_json::from_str(&content)
+    let value: Value = serde_json::from_str(&content)
         .with_context(|| format!("failed parsing {}", path.display()))?;
-    merge_settings(settings, value);
+    merge_json_value(base, value, &mut Vec::new());
 
     Ok(())
+}
+
+fn merge_json_value(base: &mut Value, incoming: Value, path: &mut Vec<String>) {
+    match (base, incoming) {
+        (Value::Object(base_obj), Value::Object(incoming_obj)) => {
+            for (key, incoming_value) in incoming_obj {
+                if let Some(base_value) = base_obj.get_mut(&key) {
+                    path.push(key.clone());
+                    merge_json_value(base_value, incoming_value, path);
+                    path.pop();
+                } else {
+                    base_obj.insert(key, incoming_value);
+                }
+            }
+        }
+        (Value::Array(base_arr), Value::Array(incoming_arr))
+            if is_merged_permission_rule_array(path) =>
+        {
+            for item in incoming_arr {
+                if !base_arr.contains(&item) {
+                    base_arr.push(item);
+                }
+            }
+        }
+        (base_slot, incoming_value) => {
+            *base_slot = incoming_value;
+        }
+    }
+}
+
+fn is_merged_permission_rule_array(path: &[String]) -> bool {
+    if path.len() < 2 {
+        return false;
+    }
+
+    let Some(last) = path.last() else {
+        return false;
+    };
+
+    if !matches!(last.as_str(), "allow" | "ask" | "deny") {
+        return false;
+    }
+
+    path[path.len() - 2].as_str() == "permissions"
 }
 
 fn override_from_env(target: &mut String, key: &str) {
@@ -156,4 +184,52 @@ pub fn write_default_project_config(cwd: &std::path::Path) -> anyhow::Result<Pat
     let text = serde_json::to_string_pretty(&default)?;
     std::fs::write(&config_path, text)?;
     Ok(config_path)
+}
+
+pub fn upsert_local_permission_rule(
+    cwd: &std::path::Path,
+    list_name: &str,
+    rule: &str,
+) -> anyhow::Result<()> {
+    if !matches!(list_name, "allow" | "deny") {
+        anyhow::bail!("unsupported permission list: {list_name}");
+    }
+
+    let config_path = local_config_path(cwd);
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut root = if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)?;
+        serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| Value::Object(Default::default()))
+    } else {
+        Value::Object(Default::default())
+    };
+
+    let root_obj = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("local config must be a JSON object"))?;
+    let permissions = root_obj
+        .entry("permissions")
+        .or_insert_with(|| Value::Object(Default::default()));
+    let permissions_obj = permissions
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("permissions must be a JSON object"))?;
+
+    let list = permissions_obj
+        .entry(list_name)
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let list_arr = list
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("permissions.{list_name} must be an array"))?;
+
+    let candidate = Value::String(rule.to_string());
+    if !list_arr.contains(&candidate) {
+        list_arr.push(candidate);
+    }
+
+    let text = serde_json::to_string_pretty(&root)?;
+    std::fs::write(config_path, text)?;
+    Ok(())
 }

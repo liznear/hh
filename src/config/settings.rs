@@ -12,7 +12,8 @@ pub struct Settings {
     pub providers: BTreeMap<String, ProviderConfig>,
     pub agent: AgentSettings,
     pub tools: ToolSettings,
-    pub permission: PermissionSettings,
+    #[serde(default)]
+    pub permissions: PermissionSettings,
     pub session: SessionSettings,
     #[serde(default)]
     pub selected_agent: Option<String>,
@@ -341,6 +342,12 @@ impl Default for ToolSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionSettings {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ask: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny: Vec<String>,
     pub read: String,
     pub list: String,
     pub glob: String,
@@ -365,6 +372,9 @@ pub struct PermissionSettings {
 impl Default for PermissionSettings {
     fn default() -> Self {
         Self {
+            allow: Vec::new(),
+            ask: Vec::new(),
+            deny: Vec::new(),
             read: "allow".to_string(),
             list: "allow".to_string(),
             glob: "allow".to_string(),
@@ -443,20 +453,20 @@ impl Settings {
         // Apply permission overrides
         for (capability, policy) in &agent.permission_overrides {
             match capability.as_str() {
-                "read" => self.permission.read = policy.clone(),
-                "list" => self.permission.list = policy.clone(),
-                "glob" => self.permission.glob = policy.clone(),
-                "grep" => self.permission.grep = policy.clone(),
-                "write" => self.permission.write = policy.clone(),
-                "edit" => self.permission.edit = policy.clone(),
-                "todo_write" => self.permission.todo_write = policy.clone(),
-                "todo_read" => self.permission.todo_read = policy.clone(),
-                "question" => self.permission.question = policy.clone(),
-                "task" => self.permission.task = policy.clone(),
-                "bash" => self.permission.bash = policy.clone(),
-                "web" => self.permission.web = policy.clone(),
+                "read" => self.permissions.read = policy.clone(),
+                "list" => self.permissions.list = policy.clone(),
+                "glob" => self.permissions.glob = policy.clone(),
+                "grep" => self.permissions.grep = policy.clone(),
+                "write" => self.permissions.write = policy.clone(),
+                "edit" => self.permissions.edit = policy.clone(),
+                "todo_write" => self.permissions.todo_write = policy.clone(),
+                "todo_read" => self.permissions.todo_read = policy.clone(),
+                "question" => self.permissions.question = policy.clone(),
+                "task" => self.permissions.task = policy.clone(),
+                "bash" => self.permissions.bash = policy.clone(),
+                "web" => self.permissions.web = policy.clone(),
                 _ => {
-                    self.permission
+                    self.permissions
                         .capabilities
                         .insert(capability.clone(), policy.clone());
                 }
