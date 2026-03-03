@@ -1,7 +1,6 @@
 use crate::tool::{Tool, ToolResult, ToolSchema, parse_tool_args};
 use async_trait::async_trait;
 use reqwest::StatusCode;
-use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -21,20 +20,6 @@ struct WebFetchOutput {
     body: String,
 }
 
-#[derive(Debug, Serialize)]
-struct SearchResult {
-    title: String,
-    url: String,
-    snippet: String,
-}
-
-#[derive(Debug, Serialize)]
-struct WebSearchOutput {
-    query: String,
-    count: usize,
-    results: Vec<SearchResult>,
-}
-
 #[derive(Debug, Deserialize)]
 struct WebFetchArgs {
     url: String,
@@ -43,6 +28,55 @@ struct WebFetchArgs {
 #[derive(Debug, Deserialize)]
 struct WebSearchArgs {
     query: String,
+}
+
+#[derive(Debug, Serialize)]
+struct McpRequest {
+    jsonrpc: &'static str,
+    id: u64,
+    method: &'static str,
+    params: McpParams,
+}
+
+#[derive(Debug, Serialize)]
+struct McpParams {
+    name: String,
+    arguments: McpArguments,
+}
+
+#[derive(Debug, Serialize)]
+struct McpArguments {
+    query: String,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "numResults")]
+    num_results: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    livecrawl: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "type")]
+    type_: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "contextMaxCharacters"
+    )]
+    context_max_characters: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct McpResponse {
+    #[serde(default)]
+    result: Option<McpResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct McpResult {
+    content: Vec<McpContent>,
+}
+
+#[derive(Debug, Deserialize)]
+struct McpContent {
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    content_type: String,
+    text: String,
 }
 
 enum WebRequestError {
@@ -173,20 +207,60 @@ impl Tool for WebSearchTool {
             return ToolResult::err_text("invalid_input", "query is required");
         }
 
-        let url = format!(
-            "https://html.duckduckgo.com/html/?q={}",
-            urlencoding::encode(&query)
-        );
+        let api_key = std::env::var("HH_EXA_API_KEY").ok();
 
-        let (status, html) = match send_and_read_text(self.client.get(&url)).await {
-            Ok(result) => result,
-            Err(WebRequestError::Request(err)) => {
+        let mcp_request = McpRequest {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: McpParams {
+                name: "web_search_exa".to_string(),
+                arguments: McpArguments {
+                    query: query.clone(),
+                    num_results: Some(8),
+                    livecrawl: Some("fallback".to_string()),
+                    type_: Some("auto".to_string()),
+                    context_max_characters: Some(10000),
+                },
+            },
+        };
+
+        let mut http_request = self
+            .client
+            .post("https://mcp.exa.ai/mcp")
+            .json(&mcp_request)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream");
+
+        if let Some(ref key) = api_key {
+            http_request = http_request.header("x-api-key", key);
+        }
+
+        let response = match http_request.send().await {
+            Ok(r) => r,
+            Err(err) => {
                 return ToolResult::err_text(
                     "request_error",
                     format!("search request failed: {}", err),
                 );
             }
-            Err(WebRequestError::ReadBody(err)) => {
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
+            return ToolResult::err_text(
+                "search_failed",
+                format!("search failed: status={}, body={}", status, error_body),
+            );
+        }
+
+        let response_text = match response.text().await {
+            Ok(text) => text,
+            Err(err) => {
                 return ToolResult::err_text(
                     "read_body_error",
                     format!("failed to read response: {}", err),
@@ -194,111 +268,30 @@ impl Tool for WebSearchTool {
             }
         };
 
-        if !status.is_success() {
-            return ToolResult::err_text(
-                "search_failed",
-                format!("search failed: status={status}"),
-            );
-        }
-
-        let results = parse_ddg_results(&html);
-        let output = WebSearchOutput {
-            query,
-            count: results.len(),
-            results,
-        };
-        ToolResult::ok_json_serializable("ok", &output)
-    }
-}
-
-fn parse_ddg_results(html: &str) -> Vec<SearchResult> {
-    let document = Html::parse_document(html);
-    let result_selector = match Selector::parse(".result") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let title_selector = match Selector::parse(".result__a") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let snippet_selector = match Selector::parse(".result__snippet") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut results = Vec::new();
-
-    for result in document.select(&result_selector) {
-        let title_el = result.select(&title_selector).next();
-        let title = title_el
-            .map(|el| el.text().collect::<String>())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-
-        let url = title_el
-            .and_then(|el| el.value().attr("href"))
-            .and_then(extract_ddg_url)
-            .unwrap_or_default();
-
-        let snippet = result
-            .select(&snippet_selector)
-            .next()
-            .map(|el| el.text().collect::<String>())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-
-        if !title.is_empty() {
-            results.push(SearchResult {
-                title,
-                url,
-                snippet,
-            });
-        }
-
-        if results.len() >= 5 {
-            break;
-        }
-    }
-
-    results
-}
-
-fn extract_ddg_url(redirect_url: &str) -> Option<String> {
-    // DuckDuckGo redirect URLs are like: /l/?uddg=URL&rut=...
-    let prefix = "/l/?uddg=";
-    if let Some(start) = redirect_url.find(prefix) {
-        let encoded = &redirect_url[start + prefix.len()..];
-        let encoded = if let Some(end) = encoded.find('&') {
-            &encoded[..end]
-        } else {
-            encoded
-        };
-        // URL decode the result
-        return Some(urlencoding_decode(encoded));
-    }
-    None
-}
-
-fn urlencoding_decode(s: &str) -> String {
-    // Simple URL decoding - replace + with space and decode %xx sequences
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '+' {
-            result.push(' ');
-        } else if c == '%' {
-            let hex: String = chars.by_ref().take(2).collect();
-            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                result.push(byte as char);
-            } else {
-                result.push('%');
-                result.push_str(&hex);
+        // Parse SSE response
+        for line in response_text.lines() {
+            if let Some(json_str) = line.strip_prefix("data: ") {
+                match serde_json::from_str::<McpResponse>(json_str) {
+                    Ok(mcp_response) => {
+                        if let Some(result) = mcp_response.result
+                            && let Some(content) = result.content.first()
+                        {
+                            return ToolResult::ok_text("ok", content.text.clone());
+                        }
+                    }
+                    Err(err) => {
+                        return ToolResult::err_text(
+                            "parse_error",
+                            format!("failed to parse MCP response: {}", err),
+                        );
+                    }
+                }
             }
-        } else {
-            result.push(c);
         }
+
+        ToolResult::err_text(
+            "no_results",
+            "No search results found. Please try a different query.",
+        )
     }
-    result
 }
