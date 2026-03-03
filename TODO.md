@@ -1,5 +1,5 @@
-- [ ] Support fine-grained bash permissions like claude.
-- [ ] Support permission spec like .claude/settings.local.json.
+- [x] Support fine-grained bash permissions like claude.
+- [x] Support permission spec like .claude/settings.local.json.
 - [ ] Update tool call rendering: don't mute.
 - [ ] Make "Modified Files" / "TODO" items foldable.
 - [ ] Highlight the current WIP todo item.
