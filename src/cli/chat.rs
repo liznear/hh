@@ -27,7 +27,7 @@ use self::agent_run::{
 use self::commands::handle_submitted_input;
 use self::input::{
     InputEvent, apply_paste, handle_area_scroll, handle_input_batch, handle_key_event,
-    handle_mouse_click, handle_mouse_drag, handle_mouse_release,
+    handle_mouse_click, handle_mouse_drag, handle_mouse_release, load_session_messages,
 };
 #[cfg(test)]
 use self::session::handle_session_selection;
@@ -150,7 +150,7 @@ async fn run_interactive_chat_loop(
                         tui_guard.get().clear()?;
                     }
                     InputEvent::MouseClick { x, y } => {
-                        handle_mouse_click(app, x, y, tui_guard.get());
+                        handle_mouse_click(app, x, y, tui_guard.get(), runner.settings, runner.cwd);
                     }
                     InputEvent::MouseDrag { x, y } => {
                         handle_mouse_drag(app, x, y, tui_guard.get());
@@ -213,6 +213,17 @@ async fn run_interactive_chat_loop(
                 }
             }
             _ = render_tick.tick() => {
+                if let Some(subagent_view) = app.active_subagent_session()
+                    && let Ok(messages) = load_session_messages(
+                        runner.settings,
+                        runner.cwd,
+                        &subagent_view.session_id,
+                    )
+                {
+                    app.replace_active_subagent_messages(messages);
+                    needs_redraw = true;
+                }
+
                 if app.on_periodic_tick() {
                     needs_redraw = true;
                 }
@@ -515,6 +526,8 @@ mod tests {
             created_at: 0,
             last_updated_at: 0,
             parent_session_id: None,
+            is_child_session: false,
+            parent_tool_call_id: None,
         }];
         app.is_picking_session = true;
 

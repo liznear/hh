@@ -49,22 +49,29 @@ pub(super) fn build_sidebar_lines(app: &ChatApp, content_width: u16) -> Vec<Line
 
     let directory_text =
         format_sidebar_directory(&app.working_directory, app.git_branch.as_deref());
-    let mut lines: Vec<Line<'static>> = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            sidebar_prefixed(&app.session_name),
-            Style::default().fg(TEXT_PRIMARY).bold(),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            sidebar_prefixed(&abbreviate_path(
-                &directory_text,
-                content_width.saturating_sub(2) as usize,
-            )),
+    let mut lines: Vec<Line<'static>> = vec![Line::from("")];
+    lines.push(Line::from(Span::styled(
+        sidebar_prefixed(&app.session_name),
+        Style::default().fg(TEXT_PRIMARY).bold(),
+    )));
+    lines.push(Line::from(""));
+
+    if let Some(subagent) = app.active_subagent_session() {
+        lines.push(Line::from(Span::styled(
+            sidebar_prefixed(&format!("-> Subagent Session: {}", subagent.title)),
             Style::default().fg(TEXT_PRIMARY),
+        )));
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(Span::styled(
+        sidebar_prefixed(&abbreviate_path(
+            &directory_text,
+            content_width.saturating_sub(2) as usize,
         )),
-        Line::from(""),
-    ];
+        Style::default().fg(TEXT_PRIMARY),
+    )));
+    lines.push(Line::from(""));
 
     let mut sections: Vec<Vec<Line<'static>>> = Vec::new();
     sections.push(vec![

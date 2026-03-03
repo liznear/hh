@@ -173,6 +173,7 @@ pub(super) fn map_subagent_node_event(
 
     tui::SubagentEventItem {
         task_id: node.task_id.clone(),
+        session_id: node.session_id.clone(),
         name: node.name.clone(),
         agent_name: node.agent_name.clone(),
         status,

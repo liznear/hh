@@ -43,6 +43,7 @@ struct AvailableSubagent {
 #[derive(Debug, Serialize)]
 struct TaskToolOutput {
     task_id: String,
+    session_id: String,
     name: String,
     description: String,
     status: String,
@@ -113,6 +114,11 @@ impl Tool for TaskTool {
     }
 
     async fn execute(&self, args: serde_json::Value) -> ToolResult {
+        let call_id = args
+            .get("__call_id")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string);
+
         let parsed: TaskToolArgs = match parse_tool_args(args, "task") {
             Ok(value) => value,
             Err(err) => return err,
@@ -164,6 +170,7 @@ impl Tool for TaskTool {
                     description: parsed.description,
                     prompt: parsed.prompt.clone(),
                     subagent_type: parsed.subagent_type.clone(),
+                    call_id,
                     resume_task_id: None,
                     parent_session_id: self.context.parent_session_id.clone(),
                     parent_task_id: self.context.parent_task_id.clone(),
@@ -192,6 +199,7 @@ impl Tool for TaskTool {
 
         let output = TaskToolOutput {
             task_id,
+            session_id: completed.session_id,
             name: completed.name,
             description: task_description,
             status: completed.status.label().to_string(),

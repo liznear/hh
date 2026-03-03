@@ -44,6 +44,29 @@ fn test_tool_start_rendering() {
 }
 
 #[test]
+fn pending_task_row_shows_click_to_open_hint() {
+    let mut app = ChatApp::default();
+    app.messages.push(ChatMessage::ToolCall {
+        name: "task".to_string(),
+        args: json!({
+            "name": "Check",
+            "description": "desc",
+            "prompt": "prompt",
+            "subagent_type": "explore"
+        })
+        .to_string(),
+        output: None,
+        is_error: None,
+    });
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert!(rendered.iter().any(|line| line.contains("(click to open)")));
+}
+
+#[test]
 fn test_tool_end_rendering() {
     let mut app = ChatApp::default();
     // Compact rendering shows the original action label, not the output
@@ -80,6 +103,67 @@ fn test_tool_start_wrapping() {
     let lines = build_message_lines(&app, 50);
     // Should wrap
     assert!(lines.len() > 1, "Expected multiple lines for long args");
+}
+
+#[test]
+fn failed_tool_call_renders_error_detail_line() {
+    let mut app = ChatApp::default();
+    app.messages.push(ChatMessage::ToolCall {
+        name: "test_tool".to_string(),
+        args: "\"arg1\"".to_string(),
+        output: Some("permission denied: missing credentials".to_string()),
+        is_error: Some(true),
+    });
+
+    let lines = build_message_lines(&app, 120);
+    let rendered: Vec<String> = lines.iter().map(line_text).collect();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("✗") && line.contains("Test Tool"))
+    );
+
+    let detail_line = lines
+        .iter()
+        .find(|line| line_text(line).contains("└ permission denied: missing credentials"))
+        .expect("tool error detail line");
+    let detail_span = detail_line
+        .spans
+        .iter()
+        .find(|span| span.content.contains("permission denied"))
+        .expect("error detail text span");
+    assert_eq!(detail_span.style.fg, Some(Color::Red));
+}
+
+#[test]
+fn failed_tool_call_long_error_wraps_with_child_indent() {
+    let mut app = ChatApp::default();
+    app.messages.push(ChatMessage::ToolCall {
+        name: "test_tool".to_string(),
+        args: "\"arg1\"".to_string(),
+        output: Some(
+            "this is a very long tool error message that should wrap cleanly across multiple lines without losing indentation"
+                .to_string(),
+        ),
+        is_error: Some(true),
+    });
+
+    let rendered: Vec<String> = build_message_lines(&app, 45)
+        .iter()
+        .map(line_text)
+        .collect();
+
+    let first_error_idx = rendered
+        .iter()
+        .position(|line| line.contains("└ this is a very long"))
+        .expect("first wrapped error line");
+    let wrapped_line = rendered
+        .get(first_error_idx + 1)
+        .expect("wrapped continuation line");
+
+    let layout = test_layout();
+    assert!(wrapped_line.starts_with(&" ".repeat(layout.message_indent_width() + 4)));
 }
 
 #[test]
@@ -1407,4 +1491,88 @@ fn custom_typed_value_renders_once() {
         .collect::<String>();
 
     assert_eq!(full_text.match_indices("asdf").count(), 1);
+}
+
+#[test]
+fn subagent_session_view_sidebar_and_back_hint_render() {
+    let mut app = ChatApp::default();
+    app.session_name = "Parent Session".to_string();
+    app.subagent_items.push(crate::cli::tui::SubagentItemView {
+        task_id: "task-1".to_string(),
+        session_id: "session-1".to_string(),
+        name: "Inspect code".to_string(),
+        parent_task_id: None,
+        agent_name: "general".to_string(),
+        prompt: "scan repo".to_string(),
+        summary: None,
+        depth: 1,
+        started_at: 1,
+        finished_at: None,
+        status: crate::cli::tui::SubagentStatusView::Running,
+    });
+    app.open_subagent_session(
+        "task-1".to_string(),
+        "session-1".to_string(),
+        "Inspect code".to_string(),
+        vec![ChatMessage::Assistant("child message".to_string())],
+    );
+
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let buffer = terminal.backend().buffer();
+    let full_text = buffer
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(full_text.contains("Parent Session"));
+    assert!(full_text.contains("-> Subagent Session: Inspect code"));
+    assert!(full_text.contains("esc back to main agent"));
+    assert!(!full_text.contains("<- Back"));
+}
+
+#[test]
+fn completed_subagent_session_shows_footer_instead_of_back_hint() {
+    let mut app = ChatApp::default();
+    app.subagent_items.push(crate::cli::tui::SubagentItemView {
+        task_id: "task-1".to_string(),
+        session_id: "session-1".to_string(),
+        name: "Inspect code".to_string(),
+        parent_task_id: None,
+        agent_name: "general".to_string(),
+        prompt: "scan repo".to_string(),
+        summary: Some("done".to_string()),
+        depth: 1,
+        started_at: 1,
+        finished_at: Some(9),
+        status: crate::cli::tui::SubagentStatusView::Completed,
+    });
+    app.open_subagent_session(
+        "task-1".to_string(),
+        "session-1".to_string(),
+        "Inspect code".to_string(),
+        vec![ChatMessage::Assistant("child message".to_string())],
+    );
+
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| render_app(frame, &app))
+        .expect("draw app");
+
+    let full_text = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+
+    assert!(full_text.contains("✓"));
+    assert!(!full_text.contains("esc back to main agent"));
 }

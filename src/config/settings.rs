@@ -311,7 +311,7 @@ fn default_parallel_subagents() -> bool {
 }
 
 fn default_max_parallel_subagents() -> usize {
-    2
+    5
 }
 
 impl AgentSettings {

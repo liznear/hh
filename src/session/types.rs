@@ -116,4 +116,8 @@ pub struct SessionMetadata {
     pub last_updated_at: u64, // Unix timestamp
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<String>,
+    #[serde(default)]
+    pub is_child_session: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_tool_call_id: Option<String>,
 }

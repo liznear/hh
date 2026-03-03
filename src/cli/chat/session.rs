@@ -182,6 +182,7 @@ pub(super) fn handle_session_selection(
             SessionEvent::SubAgentStart {
                 id,
                 task_id,
+                session_id,
                 name,
                 parent_id,
                 agent_name,
@@ -196,6 +197,7 @@ pub(super) fn handle_session_selection(
                     task_id.clone(),
                     tui::SubagentItemView {
                         task_id,
+                        session_id: session_id.unwrap_or_default(),
                         name: name
                             .or_else(|| agent_name.clone())
                             .unwrap_or_else(|| "subagent".to_string()),
@@ -223,6 +225,7 @@ pub(super) fn handle_session_selection(
                     .entry(task_id.clone())
                     .or_insert_with(|| tui::SubagentItemView {
                         task_id,
+                        session_id: String::new(),
                         name: "subagent".to_string(),
                         parent_task_id: None,
                         agent_name: "subagent".to_string(),

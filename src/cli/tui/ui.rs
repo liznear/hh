@@ -16,7 +16,7 @@ mod overlays;
 mod sidebar;
 mod theme;
 
-use super::app::{ChatApp, ChatMessage};
+use super::app::{ChatApp, ChatMessage, SubagentStatusView};
 use super::markdown::markdown_to_lines_with_indent;
 use super::tool_presentation::render_tool_start;
 use theme::*;
@@ -71,6 +71,34 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
     } else {
         None
     };
+
+    if app.is_viewing_subagent_session() {
+        let main_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(3),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(main_area);
+
+        render_messages(f, app, main_chunks[0]);
+        render_subagent_back_indicator(f, app, main_chunks[2], layout);
+
+        if let Some(area) = sidebar_area {
+            let sidebar_bottom = main_chunks[2].bottom();
+            let clipped_sidebar_area = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: sidebar_bottom.saturating_sub(area.y),
+            };
+            render_sidebar(f, app, clipped_sidebar_area);
+        }
+
+        render_clipboard_notice(f, app);
+        return;
+    }
 
     let input_content_width = main_area
         .width
@@ -129,6 +157,219 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
     }
 
     render_clipboard_notice(f, app);
+}
+
+fn render_subagent_back_indicator(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
+    let Some(view) = app.active_subagent_session() else {
+        return;
+    };
+
+    let subagent_item = app
+        .subagent_items
+        .iter()
+        .find(|item| item.task_id == view.task_id);
+    let duration_secs = subagent_item
+        .map(|item| {
+            let end = item.finished_at.unwrap_or_else(now_unix_secs);
+            end.saturating_sub(item.started_at)
+        })
+        .unwrap_or(0);
+
+    let is_terminal = subagent_item.is_some_and(|item| item.status.is_terminal());
+    if is_terminal {
+        render_subagent_footer_line(f, app, area, layout, duration_secs, subagent_item);
+        return;
+    }
+
+    let mut spans: Vec<Span<'static>> = vec![Span::raw(layout.message_indent())];
+    let bar_len = area.width.saturating_sub(44).clamp(6, 10) as usize;
+    let head = scanner_position(now_step(85), bar_len, 6);
+    let base_color = app
+        .selected_agent()
+        .and_then(|agent| agent.color.as_ref())
+        .and_then(|color_str| crate::agent::parse_color(color_str))
+        .unwrap_or(PROGRESS_HEAD);
+
+    for idx in 0..bar_len {
+        let distance = head.abs_diff(idx);
+        let (glyph, style) = if distance == 0 {
+            (
+                "■",
+                Style::default()
+                    .fg(base_color)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )
+        } else if distance == 1 {
+            (
+                "■",
+                Style::default().fg(blend_color_with_white(base_color, 0.30)),
+            )
+        } else if distance == 2 {
+            (
+                "■",
+                Style::default().fg(blend_color_with_white(base_color, 0.40)),
+            )
+        } else {
+            (
+                "⬝",
+                Style::default().fg(blend_color_with_white(base_color, 0.52)),
+            )
+        };
+        spans.push(Span::styled(glyph, style));
+    }
+
+    spans.push(Span::raw(PROCESSING_STATUS_GAP));
+    spans.push(Span::styled(
+        format_elapsed_seconds(duration_secs),
+        Style::default().fg(TEXT_MUTED),
+    ));
+    spans.push(Span::raw(PROCESSING_STATUS_GAP));
+    spans.push(Span::styled("esc", Style::default().fg(TEXT_MUTED)));
+    spans.push(Span::styled(
+        " back to main agent",
+        Style::default().fg(TEXT_MUTED),
+    ));
+
+    let paragraph =
+        ratatui::widgets::Paragraph::new(Line::from(spans)).style(Style::default().bg(PAGE_BG));
+    f.render_widget(paragraph, area);
+}
+
+fn render_subagent_footer_line(
+    f: &mut Frame,
+    app: &ChatApp,
+    area: Rect,
+    layout: UiLayout,
+    duration_secs: u64,
+    item: Option<&super::app::SubagentItemView>,
+) {
+    let agent = app.selected_agent();
+    let agent_color = agent
+        .and_then(|a| a.color.as_ref())
+        .and_then(|c| crate::agent::parse_color(c))
+        .unwrap_or(TEXT_PRIMARY);
+
+    let provider_name = app
+        .available_models
+        .iter()
+        .find(|model| model.full_id == app.selected_model_ref())
+        .map(|model| model.provider_name.clone())
+        .unwrap_or_default();
+    let model_name = app
+        .available_models
+        .iter()
+        .find(|model| model.full_id == app.selected_model_ref())
+        .map(|model| model.model_name.clone())
+        .unwrap_or_default();
+
+    let is_failed = item.is_some_and(|row| {
+        matches!(
+            row.status,
+            SubagentStatusView::Failed | SubagentStatusView::Cancelled
+        )
+    });
+    let (status_symbol, status_color) = if is_failed {
+        ("✗", Color::Red)
+    } else {
+        ("✓", Color::Rgb(25, 110, 61))
+    };
+
+    let mut spans = vec![
+        Span::raw(layout.message_indent()),
+        Span::styled(status_symbol, Style::default().fg(status_color)),
+        Span::raw("  "),
+        Span::styled(
+            app.selected_agent()
+                .map(|a| a.display_name.clone())
+                .unwrap_or_else(|| "Agent".to_string()),
+            Style::default().fg(agent_color),
+        ),
+        Span::raw("  "),
+        Span::styled(provider_name, Style::default().fg(TEXT_MUTED)),
+        Span::raw(" "),
+        Span::styled(model_name, Style::default().fg(TEXT_MUTED)),
+        Span::raw("  "),
+        Span::styled(
+            format_elapsed_seconds(duration_secs),
+            Style::default().fg(TEXT_PRIMARY),
+        ),
+    ];
+
+    if is_failed {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled("interrupted", Style::default().fg(Color::Red)));
+    }
+
+    let paragraph =
+        ratatui::widgets::Paragraph::new(Line::from(spans)).style(Style::default().bg(PAGE_BG));
+    f.render_widget(paragraph, area);
+}
+
+fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
+fn now_step(interval_ms: u128) -> usize {
+    let elapsed_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    let interval = interval_ms.max(1);
+    (elapsed_ms / interval) as usize
+}
+
+fn scanner_position(step: usize, width: usize, hold_frames: usize) -> usize {
+    if width <= 1 {
+        return 0;
+    }
+
+    let travel = width - 1;
+    let cycle = hold_frames + travel + hold_frames + travel;
+    let phase = step % cycle;
+
+    if phase < hold_frames {
+        0
+    } else if phase < hold_frames + travel {
+        phase - hold_frames
+    } else if phase < hold_frames + travel + hold_frames {
+        travel
+    } else {
+        travel - (phase - hold_frames - travel - hold_frames)
+    }
+}
+
+fn blend_color_with_white(color: Color, amount: f64) -> Color {
+    let amount = amount.clamp(0.0, 1.0);
+    let to_rgb = match color {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        Color::Black => Some((0, 0, 0)),
+        Color::Red => Some((255, 0, 0)),
+        Color::Green => Some((0, 200, 0)),
+        Color::Yellow => Some((220, 180, 0)),
+        Color::Blue => Some((0, 102, 255)),
+        Color::Magenta => Some((200, 0, 200)),
+        Color::Cyan => Some((0, 180, 200)),
+        Color::White => Some((255, 255, 255)),
+        Color::Gray | Color::DarkGray => Some((128, 128, 128)),
+        Color::LightRed => Some((255, 110, 103)),
+        Color::LightGreen => Some((105, 255, 105)),
+        Color::LightYellow => Some((255, 255, 105)),
+        Color::LightBlue => Some((98, 114, 164)),
+        Color::LightMagenta => Some((246, 108, 181)),
+        Color::LightCyan => Some((114, 159, 207)),
+        Color::Indexed(_) | Color::Reset => None,
+    };
+
+    if let Some((r, g, b)) = to_rgb {
+        Color::Rgb(
+            (r as f64 + (255.0 - r as f64) * amount).round() as u8,
+            (g as f64 + (255.0 - g as f64) * amount).round() as u8,
+            (b as f64 + (255.0 - b as f64) * amount).round() as u8,
+        )
+    } else {
+        color
+    }
 }
 
 fn render_clipboard_notice(f: &mut Frame, app: &ChatApp) {
@@ -321,6 +562,7 @@ fn render_message_line_item(
             args,
             output,
             is_error,
+            ..
         } => {
             if idx > 0 && matches!(app.messages.get(idx - 1), Some(ChatMessage::Assistant(_))) {
                 ensure_single_blank_line(lines);
@@ -668,7 +910,7 @@ fn render_completed_tool_call(
     } else {
         append_tool_result_count(completed.name, completed.label, completed.output)
     };
-    let symbol = if completed.is_error { "x" } else { "✓" };
+    let symbol = if completed.is_error { "✗" } else { "✓" };
     let color = if completed.is_error {
         Color::Red
     } else {
@@ -687,6 +929,91 @@ fn render_completed_tool_call(
         vec![Span::raw(context.style.done_continuation.to_string())],
         Style::default().fg(TEXT_SECONDARY),
     );
+
+    if completed.is_error {
+        render_tool_error_detail(lines, completed.output, context);
+    }
+}
+
+fn render_tool_error_detail(
+    lines: &mut Vec<Line<'static>>,
+    output: Option<&str>,
+    context: ToolRenderContext<'_>,
+) {
+    let Some(error_text) = extract_tool_error_text(output) else {
+        return;
+    };
+
+    let wrapped = wrap_compact_text(
+        &error_text,
+        context.available_width.saturating_sub(2).max(1),
+    );
+
+    push_wrapped_tool_rows(
+        lines,
+        &wrapped,
+        vec![
+            Span::raw(context.layout.message_child_indent()),
+            Span::styled("└ ", Style::default().fg(Color::Red)),
+        ],
+        vec![
+            Span::raw(context.layout.message_child_indent()),
+            Span::raw("  "),
+        ],
+        Style::default().fg(Color::Red),
+    );
+}
+
+fn extract_tool_error_text(output: Option<&str>) -> Option<String> {
+    let trimmed = output?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let Ok(parsed) = serde_json::from_str::<Value>(trimmed) else {
+        return Some(trimmed.to_string());
+    };
+
+    extract_error_message_from_json(&parsed)
+        .or_else(|| serde_json::to_string_pretty(&parsed).ok())
+        .filter(|text| !text.trim().is_empty())
+}
+
+fn extract_error_message_from_json(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Value::Array(items) => items.iter().find_map(extract_error_message_from_json),
+        Value::Object(map) => {
+            const PRIORITY_KEYS: [&str; 7] = [
+                "error", "message", "stderr", "details", "detail", "reason", "summary",
+            ];
+
+            for key in PRIORITY_KEYS {
+                if let Some(value) = map.get(key)
+                    && let Some(message) = extract_error_message_from_json(value)
+                {
+                    return Some(message);
+                }
+            }
+
+            map.values().find_map(extract_error_message_from_json)
+        }
+        _ => {
+            let as_text = value.to_string();
+            if as_text.trim().is_empty() {
+                None
+            } else {
+                Some(as_text)
+            }
+        }
+    }
 }
 
 fn render_pending_tool_call(
@@ -700,7 +1027,10 @@ fn render_pending_tool_call(
 ) {
     let pending_label = if tool_name == "task" {
         let elapsed = task_pending_elapsed_secs(args).unwrap_or(0);
-        format!("{label}  {}", format_elapsed_seconds(elapsed))
+        format!(
+            "{label}  {}  (click to open)",
+            format_elapsed_seconds(elapsed)
+        )
     } else {
         label.to_string()
     };
@@ -742,7 +1072,7 @@ fn task_completed_label(base_label: &str, output: Option<&str>) -> String {
     let label = format!("Task [{}]: {}", title_case(&parsed.agent_name), parsed.name);
     let finished = parsed.finished_at.unwrap_or(parsed.started_at);
     format!(
-        "{}  {}",
+        "{}  {}  (click to open)",
         label,
         format_elapsed_seconds(finished.saturating_sub(parsed.started_at))
     )

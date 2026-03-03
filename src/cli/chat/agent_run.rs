@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::cli::chat::session::{fallback_session_title, spawn_session_title_generation_task};
@@ -81,6 +82,13 @@ async fn run_agent(
     let approval_event_sender = event_sender.clone();
     let allow_questions = options.allow_questions;
     let parent_session_id = options.session_id.clone();
+    let mut subagent_poller = parent_session_id.as_ref().map(|session_id| {
+        start_subagent_poller(
+            Arc::clone(&subagent_manager),
+            event_sender.clone(),
+            session_id.clone(),
+        )
+    });
     let loop_runner = create_agent_loop(
         settings,
         cwd,
@@ -137,22 +145,41 @@ async fn run_agent(
         )
         .await?;
 
+    if let Some((stop_tx, handle)) = subagent_poller.take() {
+        let _ = stop_tx.send(());
+        let _ = handle.await;
+    }
+
     if let Some(parent_session_id) = parent_session_id.as_deref() {
+        let nodes = subagent_manager.list_for_parent(parent_session_id).await;
+        event_sender.send(TuiEvent::SubagentsChanged(
+            nodes.iter().map(map_subagent_node_event).collect(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn start_subagent_poller(
+    subagent_manager: Arc<SubagentManager>,
+    event_sender: TuiEventSender,
+    parent_session_id: String,
+) -> (oneshot::Sender<()>, JoinHandle<()>) {
+    let (stop_tx, mut stop_rx) = oneshot::channel();
+    let handle = tokio::spawn(async move {
         loop {
-            let nodes = subagent_manager.list_for_parent(parent_session_id).await;
+            let nodes = subagent_manager.list_for_parent(&parent_session_id).await;
             event_sender.send(TuiEvent::SubagentsChanged(
                 nodes.iter().map(map_subagent_node_event).collect(),
             ));
 
-            if nodes.iter().all(|node| node.status.is_terminal()) {
-                break;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+                _ = &mut stop_rx => break,
             }
-
-            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-    }
-
-    Ok(())
+    });
+    (stop_tx, handle)
 }
 
 fn validate_image_input_model_support(
@@ -343,6 +370,7 @@ where
             session_id.as_deref(),
             session_title,
             Some(parent_session_id),
+            parent_task_id.clone(),
         )?,
         None => SessionStore::new(
             &settings.session.root,

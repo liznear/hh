@@ -10,6 +10,7 @@ use crate::core::agent::AgentEvents;
 #[derive(Debug, Clone)]
 pub struct SubagentEventItem {
     pub task_id: String,
+    pub session_id: String,
     pub name: String,
     pub agent_name: String,
     pub status: String,

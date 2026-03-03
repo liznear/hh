@@ -241,11 +241,16 @@ where
                 }
 
                 if self.tools.is_non_blocking(&call.name) {
-                    let event_args = decorate_tool_start_args(&call.name, &call.arguments);
+                    let event_args =
+                        decorate_tool_start_args(&call.id, &call.name, &call.arguments);
+                    let execution_args = if call.name == "task" {
+                        event_args.clone()
+                    } else {
+                        call.arguments.clone()
+                    };
                     self.events.on_tool_start(&call.name, &event_args);
                     pending_non_blocking.push(async {
-                        let mut result =
-                            self.tools.execute(&call.name, call.arguments.clone()).await;
+                        let mut result = self.tools.execute(&call.name, execution_args).await;
                         result.output = sanitize_tool_output(&result.output);
                         (call, result)
                     });
@@ -296,12 +301,17 @@ where
         APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
     {
         loop {
-            let event_args = decorate_tool_start_args(&call.name, &call.arguments);
+            let event_args = decorate_tool_start_args(&call.id, &call.name, &call.arguments);
+            let execution_args = if call.name == "task" {
+                event_args.clone()
+            } else {
+                call.arguments.clone()
+            };
             self.events.on_tool_start(&call.name, &event_args);
             let mut result = if call.name == "todo_read" {
                 todo_snapshot_result(&state.todo_items)
             } else {
-                self.tools.execute(&call.name, call.arguments.clone()).await
+                self.tools.execute(&call.name, execution_args).await
             };
 
             if let Some(request) = parse_approval_request(&result) {
@@ -389,7 +399,11 @@ where
     }
 }
 
-fn decorate_tool_start_args(name: &str, args: &serde_json::Value) -> serde_json::Value {
+fn decorate_tool_start_args(
+    call_id: &str,
+    name: &str,
+    args: &serde_json::Value,
+) -> serde_json::Value {
     if name != "task" {
         return args.clone();
     }
@@ -398,6 +412,10 @@ fn decorate_tool_start_args(name: &str, args: &serde_json::Value) -> serde_json:
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     obj.insert("__started_at".to_string(), serde_json::Value::from(now));
+    obj.insert(
+        "__call_id".to_string(),
+        serde_json::Value::from(call_id.to_string()),
+    );
     serde_json::Value::Object(obj)
 }
 

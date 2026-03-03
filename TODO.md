@@ -3,7 +3,9 @@
 - [ ] Update tool call rendering: don't mute.
 - [ ] Make "Modified Files" / "TODO" items foldable.
 - [ ] Highlight the current WIP todo item.
+- [x] Make subagent clickable.
 - [ ] Show the current running skill.
 - [ ] Support loading AGENT.md
 - [ ] Support custom slash commands.
 - [ ] Support allowed tools for skills.
+- [ ] Support rendering memaid graph.

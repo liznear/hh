@@ -26,7 +26,7 @@ impl SessionStore {
         id: Option<&str>,
         title: Option<String>,
     ) -> anyhow::Result<Self> {
-        Self::new_with_parent(root, cwd, id, title, None)
+        Self::new_with_parent(root, cwd, id, title, None, None)
     }
 
     pub fn new_with_parent(
@@ -35,6 +35,7 @@ impl SessionStore {
         id: Option<&str>,
         title: Option<String>,
         parent_session_id: Option<String>,
+        parent_tool_call_id: Option<String>,
     ) -> anyhow::Result<Self> {
         let workspace_id = workspace_key(cwd);
         let dir = root.join(&workspace_id);
@@ -54,6 +55,8 @@ impl SessionStore {
                 created_at: timestamp,
                 last_updated_at: timestamp,
                 parent_session_id: None,
+                is_child_session: false,
+                parent_tool_call_id: None,
             };
             let f = fs::File::create(&meta_file)?;
             serde_json::to_writer(f, &metadata)?;
@@ -81,7 +84,9 @@ impl SessionStore {
                 title,
                 created_at: timestamp,
                 last_updated_at: timestamp,
+                is_child_session: parent_session_id.is_some(),
                 parent_session_id,
+                parent_tool_call_id,
             })?;
         }
 
@@ -155,6 +160,8 @@ impl SessionStore {
                 created_at: timestamp,
                 last_updated_at: timestamp,
                 parent_session_id: None,
+                is_child_session: false,
+                parent_tool_call_id: None,
             }
         };
         self.write_metadata(metadata)

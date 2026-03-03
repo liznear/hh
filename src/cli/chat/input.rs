@@ -12,6 +12,7 @@ use ratatui::layout::Rect;
 use crate::cli::tui::{self, ChatApp, QuestionKeyResult, TuiEventSender};
 use crate::config::Settings;
 use crate::core::MessageAttachment;
+use crate::session::{SessionEvent, SessionStore};
 
 const INPUT_POLL_TIMEOUT: Duration = Duration::from_millis(16);
 const INPUT_BATCH_MAX: usize = 64;
@@ -69,6 +70,35 @@ where
     F: FnMut() -> anyhow::Result<(u16, u16)>,
 {
     if key_event.kind == KeyEventKind::Release {
+        return Ok(());
+    }
+
+    if app.is_viewing_subagent_session() {
+        match key_event.code {
+            KeyCode::Esc | KeyCode::Backspace => app.close_subagent_session(),
+            KeyCode::Up => {
+                let (width, height) = terminal_size()?;
+                scroll_up_steps(app, width, height, 1);
+            }
+            KeyCode::Down => {
+                let (width, height) = terminal_size()?;
+                scroll_down_once(app, width, height);
+            }
+            KeyCode::PageUp => {
+                let (width, height) = terminal_size()?;
+                scroll_up_steps(
+                    app,
+                    width,
+                    height,
+                    app.message_viewport_height(height).saturating_sub(1),
+                );
+            }
+            KeyCode::PageDown => {
+                let (width, height) = terminal_size()?;
+                scroll_page_down(app, width, height);
+            }
+            _ => {}
+        }
         return Ok(());
     }
 
@@ -539,7 +569,37 @@ fn copy_selection_to_clipboard(app: &ChatApp, terminal_width: u16) -> bool {
     false
 }
 
-pub(super) fn handle_mouse_click(app: &mut ChatApp, x: u16, y: u16, terminal: &tui::Tui) {
+pub(super) fn handle_mouse_click(
+    app: &mut ChatApp,
+    x: u16,
+    y: u16,
+    terminal: &tui::Tui,
+    settings: &Settings,
+    cwd: &Path,
+) {
+    if app.is_viewing_subagent_session() {
+        return;
+    }
+
+    if let Some((line, _column)) = screen_to_message_coords(app, x, y, terminal)
+        && let Ok(size) = terminal.size()
+    {
+        let wrap_width = app.message_wrap_width(size.width);
+        if let Some(target) = app.task_session_target_at_visual_line(wrap_width, line)
+            && let Ok(messages) = load_session_messages(settings, cwd, &target.session_id)
+        {
+            let messages = if messages.is_empty() {
+                vec![tui::ChatMessage::Assistant(
+                    "Subagent is queued or has not emitted messages yet. This view updates automatically once output is available.".to_string(),
+                )]
+            } else {
+                messages
+            };
+            app.open_subagent_session(target.task_id, target.session_id, target.name, messages);
+            return;
+        }
+    }
+
     if let Some((line, column)) = screen_to_message_coords(app, x, y, terminal) {
         app.start_selection(line, column);
     }
@@ -649,6 +709,67 @@ pub(super) fn handle_area_scroll(
 
 fn point_in_rect(x: u16, y: u16, rect: Rect) -> bool {
     x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()
+}
+
+pub(super) fn load_session_messages(
+    settings: &Settings,
+    cwd: &Path,
+    session_id: &str,
+) -> anyhow::Result<Vec<tui::ChatMessage>> {
+    let store = SessionStore::new(&settings.session.root, cwd, Some(session_id), None)?;
+    let events = store.replay_events()?;
+    let mut messages = Vec::new();
+
+    for event in events {
+        match event {
+            SessionEvent::Message { message, .. } => {
+                let chat_msg = match message.role {
+                    crate::core::Role::User => tui::ChatMessage::User(message.content),
+                    crate::core::Role::Assistant => tui::ChatMessage::Assistant(message.content),
+                    _ => continue,
+                };
+                messages.push(chat_msg);
+            }
+            SessionEvent::ToolCall { call } => {
+                messages.push(tui::ChatMessage::ToolCall {
+                    name: call.name,
+                    args: call.arguments.to_string(),
+                    output: None,
+                    is_error: None,
+                });
+            }
+            SessionEvent::ToolResult {
+                is_error,
+                output,
+                result,
+                ..
+            } => {
+                for message in messages.iter_mut().rev() {
+                    if let tui::ChatMessage::ToolCall {
+                        output: existing_output,
+                        is_error: existing_status,
+                        ..
+                    } = message
+                        && existing_output.is_none()
+                    {
+                        *existing_status = Some(is_error);
+                        *existing_output =
+                            Some(result.clone().map_or(output, |value| value.output));
+                        break;
+                    }
+                }
+            }
+            SessionEvent::Thinking { content, .. } => {
+                messages.push(tui::ChatMessage::Thinking(content));
+            }
+            SessionEvent::Compact { summary, .. } => {
+                messages.push(tui::ChatMessage::Compaction(summary));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(messages)
 }
 
 pub(super) fn handle_mouse_event(mouse: MouseEvent) -> Option<InputEvent> {

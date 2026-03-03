@@ -84,6 +84,7 @@ pub struct SubagentRequest {
     pub description: String,
     pub prompt: String,
     pub subagent_type: String,
+    pub call_id: Option<String>,
     pub resume_task_id: Option<String>,
     pub parent_session_id: String,
     pub parent_task_id: Option<String>,
@@ -195,8 +196,11 @@ impl SubagentManager {
 
                 (task_id.clone(), existing.session_id.clone(), true)
             } else {
-                let task_id = Uuid::now_v7().to_string();
-                let child_session_id = Uuid::new_v4().to_string();
+                let task_id = request
+                    .call_id
+                    .clone()
+                    .unwrap_or_else(|| Uuid::now_v7().to_string());
+                let child_session_id = format!("{}-{}", request.parent_session_id, task_id);
                 let node = SubagentNode {
                     task_id: task_id.clone(),
                     name: request.name.clone(),
@@ -477,6 +481,7 @@ mod tests {
             description: "desc".to_string(),
             prompt: "do work".to_string(),
             subagent_type: "general".to_string(),
+            call_id: None,
             resume_task_id: None,
             parent_session_id: parent_session_id.to_string(),
             parent_task_id: None,

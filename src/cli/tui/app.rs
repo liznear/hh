@@ -110,6 +110,7 @@ pub enum SubagentStatusView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubagentItemView {
     pub task_id: String,
+    pub session_id: String,
     pub name: String,
     pub parent_task_id: Option<String>,
     pub agent_name: String,
@@ -119,6 +120,22 @@ pub struct SubagentItemView {
     pub started_at: u64,
     pub finished_at: Option<u64>,
     pub status: SubagentStatusView,
+}
+
+#[derive(Debug, Clone)]
+pub struct SubagentSessionView {
+    pub task_id: String,
+    pub session_id: String,
+    pub title: String,
+    previous_messages: Vec<ChatMessage>,
+    previous_scroll: ScrollState,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskSessionTarget {
+    pub task_id: String,
+    pub session_id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -294,6 +311,7 @@ pub struct ChatApp {
     // Agent state
     pub current_agent_name: Option<String>,
     pub available_agents: Vec<AgentOptionView>,
+    subagent_session_view: Option<SubagentSessionView>,
     // Running agent task handle (for cancellation)
     agent_task: Option<tokio::task::JoinHandle<()>>,
     esc_interrupt_pending: bool,
@@ -366,6 +384,7 @@ impl ChatApp {
             pending_question: None,
             current_agent_name: None,
             available_agents: Vec::new(),
+            subagent_session_view: None,
             agent_task: None,
             esc_interrupt_pending: false,
             last_run_duration: None,
@@ -417,7 +436,159 @@ impl ChatApp {
             .and_then(|name| self.available_agents.iter().find(|a| a.name == *name))
     }
 
+    pub fn is_viewing_subagent_session(&self) -> bool {
+        self.subagent_session_view.is_some()
+    }
+
+    pub fn active_subagent_session(&self) -> Option<&SubagentSessionView> {
+        self.subagent_session_view.as_ref()
+    }
+
+    pub fn open_subagent_session(
+        &mut self,
+        task_id: String,
+        session_id: String,
+        title: String,
+        messages: Vec<ChatMessage>,
+    ) {
+        if self.subagent_session_view.is_some() {
+            return;
+        }
+
+        let previous_messages = std::mem::replace(&mut self.messages, messages);
+        let previous_scroll = self.message_scroll;
+        self.message_scroll = ScrollState::new(true);
+        self.subagent_session_view = Some(SubagentSessionView {
+            task_id,
+            session_id,
+            title,
+            previous_messages,
+            previous_scroll,
+        });
+        self.mark_message_dirty();
+    }
+
+    pub fn close_subagent_session(&mut self) {
+        let Some(view) = self.subagent_session_view.take() else {
+            return;
+        };
+
+        self.messages = view.previous_messages;
+        self.message_scroll = view.previous_scroll;
+        self.mark_message_dirty();
+    }
+
+    pub fn replace_active_subagent_messages(&mut self, messages: Vec<ChatMessage>) {
+        if self.subagent_session_view.is_none() {
+            return;
+        }
+        self.messages = messages;
+        self.mark_message_dirty();
+    }
+
+    pub fn task_session_target_at_visual_line(
+        &self,
+        wrap_width: usize,
+        visual_line: usize,
+    ) -> Option<TaskSessionTarget> {
+        if self.messages.is_empty() || wrap_width == 0 {
+            return None;
+        }
+
+        let (_, starts) = super::ui::build_message_lines_with_starts(self, wrap_width);
+        if starts.is_empty() {
+            return None;
+        }
+
+        let msg_idx = starts.partition_point(|start| *start <= visual_line);
+        let msg_idx = msg_idx.saturating_sub(1);
+        let message = self.messages.get(msg_idx)?;
+        let ChatMessage::ToolCall {
+            name,
+            args,
+            output,
+            is_error,
+            ..
+        } = message
+        else {
+            return None;
+        };
+
+        if name != "task" {
+            return None;
+        }
+
+        if let Some(output) = output.as_deref()
+            && let Ok(parsed) = serde_json::from_str::<TaskToolWireOutput>(output)
+            && let Some(session_id) = parsed.session_id
+            && *is_error != Some(true)
+        {
+            return Some(TaskSessionTarget {
+                task_id: parsed.task_id,
+                session_id,
+                name: parsed.name,
+            });
+        }
+
+        if *is_error == Some(true) {
+            return None;
+        }
+
+        if let Some(call_id) = tool_start_call_id_from_text(args)
+            && let Some(item) = self
+                .subagent_items
+                .iter()
+                .find(|item| item.task_id == call_id && !item.session_id.is_empty())
+        {
+            return Some(TaskSessionTarget {
+                task_id: item.task_id.clone(),
+                session_id: item.session_id.clone(),
+                name: item.name.clone(),
+            });
+        }
+
+        let args = serde_json::from_str::<TaskToolArgsWire>(args).ok()?;
+        if let Some(item) = self.subagent_items.iter().rev().find(|item| {
+            item.name == args.name
+                && item.prompt == args.prompt
+                && item.agent_name == args.subagent_type
+                && !item.session_id.is_empty()
+        }) {
+            return Some(TaskSessionTarget {
+                task_id: item.task_id.clone(),
+                session_id: item.session_id.clone(),
+                name: item.name.clone(),
+            });
+        }
+
+        None
+    }
+
     pub fn handle_event(&mut self, event: &TuiEvent) {
+        if self.subagent_session_view.is_some() {
+            self.handle_event_in_main_context(event);
+            return;
+        }
+
+        self.handle_event_inner(event);
+    }
+
+    fn handle_event_in_main_context(&mut self, event: &TuiEvent) {
+        let Some(mut view) = self.subagent_session_view.take() else {
+            self.handle_event_inner(event);
+            return;
+        };
+
+        std::mem::swap(&mut self.messages, &mut view.previous_messages);
+        std::mem::swap(&mut self.message_scroll, &mut view.previous_scroll);
+        self.handle_event_inner(event);
+        std::mem::swap(&mut self.message_scroll, &mut view.previous_scroll);
+        std::mem::swap(&mut self.messages, &mut view.previous_messages);
+
+        self.subagent_session_view = Some(view);
+    }
+
+    fn handle_event_inner(&mut self, event: &TuiEvent) {
         match event {
             TuiEvent::Thinking(text) => {
                 if self.append_thinking_delta(text) {
@@ -981,21 +1152,88 @@ impl ChatApp {
             self.update_subagent_items_from_task_result(result);
         }
 
-        // Find the matching ToolCall
-        for message in self.messages.iter_mut().rev() {
-            if let ChatMessage::ToolCall {
-                name: tool_name,
+        let target_index = if name == "task" {
+            let parsed = parse_task_tool_output(&result.payload)
+                .or_else(|| serde_json::from_str::<TaskToolWireOutput>(&result.output).ok());
+
+            if let Some(parsed) = parsed.as_ref()
+                && let Some((idx, _)) = self.messages.iter().enumerate().rev().find(|(_, message)| {
+                    matches!(
+                        message,
+                        ChatMessage::ToolCall {
+                            name: tool_name,
+                            args,
+                            is_error: status,
+                            ..
+                        } if tool_name == name
+                            && status.is_none()
+                            && tool_start_call_id_from_text(args).as_deref() == Some(parsed.task_id.as_str())
+                    )
+                })
+            {
+                Some(idx)
+            } else {
+            self.messages
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(idx, message)| {
+                    let ChatMessage::ToolCall {
+                        name: tool_name,
+                        args,
+                        is_error: status,
+                        ..
+                    } = message
+                    else {
+                        return None;
+                    };
+
+                    if tool_name != name || status.is_some() {
+                        return None;
+                    }
+
+                    if let Some(parsed) = parsed.as_ref() {
+                        if task_call_args_match_result(args, parsed) {
+                            return Some(idx);
+                        }
+                        return None;
+                    }
+
+                    Some(idx)
+                })
+            }
+        } else {
+            self.messages
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(idx, message)| {
+                    let ChatMessage::ToolCall {
+                        name: tool_name,
+                        is_error: status,
+                        ..
+                    } = message
+                    else {
+                        return None;
+                    };
+
+                    if tool_name == name && status.is_none() {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                })
+        };
+
+        if let Some(idx) = target_index
+            && let Some(ChatMessage::ToolCall {
                 is_error: status,
                 output: out,
                 ..
-            } = message
-                && tool_name == name
-                && status.is_none()
-            {
-                *status = Some(result.is_error);
-                *out = Some(rendered.text);
-                return;
-            }
+            }) = self.messages.get_mut(idx)
+        {
+            *status = Some(result.is_error);
+            *out = Some(rendered.text);
         }
     }
 
@@ -1012,6 +1250,7 @@ impl ChatApp {
 
         let item = SubagentItemView {
             task_id: parsed.task_id,
+            session_id: parsed.session_id.unwrap_or_default(),
             name: parsed.name,
             parent_task_id: parsed.parent_task_id,
             agent_name: parsed.agent_name,
@@ -1084,6 +1323,7 @@ impl ChatApp {
     pub fn start_new_session(&mut self, session_name: String) {
         self.bump_session_epoch();
         self.messages.clear();
+        self.subagent_session_view = None;
         self.todo_items.clear();
         self.subagent_items.clear();
         self.last_context_tokens = None;
@@ -1479,6 +1719,8 @@ impl ChatApp {
 #[derive(Debug, Deserialize)]
 struct TaskToolWireOutput {
     task_id: String,
+    #[serde(default)]
+    session_id: Option<String>,
     status: String,
     name: String,
     agent_name: String,
@@ -1495,8 +1737,36 @@ struct TaskToolWireOutput {
     error: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct TaskToolArgsWire {
+    name: String,
+    prompt: String,
+    subagent_type: String,
+}
+
 fn parse_task_tool_output(value: &serde_json::Value) -> Option<TaskToolWireOutput> {
     serde_json::from_value(value.clone()).ok()
+}
+
+fn tool_start_call_id_from_text(args: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(args)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("__call_id")
+                .and_then(|entry| entry.as_str())
+                .map(ToString::to_string)
+        })
+}
+
+fn task_call_args_match_result(args: &str, parsed: &TaskToolWireOutput) -> bool {
+    let Ok(task_args) = serde_json::from_str::<TaskToolArgsWire>(args) else {
+        return false;
+    };
+
+    task_args.name == parsed.name
+        && task_args.prompt == parsed.prompt
+        && task_args.subagent_type == parsed.agent_name
 }
 
 fn normalize_custom_input(value: &str) -> String {
@@ -1581,6 +1851,7 @@ fn to_subagent_item_view(item: &SubagentEventItem) -> Option<SubagentItemView> {
     let status = SubagentStatusView::from_wire(&item.status)?;
     Some(SubagentItemView {
         task_id: item.task_id.clone(),
+        session_id: item.session_id.clone(),
         name: item.name.clone(),
         parent_task_id: item.parent_task_id.clone(),
         agent_name: item.agent_name.clone(),
@@ -1664,6 +1935,7 @@ mod tests {
     fn to_subagent_item_view_prefers_summary_and_falls_back_to_error() {
         let with_summary = SubagentEventItem {
             task_id: "task-1".to_string(),
+            session_id: "session-1".to_string(),
             name: "name".to_string(),
             agent_name: "general".to_string(),
             status: "done".to_string(),
@@ -1688,6 +1960,211 @@ mod tests {
         let mapped_error = to_subagent_item_view(&with_error_only).expect("item");
         assert_eq!(mapped_error.summary.as_deref(), Some("error text"));
         assert_eq!(mapped_error.status, SubagentStatusView::Failed);
+    }
+
+    #[test]
+    fn task_session_target_is_detected_from_completed_task_tool_row() {
+        let mut app = ChatApp::default();
+        app.messages.push(ChatMessage::ToolCall {
+            name: "task".to_string(),
+            args: serde_json::json!({"name": "Inspect", "description": "d", "prompt": "p", "subagent_type": "general"}).to_string(),
+            output: Some(
+                serde_json::json!({
+                    "task_id": "task-1",
+                    "session_id": "session-1",
+                    "status": "done",
+                    "name": "Inspect code",
+                    "agent_name": "general",
+                    "prompt": "...",
+                    "depth": 1,
+                    "started_at": 1,
+                    "finished_at": 2
+                })
+                .to_string(),
+            ),
+            is_error: Some(false),
+        });
+
+        let target = app
+            .task_session_target_at_visual_line(120, 0)
+            .expect("target");
+        assert_eq!(target.task_id, "task-1");
+        assert_eq!(target.session_id, "session-1");
+        assert_eq!(target.name, "Inspect code");
+    }
+
+    #[test]
+    fn task_session_target_is_detected_while_task_is_running() {
+        let mut app = ChatApp::default();
+        app.messages.push(ChatMessage::ToolCall {
+            name: "task".to_string(),
+            args: serde_json::json!({
+                "name": "Inspect code",
+                "description": "d",
+                "prompt": "scan repo",
+                "subagent_type": "general"
+            })
+            .to_string(),
+            output: None,
+            is_error: None,
+        });
+        app.subagent_items.push(SubagentItemView {
+            task_id: "task-running".to_string(),
+            session_id: "session-running".to_string(),
+            name: "Inspect code".to_string(),
+            parent_task_id: None,
+            agent_name: "general".to_string(),
+            prompt: "scan repo".to_string(),
+            summary: None,
+            depth: 1,
+            started_at: 1,
+            finished_at: None,
+            status: SubagentStatusView::Running,
+        });
+
+        let target = app
+            .task_session_target_at_visual_line(120, 0)
+            .expect("target");
+        assert_eq!(target.task_id, "task-running");
+        assert_eq!(target.session_id, "session-running");
+    }
+
+    #[test]
+    fn open_and_close_subagent_session_restores_previous_messages() {
+        let mut app = ChatApp::default();
+        app.messages
+            .push(ChatMessage::Assistant("main transcript".to_string()));
+
+        app.open_subagent_session(
+            "task-1".to_string(),
+            "session-1".to_string(),
+            "Inspect code".to_string(),
+            vec![ChatMessage::Assistant("child transcript".to_string())],
+        );
+
+        assert!(app.is_viewing_subagent_session());
+        assert!(matches!(
+            app.messages.first(),
+            Some(ChatMessage::Assistant(text)) if text == "child transcript"
+        ));
+
+        app.close_subagent_session();
+        assert!(!app.is_viewing_subagent_session());
+        assert!(matches!(
+            app.messages.first(),
+            Some(ChatMessage::Assistant(text)) if text == "main transcript"
+        ));
+    }
+
+    #[test]
+    fn task_tool_end_matches_pending_row_by_task_args() {
+        let mut app = ChatApp::default();
+        app.messages.push(ChatMessage::ToolCall {
+            name: "task".to_string(),
+            args: serde_json::json!({
+                "name": "First",
+                "description": "d1",
+                "prompt": "p1",
+                "subagent_type": "explore"
+            })
+            .to_string(),
+            output: None,
+            is_error: None,
+        });
+        app.messages.push(ChatMessage::ToolCall {
+            name: "task".to_string(),
+            args: serde_json::json!({
+                "name": "Second",
+                "description": "d2",
+                "prompt": "p2",
+                "subagent_type": "explore"
+            })
+            .to_string(),
+            output: None,
+            is_error: None,
+        });
+
+        let result = crate::tool::ToolResult::ok_json_typed(
+            "sub-agent completed",
+            "application/vnd.hh.subagent.task+json",
+            serde_json::json!({
+                "task_id": "task-first",
+                "session_id": "session-first",
+                "status": "done",
+                "name": "First",
+                "agent_name": "explore",
+                "prompt": "p1",
+                "depth": 1,
+                "started_at": 1,
+                "finished_at": 2
+            }),
+        );
+
+        app.handle_event(&crate::cli::tui::TuiEvent::ToolEnd {
+            name: "task".to_string(),
+            result,
+        });
+
+        assert!(matches!(
+            app.messages.first(),
+            Some(ChatMessage::ToolCall {
+                is_error: Some(false),
+                ..
+            })
+        ));
+        assert!(matches!(
+            app.messages.get(1),
+            Some(ChatMessage::ToolCall { is_error: None, .. })
+        ));
+    }
+
+    #[test]
+    fn task_session_target_maps_each_pending_task_row() {
+        let mut app = ChatApp::default();
+        for idx in 1..=3 {
+            app.messages.push(ChatMessage::ToolCall {
+                name: "task".to_string(),
+                args: serde_json::json!({
+                    "name": format!("Task {idx}"),
+                    "description": "desc",
+                    "prompt": format!("prompt-{idx}"),
+                    "subagent_type": "explore"
+                })
+                .to_string(),
+                output: None,
+                is_error: None,
+            });
+            app.subagent_items.push(SubagentItemView {
+                task_id: format!("task-{idx}"),
+                session_id: format!("session-{idx}"),
+                name: format!("Task {idx}"),
+                parent_task_id: None,
+                agent_name: "explore".to_string(),
+                prompt: format!("prompt-{idx}"),
+                summary: None,
+                depth: 1,
+                started_at: idx as u64,
+                finished_at: None,
+                status: SubagentStatusView::Running,
+            });
+        }
+
+        let (_, starts) = crate::cli::tui::ui::build_message_lines_with_starts(&app, 120);
+        assert!(starts.len() >= 3);
+
+        let first = app
+            .task_session_target_at_visual_line(120, starts[0])
+            .expect("first target");
+        let second = app
+            .task_session_target_at_visual_line(120, starts[1])
+            .expect("second target");
+        let third = app
+            .task_session_target_at_visual_line(120, starts[2])
+            .expect("third target");
+
+        assert_eq!(first.session_id, "session-1");
+        assert_eq!(second.session_id, "session-2");
+        assert_eq!(third.session_id, "session-3");
     }
 }
 
