@@ -1,3 +1,9 @@
+//! Runtime agent state tracked across turns.
+//!
+//! Invariants:
+//! - Only successful `todo_write` tool results can mutate the in-memory TODO snapshot.
+//! - The TODO snapshot is treated as canonical runtime planning state for subsequent turns.
+
 use crate::core::{Message, Role, TodoItem};
 use crate::tool::ToolResult;
 use serde::Deserialize;
@@ -84,4 +90,96 @@ fn parse_todos(result: &ToolResult) -> Option<Vec<TodoItem>> {
     serde_json::from_str::<TodoWriteOutput>(&result.output)
         .ok()
         .map(|parsed| parsed.todos)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{TodoPriority, TodoStatus};
+
+    fn sample_todos() -> Vec<TodoItem> {
+        vec![
+            TodoItem {
+                content: "task one".to_string(),
+                status: TodoStatus::Pending,
+                priority: TodoPriority::Medium,
+            },
+            TodoItem {
+                content: "task two".to_string(),
+                status: TodoStatus::Completed,
+                priority: TodoPriority::High,
+            },
+        ]
+    }
+
+    #[test]
+    fn apply_tool_result_updates_state_for_successful_todo_write_payload() {
+        let mut state = AgentState::default();
+        let todos = sample_todos();
+        let result = ToolResult::ok_json(
+            "todo list updated",
+            serde_json::json!({
+                "todos": todos,
+            }),
+        );
+
+        assert!(state.apply_tool_result("todo_write", &result));
+        assert_eq!(state.todo_items.len(), 2);
+        assert_eq!(state.todo_items[0].content, "task one");
+        assert_eq!(state.todo_items[1].status, TodoStatus::Completed);
+    }
+
+    #[test]
+    fn apply_tool_result_parses_todo_write_from_text_output_fallback() {
+        let mut state = AgentState::default();
+        let result = ToolResult::ok_text(
+            "todo list updated",
+            r#"{"todos":[{"content":"fallback","status":"in_progress","priority":"low"}]}"#,
+        );
+
+        assert!(state.apply_tool_result("todo_write", &result));
+        assert_eq!(state.todo_items.len(), 1);
+        assert_eq!(state.todo_items[0].status, TodoStatus::InProgress);
+        assert_eq!(state.todo_items[0].priority, TodoPriority::Low);
+    }
+
+    #[test]
+    fn apply_tool_result_ignores_non_todo_write_and_errors() {
+        let mut state = AgentState::default();
+        let ok = ToolResult::ok_json(
+            "todo list updated",
+            serde_json::json!({
+                "todos": sample_todos(),
+            }),
+        );
+        let err = ToolResult::err_json(
+            "todo failed",
+            serde_json::json!({
+                "todos": sample_todos(),
+            }),
+        );
+
+        assert!(!state.apply_tool_result("question", &ok));
+        assert!(state.todo_items.is_empty());
+
+        assert!(!state.apply_tool_result("todo_write", &err));
+        assert!(state.todo_items.is_empty());
+    }
+
+    #[test]
+    fn state_for_llm_reports_pending_count_and_items() {
+        let mut state = AgentState::default();
+        state.todo_items = sample_todos();
+
+        let message = state.state_for_llm().expect("todo state message");
+        assert!(matches!(message.role, Role::System));
+        assert!(
+            message
+                .content
+                .contains("Runtime TODO state: use this as the canonical plan snapshot.")
+        );
+        assert!(message.content.contains("1 pending out of 2 total tasks."));
+        assert!(message.content.contains("- [pending] task one"));
+        assert!(message.content.contains("- [completed] task two"));
+    }
 }

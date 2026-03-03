@@ -1,0 +1,186 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::OnceLock;
+
+use crate::agent::{AgentLoader, AgentMode, AgentRegistry};
+use crate::cli::tui;
+use crate::config::Settings;
+use crate::core::agent::NoopEvents;
+use crate::core::agent::subagent_manager::{
+    SubagentExecutionRequest, SubagentExecutionResult, SubagentExecutor, SubagentManager,
+    SubagentStatus,
+};
+use crate::core::{Message, Role};
+use crate::session::types::SubAgentFailureReason;
+
+static GLOBAL_SUBAGENT_MANAGER: OnceLock<Arc<SubagentManager>> = OnceLock::new();
+
+pub(super) fn initialize_subagent_manager(settings: Settings, cwd: PathBuf) {
+    let _ = GLOBAL_SUBAGENT_MANAGER.get_or_init(|| Arc::new(build_subagent_manager(settings, cwd)));
+}
+
+pub(super) fn current_subagent_manager(settings: &Settings, cwd: &Path) -> Arc<SubagentManager> {
+    Arc::clone(
+        GLOBAL_SUBAGENT_MANAGER
+            .get_or_init(|| Arc::new(build_subagent_manager(settings.clone(), cwd.to_path_buf()))),
+    )
+}
+
+fn build_subagent_manager(settings: Settings, cwd: PathBuf) -> SubagentManager {
+    let enabled = settings.agent.parallel_subagents;
+    let max_parallel = settings.agent.max_parallel_subagents;
+    let max_depth = settings.agent.sub_agent_max_depth;
+    let executor_settings = settings.clone();
+    let executor: SubagentExecutor = Arc::new(move |request| {
+        let settings = executor_settings.clone();
+        let cwd = cwd.clone();
+        Box::pin(async move {
+            if !enabled {
+                return SubagentExecutionResult {
+                    status: SubagentStatus::Failed,
+                    summary: "parallel sub-agents are disabled by configuration".to_string(),
+                    error: Some("agent.parallel_subagents=false".to_string()),
+                    failure_reason: Some(SubAgentFailureReason::RuntimeError),
+                };
+            }
+            run_subagent_execution(settings, cwd, request).await
+        })
+    });
+
+    SubagentManager::new(max_parallel, max_depth, executor)
+}
+
+async fn run_subagent_execution(
+    settings: Settings,
+    cwd: PathBuf,
+    request: SubagentExecutionRequest,
+) -> SubagentExecutionResult {
+    let loader = match AgentLoader::new() {
+        Ok(loader) => loader,
+        Err(err) => {
+            return SubagentExecutionResult {
+                status: SubagentStatus::Failed,
+                summary: "failed to initialize agent loader".to_string(),
+                error: Some(err.to_string()),
+                failure_reason: Some(SubAgentFailureReason::RuntimeError),
+            };
+        }
+    };
+    let registry = match loader.load_agents() {
+        Ok(agents) => AgentRegistry::new(agents),
+        Err(err) => {
+            return SubagentExecutionResult {
+                status: SubagentStatus::Failed,
+                summary: "failed to load agents".to_string(),
+                error: Some(err.to_string()),
+                failure_reason: Some(SubAgentFailureReason::RuntimeError),
+            };
+        }
+    };
+
+    let Some(agent) = registry.get_agent(&request.subagent_type).cloned() else {
+        return SubagentExecutionResult {
+            status: SubagentStatus::Failed,
+            summary: format!("unknown subagent_type: {}", request.subagent_type),
+            error: None,
+            failure_reason: Some(SubAgentFailureReason::RuntimeError),
+        };
+    };
+    if agent.mode != AgentMode::Subagent {
+        return SubagentExecutionResult {
+            status: SubagentStatus::Failed,
+            summary: format!("agent '{}' is not a subagent", agent.name),
+            error: None,
+            failure_reason: Some(SubAgentFailureReason::RuntimeError),
+        };
+    }
+
+    let mut child_settings = settings.clone();
+    child_settings.apply_agent_settings(&agent);
+    child_settings.selected_agent = Some(agent.name.clone());
+    let model_ref = child_settings.selected_model_ref().to_string();
+
+    let loop_runner = match super::create_agent_loop(
+        child_settings,
+        &cwd,
+        &model_ref,
+        NoopEvents,
+        super::AgentLoopOptions {
+            subagent_manager: Some(current_subagent_manager(&settings, &cwd)),
+            parent_task_id: Some(request.task_id.clone()),
+            depth: request.depth,
+            session_id: Some(request.child_session_id),
+            session_title: Some(request.description),
+            session_parent_id: Some(request.parent_session_id),
+        },
+    ) {
+        Ok(loop_runner) => loop_runner,
+        Err(err) => {
+            return SubagentExecutionResult {
+                status: SubagentStatus::Failed,
+                summary: "failed to initialize sub-agent runtime".to_string(),
+                error: Some(err.to_string()),
+                failure_reason: Some(SubAgentFailureReason::RuntimeError),
+            };
+        }
+    };
+
+    match loop_runner
+        .run_with_question_tool(
+            Message {
+                role: Role::User,
+                content: request.prompt,
+                attachments: Vec::new(),
+                tool_call_id: None,
+            },
+            |_request| async {
+                Ok::<crate::core::ApprovalChoice, anyhow::Error>(
+                    crate::core::ApprovalChoice::AllowSession,
+                )
+            },
+            |_questions| async {
+                anyhow::bail!("question tool is not available in sub-agent mode")
+            },
+        )
+        .await
+    {
+        Ok(output) => SubagentExecutionResult {
+            status: SubagentStatus::Completed,
+            summary: output,
+            error: None,
+            failure_reason: None,
+        },
+        Err(err) => SubagentExecutionResult {
+            status: SubagentStatus::Failed,
+            summary: "sub-agent execution failed".to_string(),
+            error: Some(err.to_string()),
+            failure_reason: Some(SubAgentFailureReason::RuntimeError),
+        },
+    }
+}
+
+pub(super) fn map_subagent_node_event(
+    node: &crate::core::agent::subagent_manager::SubagentNode,
+) -> tui::SubagentEventItem {
+    let status = node.status.label().to_string();
+
+    let finished_at = if node.status.is_terminal() {
+        Some(node.updated_at)
+    } else {
+        None
+    };
+
+    tui::SubagentEventItem {
+        task_id: node.task_id.clone(),
+        name: node.name.clone(),
+        agent_name: node.agent_name.clone(),
+        status,
+        prompt: node.prompt.clone(),
+        depth: node.depth,
+        parent_task_id: node.parent_task_id.clone(),
+        started_at: node.started_at,
+        finished_at,
+        summary: node.summary.clone(),
+        error: node.error.clone(),
+    }
+}

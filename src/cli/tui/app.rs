@@ -1543,6 +1543,10 @@ impl TodoPriority {
 }
 
 impl SubagentStatusView {
+    /// Maps wire/session lifecycle statuses into the TUI view enum.
+    ///
+    /// Keep aliases (`queued`/`done`/`error`) stable because manager polling events
+    /// currently emit label strings while session replay uses lifecycle enums.
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
     }
@@ -1597,7 +1601,9 @@ impl Default for ChatApp {
 
 #[cfg(test)]
 mod tests {
-    use super::ChatApp;
+    use super::*;
+    use crate::cli::tui::event::SubagentEventItem;
+    use crate::session::types::SubAgentLifecycleStatus;
 
     #[test]
     fn periodic_tick_marks_redraw_when_processing_second_changes() {
@@ -1606,6 +1612,82 @@ mod tests {
         app.last_timer_refresh_second = Some(0);
 
         assert!(app.on_periodic_tick());
+    }
+
+    #[test]
+    fn subagent_status_view_maps_manager_labels_and_session_statuses() {
+        assert_eq!(
+            SubagentStatusView::from_wire("queued"),
+            Some(SubagentStatusView::Pending)
+        );
+        assert_eq!(
+            SubagentStatusView::from_wire("running"),
+            Some(SubagentStatusView::Running)
+        );
+        assert_eq!(
+            SubagentStatusView::from_wire("done"),
+            Some(SubagentStatusView::Completed)
+        );
+        assert_eq!(
+            SubagentStatusView::from_wire("error"),
+            Some(SubagentStatusView::Failed)
+        );
+        assert_eq!(
+            SubagentStatusView::from_wire("cancelled"),
+            Some(SubagentStatusView::Cancelled)
+        );
+        assert_eq!(SubagentStatusView::from_wire("unknown"), None);
+
+        assert_eq!(
+            SubagentStatusView::from_lifecycle(SubAgentLifecycleStatus::Pending),
+            SubagentStatusView::Pending
+        );
+        assert_eq!(
+            SubagentStatusView::from_lifecycle(SubAgentLifecycleStatus::Running),
+            SubagentStatusView::Running
+        );
+        assert_eq!(
+            SubagentStatusView::from_lifecycle(SubAgentLifecycleStatus::Completed),
+            SubagentStatusView::Completed
+        );
+        assert_eq!(
+            SubagentStatusView::from_lifecycle(SubAgentLifecycleStatus::Failed),
+            SubagentStatusView::Failed
+        );
+        assert_eq!(
+            SubagentStatusView::from_lifecycle(SubAgentLifecycleStatus::Cancelled),
+            SubagentStatusView::Cancelled
+        );
+    }
+
+    #[test]
+    fn to_subagent_item_view_prefers_summary_and_falls_back_to_error() {
+        let with_summary = SubagentEventItem {
+            task_id: "task-1".to_string(),
+            name: "name".to_string(),
+            agent_name: "general".to_string(),
+            status: "done".to_string(),
+            prompt: "prompt".to_string(),
+            depth: 1,
+            parent_task_id: None,
+            started_at: 10,
+            finished_at: Some(11),
+            summary: Some("summary".to_string()),
+            error: Some("error text".to_string()),
+        };
+
+        let mapped = to_subagent_item_view(&with_summary).expect("item");
+        assert_eq!(mapped.summary.as_deref(), Some("summary"));
+        assert_eq!(mapped.status, SubagentStatusView::Completed);
+
+        let with_error_only = SubagentEventItem {
+            summary: None,
+            status: "error".to_string(),
+            ..with_summary
+        };
+        let mapped_error = to_subagent_item_view(&with_error_only).expect("item");
+        assert_eq!(mapped_error.summary.as_deref(), Some("error text"));
+        assert_eq!(mapped_error.status, SubagentStatusView::Failed);
     }
 }
 

@@ -1,3 +1,10 @@
+//! Sub-agent task orchestration and lifecycle persistence.
+//!
+//! Invariants:
+//! - Parent sessions observe lifecycle as `pending -> running -> terminal`.
+//! - Persisted lifecycle status in `SessionEvent` is the canonical cross-layer status model.
+//! - UI-facing status labels (`queued`, `done`, `error`) are presentation aliases only.
+
 use crate::session::types::{SubAgentFailureReason, SubAgentLifecycleStatus};
 use crate::session::{SessionEvent, SessionStore, event_id};
 use serde::{Deserialize, Serialize};
@@ -444,4 +451,133 @@ fn bounded_text(input: &str, max_bytes: usize) -> String {
     }
     out.push_str("\n...[truncated]");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn completed_executor() -> SubagentExecutor {
+        Arc::new(|_| {
+            Box::pin(async {
+                SubagentExecutionResult {
+                    status: SubagentStatus::Completed,
+                    summary: "completed summary".to_string(),
+                    error: None,
+                    failure_reason: None,
+                }
+            })
+        })
+    }
+
+    fn sample_request(parent_session_id: &str) -> SubagentRequest {
+        SubagentRequest {
+            name: "child task".to_string(),
+            description: "desc".to_string(),
+            prompt: "do work".to_string(),
+            subagent_type: "general".to_string(),
+            resume_task_id: None,
+            parent_session_id: parent_session_id.to_string(),
+            parent_task_id: None,
+            depth: 0,
+        }
+    }
+
+    #[test]
+    fn status_labels_and_lifecycle_mapping_are_stable() {
+        assert_eq!(SubagentStatus::Pending.label(), "queued");
+        assert_eq!(SubagentStatus::Running.label(), "running");
+        assert_eq!(SubagentStatus::Completed.label(), "done");
+        assert_eq!(SubagentStatus::Failed.label(), "error");
+        assert_eq!(SubagentStatus::Cancelled.label(), "cancelled");
+
+        assert_eq!(
+            SubagentStatus::Pending.as_lifecycle_status(),
+            SubAgentLifecycleStatus::Pending
+        );
+        assert_eq!(
+            SubagentStatus::Running.as_lifecycle_status(),
+            SubAgentLifecycleStatus::Running
+        );
+        assert_eq!(
+            SubagentStatus::Completed.as_lifecycle_status(),
+            SubAgentLifecycleStatus::Completed
+        );
+        assert_eq!(
+            SubagentStatus::Failed.as_lifecycle_status(),
+            SubAgentLifecycleStatus::Failed
+        );
+        assert_eq!(
+            SubagentStatus::Cancelled.as_lifecycle_status(),
+            SubAgentLifecycleStatus::Cancelled
+        );
+    }
+
+    #[tokio::test]
+    async fn start_and_finish_persist_expected_session_lifecycle_events() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("sessions");
+        let cwd = temp.path();
+        let parent_session_id = "parent-session";
+        let store = SessionStore::new(
+            &root,
+            cwd,
+            Some(parent_session_id),
+            Some("Parent Session".to_string()),
+        )
+        .expect("session store");
+
+        let manager = SubagentManager::new(1, 4, completed_executor());
+        let acceptance = manager
+            .start_or_resume(sample_request(parent_session_id), store.clone())
+            .await
+            .expect("acceptance");
+        assert_eq!(acceptance.status, "queued");
+
+        let node = manager
+            .wait_for_terminal(parent_session_id, &acceptance.task_id)
+            .await
+            .expect("terminal node");
+        assert_eq!(node.status, SubagentStatus::Completed);
+        assert_eq!(node.summary.as_deref(), Some("completed summary"));
+
+        let events = store.replay_events().expect("replay events");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            SessionEvent::SubAgentStart { status, .. }
+                if *status == SubAgentLifecycleStatus::Pending
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            SessionEvent::SubAgentResult { status, .. }
+                if *status == SubAgentLifecycleStatus::Completed
+        )));
+    }
+
+    #[tokio::test]
+    async fn rejects_requests_exceeding_depth_limit() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("sessions");
+        let cwd = temp.path();
+        let parent_session_id = "parent-session";
+        let store = SessionStore::new(
+            &root,
+            cwd,
+            Some(parent_session_id),
+            Some("Parent Session".to_string()),
+        )
+        .expect("session store");
+
+        let manager = SubagentManager::new(1, 1, completed_executor());
+        let mut request = sample_request(parent_session_id);
+        request.depth = 1;
+
+        let err = manager
+            .start_or_resume(request, store.clone())
+            .await
+            .expect_err("depth should be rejected");
+        assert!(err.to_string().contains("exceeds configured limit"));
+        assert!(store.replay_events().expect("replay").is_empty());
+    }
 }

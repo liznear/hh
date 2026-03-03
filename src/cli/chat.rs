@@ -1,41 +1,46 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::time::Duration;
-use std::{fs, io::Cursor};
 
-use base64::Engine;
-use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
-};
+use anyhow::Context;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use crate::agent::{AgentLoader, AgentMode, AgentRegistry};
 use crate::cli::agent_init;
 use crate::cli::render;
 use crate::cli::tui::{
-    self, ChatApp, ModelOptionView, QuestionKeyResult, ScopedTuiEvent, SubmittedInput, TuiEvent,
-    TuiEventSender,
+    self, ChatApp, ModelOptionView, ScopedTuiEvent, SubmittedInput, TuiEvent, TuiEventSender,
 };
 use crate::config::{Settings, upsert_local_permission_rule};
-use crate::core::agent::subagent_manager::{
-    SubagentExecutionRequest, SubagentExecutionResult, SubagentExecutor, SubagentManager,
-    SubagentStatus,
-};
+use crate::core::agent::subagent_manager::SubagentManager;
 use crate::core::agent::{AgentEvents, AgentLoop, NoopEvents};
-use crate::core::{Message, MessageAttachment, Role};
+use crate::core::{Message, Role};
 use crate::permission::PermissionMatcher;
 use crate::provider::openai_compatible::OpenAiCompatibleProvider;
-use crate::session::types::SubAgentFailureReason;
-use crate::session::{SessionEvent, SessionStore, event_id};
+use crate::session::SessionStore;
 use crate::tool::registry::{ToolRegistry, ToolRegistryContext};
 use crate::tool::task::TaskToolRuntimeContext;
 use uuid::Uuid;
 
-static GLOBAL_SUBAGENT_MANAGER: OnceLock<Arc<SubagentManager>> = OnceLock::new();
+mod commands;
+mod input;
+mod session;
+mod subagent;
+
+use self::commands::handle_submitted_input;
+use self::input::{
+    InputEvent, apply_paste, handle_area_scroll, handle_input_batch, handle_key_event,
+    handle_mouse_click, handle_mouse_drag, handle_mouse_release,
+};
+#[cfg(test)]
+use self::session::handle_session_selection;
+use self::session::{
+    fallback_session_title, generate_session_title, spawn_session_title_generation_task,
+};
+use self::subagent::{
+    current_subagent_manager, initialize_subagent_manager, map_subagent_node_event,
+};
 
 pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Result<()> {
     // Setup terminal
@@ -73,659 +78,9 @@ pub async fn run_chat(settings: Settings, cwd: &std::path::Path) -> anyhow::Resu
     Ok(())
 }
 
-/// Input event from terminal
-enum InputEvent {
-    Key(event::KeyEvent),
-    Paste(String),
-    ScrollUp { x: u16, y: u16 },
-    ScrollDown { x: u16, y: u16 },
-    Refresh,
-    MouseClick { x: u16, y: u16 },
-    MouseDrag { x: u16, y: u16 },
-    MouseRelease { x: u16, y: u16 },
-}
-
-const INPUT_POLL_TIMEOUT: Duration = Duration::from_millis(16);
-const INPUT_BATCH_MAX: usize = 64;
 const EVENT_DRAIN_MAX: usize = 128;
 const STREAM_CHUNK_FLUSH_INTERVAL: Duration = Duration::from_millis(75);
 const STREAM_CHUNK_FLUSH_BYTES: usize = 8192;
-
-async fn handle_input_batch() -> anyhow::Result<Vec<InputEvent>> {
-    if !event::poll(INPUT_POLL_TIMEOUT)? {
-        return Ok(Vec::new());
-    }
-
-    let mut events = Vec::with_capacity(INPUT_BATCH_MAX.min(8));
-    if let Some(input_event) = translate_terminal_event(event::read()?) {
-        events.push(input_event);
-    }
-
-    while events.len() < INPUT_BATCH_MAX && event::poll(Duration::ZERO)? {
-        if let Some(input_event) = translate_terminal_event(event::read()?) {
-            events.push(input_event);
-        }
-    }
-
-    Ok(events)
-}
-
-fn translate_terminal_event(event: Event) -> Option<InputEvent> {
-    match event {
-        Event::Key(key) => Some(InputEvent::Key(key)),
-        Event::Paste(text) => Some(InputEvent::Paste(text)),
-        Event::Mouse(mouse) => handle_mouse_event(mouse),
-        Event::Resize(_, _) | Event::FocusGained => Some(InputEvent::Refresh),
-        _ => None,
-    }
-}
-
-fn handle_key_event<F>(
-    key_event: event::KeyEvent,
-    app: &mut ChatApp,
-    settings: &Settings,
-    cwd: &Path,
-    event_sender: &TuiEventSender,
-    mut terminal_size: F,
-) -> anyhow::Result<()>
-where
-    F: FnMut() -> anyhow::Result<(u16, u16)>,
-{
-    if key_event.kind == KeyEventKind::Release {
-        return Ok(());
-    }
-
-    if app.is_processing && key_event.code != KeyCode::Esc {
-        app.clear_pending_esc_interrupt();
-    }
-
-    if app.has_pending_question() {
-        let handled = app.handle_question_key(key_event);
-        if handled == QuestionKeyResult::Dismissed && app.is_processing {
-            if app.should_interrupt_on_esc() {
-                app.cancel_agent_task();
-                app.set_processing(false);
-            } else {
-                app.arm_esc_interrupt();
-            }
-        }
-        if handled != QuestionKeyResult::NotHandled {
-            return Ok(());
-        }
-    }
-
-    if key_event.code == KeyCode::Char('c') && key_event.modifiers.contains(KeyModifiers::CONTROL) {
-        if app.input.is_empty() {
-            app.should_quit = true;
-        } else {
-            mutate_input(app, ChatApp::clear_input);
-        }
-        return Ok(());
-    }
-
-    if maybe_handle_paste_shortcut(key_event, app) {
-        return Ok(());
-    }
-
-    match key_event.code {
-        KeyCode::Char(c) => {
-            if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                match c {
-                    'a' | 'A' => app.move_to_line_start(),
-                    'e' | 'E' => app.move_to_line_end(),
-                    _ => {}
-                }
-            } else {
-                mutate_input(app, |app| app.insert_char(c));
-            }
-        }
-        KeyCode::Backspace => {
-            mutate_input(app, ChatApp::backspace);
-        }
-        KeyCode::Enter if key_event.modifiers.contains(KeyModifiers::SHIFT) => {
-            mutate_input(app, |app| app.insert_char('\n'));
-        }
-        KeyCode::Enter => {
-            handle_enter_key(app, settings, cwd, event_sender);
-        }
-        KeyCode::Tab => {
-            app.cycle_agent();
-        }
-        KeyCode::Esc => {
-            if app.is_processing {
-                if app.should_interrupt_on_esc() {
-                    app.cancel_agent_task();
-                    app.set_processing(false);
-                } else {
-                    app.arm_esc_interrupt();
-                }
-            } else {
-                // Clear input when not processing
-                mutate_input(app, ChatApp::clear_input);
-            }
-        }
-        KeyCode::Up => {
-            if !app.filtered_commands.is_empty() {
-                if app.selected_command_index > 0 {
-                    app.selected_command_index -= 1;
-                } else {
-                    app.selected_command_index = app.filtered_commands.len().saturating_sub(1);
-                }
-            } else if !app.input.is_empty() {
-                app.move_cursor_up();
-            } else {
-                let (width, height) = terminal_size()?;
-                scroll_up_steps(app, width, height, 1);
-            }
-        }
-        KeyCode::Left => {
-            app.move_cursor_left();
-        }
-        KeyCode::Right => {
-            app.move_cursor_right();
-        }
-        KeyCode::Down => {
-            if !app.filtered_commands.is_empty() {
-                if app.selected_command_index < app.filtered_commands.len().saturating_sub(1) {
-                    app.selected_command_index += 1;
-                } else {
-                    app.selected_command_index = 0;
-                }
-            } else if !app.input.is_empty() {
-                app.move_cursor_down();
-            } else {
-                let (width, height) = terminal_size()?;
-                scroll_down_once(app, width, height);
-            }
-        }
-        KeyCode::PageUp => {
-            let (width, height) = terminal_size()?;
-            scroll_up_steps(
-                app,
-                width,
-                height,
-                app.message_viewport_height(height).saturating_sub(1),
-            );
-        }
-        KeyCode::PageDown => {
-            let (width, height) = terminal_size()?;
-            scroll_page_down(app, width, height);
-        }
-        _ => {}
-    }
-
-    Ok(())
-}
-
-fn scroll_down_once(app: &mut ChatApp, width: u16, height: u16) {
-    scroll_down_steps(app, width, height, 1);
-}
-
-fn scroll_up_steps(app: &mut ChatApp, width: u16, height: u16, steps: usize) {
-    if steps == 0 {
-        return;
-    }
-
-    let (total_lines, visible_height) = scroll_bounds(app, width, height);
-    app.message_scroll
-        .scroll_up_steps(total_lines, visible_height, steps);
-}
-
-fn scroll_down_steps(app: &mut ChatApp, width: u16, height: u16, steps: usize) {
-    if steps == 0 {
-        return;
-    }
-
-    let (total_lines, visible_height) = scroll_bounds(app, width, height);
-    app.message_scroll
-        .scroll_down_steps(total_lines, visible_height, steps);
-}
-
-fn mutate_input(app: &mut ChatApp, mutator: impl FnOnce(&mut ChatApp)) {
-    mutator(app);
-    app.update_command_filtering();
-}
-
-fn apply_paste(app: &mut ChatApp, pasted: String) {
-    let mut prepared = prepare_paste(&pasted);
-    if prepared.attachments.is_empty()
-        && let Some(clipboard_image) = prepare_clipboard_image_paste()
-    {
-        prepared = clipboard_image;
-    }
-    apply_prepared_paste(app, prepared);
-}
-
-fn apply_prepared_paste(app: &mut ChatApp, prepared: PreparedPaste) {
-    mutate_input(app, |app| {
-        app.insert_str(&prepared.insert_text);
-        for attachment in prepared.attachments {
-            app.add_pending_attachment(attachment);
-        }
-    });
-}
-
-struct PreparedPaste {
-    insert_text: String,
-    attachments: Vec<MessageAttachment>,
-}
-
-fn prepare_paste(pasted: &str) -> PreparedPaste {
-    if let Some(image_paste) = prepare_image_file_paste(pasted) {
-        return image_paste;
-    }
-
-    PreparedPaste {
-        insert_text: pasted.to_string(),
-        attachments: Vec::new(),
-    }
-}
-
-fn prepare_image_file_paste(pasted: &str) -> Option<PreparedPaste> {
-    let non_empty_lines: Vec<&str> = pasted
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    if non_empty_lines.is_empty() {
-        return None;
-    }
-
-    let mut image_paths = Vec::with_capacity(non_empty_lines.len());
-    let mut attachments = Vec::with_capacity(non_empty_lines.len());
-    for line in &non_empty_lines {
-        let path = extract_image_path(line)?;
-        let attachment = read_image_file_attachment(&path)?;
-        image_paths.push(path);
-        attachments.push(attachment);
-    }
-
-    let insert_text = image_paths
-        .iter()
-        .enumerate()
-        .map(|(idx, path)| {
-            let name = Path::new(path)
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("image");
-            if image_paths.len() == 1 {
-                format!("[pasted image: {name}]")
-            } else {
-                format!("[pasted image {}: {name}]", idx + 1)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    Some(PreparedPaste {
-        insert_text,
-        attachments,
-    })
-}
-
-fn maybe_handle_paste_shortcut(key_event: event::KeyEvent, app: &mut ChatApp) -> bool {
-    if !is_paste_shortcut(key_event) {
-        return false;
-    }
-
-    if let Some(prepared) = prepare_clipboard_image_paste() {
-        apply_prepared_paste(app, prepared);
-        return true;
-    }
-
-    if let Some(text) = read_clipboard_text() {
-        apply_paste(app, text);
-    }
-
-    true
-}
-
-fn is_paste_shortcut(key_event: event::KeyEvent) -> bool {
-    (key_event.code == KeyCode::Char('v')
-        && (key_event.modifiers.contains(KeyModifiers::CONTROL)
-            || key_event.modifiers.contains(KeyModifiers::SUPER)))
-        || (key_event.code == KeyCode::Insert && key_event.modifiers.contains(KeyModifiers::SHIFT))
-}
-
-fn prepare_clipboard_image_paste() -> Option<PreparedPaste> {
-    let mut clipboard = arboard::Clipboard::new().ok()?;
-    let image = clipboard.get_image().ok()?;
-    let png_data = encode_rgba_to_png(image.width, image.height, image.bytes.as_ref())?;
-    let data_base64 = base64::engine::general_purpose::STANDARD.encode(png_data);
-
-    Some(PreparedPaste {
-        insert_text: "[pasted image from clipboard]".to_string(),
-        attachments: vec![MessageAttachment::Image {
-            media_type: "image/png".to_string(),
-            data_base64,
-        }],
-    })
-}
-
-fn read_clipboard_text() -> Option<String> {
-    let mut clipboard = arboard::Clipboard::new().ok()?;
-    let text = clipboard.get_text().ok()?;
-    if text.is_empty() { None } else { Some(text) }
-}
-
-fn encode_rgba_to_png(width: usize, height: usize, rgba_bytes: &[u8]) -> Option<Vec<u8>> {
-    let mut output = Vec::new();
-    {
-        let mut cursor = Cursor::new(&mut output);
-        let mut encoder = png::Encoder::new(&mut cursor, width as u32, height as u32);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().ok()?;
-        writer.write_image_data(rgba_bytes).ok()?;
-    }
-    Some(output)
-}
-
-fn extract_image_path(raw: &str) -> Option<String> {
-    let trimmed = strip_surrounding_quotes(raw.trim());
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let normalized = if let Some(rest) = trimmed.strip_prefix("file://") {
-        let path = if rest.starts_with('/') {
-            rest
-        } else {
-            return None;
-        };
-        match urlencoding::decode(path) {
-            Ok(decoded) => decoded.into_owned(),
-            Err(_) => return None,
-        }
-    } else {
-        trimmed.to_string()
-    };
-
-    resolve_image_path(&normalized)
-}
-
-fn resolve_image_path(path: &str) -> Option<String> {
-    let unescaped = unescape_shell_escaped_path(path);
-    let mut candidates = vec![path.to_string()];
-    if unescaped != path {
-        candidates.push(unescaped);
-    }
-
-    for candidate in &candidates {
-        if is_image_path(candidate) && Path::new(candidate).exists() {
-            return Some(candidate.clone());
-        }
-    }
-
-    candidates
-        .into_iter()
-        .find(|candidate| is_image_path(candidate))
-}
-
-fn unescape_shell_escaped_path(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    let mut chars = path.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            if let Some(next) = chars.next() {
-                out.push(next);
-            } else {
-                out.push('\\');
-            }
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
-
-fn read_image_file_attachment(path: &str) -> Option<MessageAttachment> {
-    let media_type = image_media_type(path)?;
-    let bytes = fs::read(path).ok()?;
-    let data_base64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-    Some(MessageAttachment::Image {
-        media_type: media_type.to_string(),
-        data_base64,
-    })
-}
-
-fn image_media_type(path: &str) -> Option<&'static str> {
-    let lower = path.to_ascii_lowercase();
-    if lower.ends_with(".png") {
-        Some("image/png")
-    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
-        Some("image/jpeg")
-    } else if lower.ends_with(".gif") {
-        Some("image/gif")
-    } else if lower.ends_with(".webp") {
-        Some("image/webp")
-    } else if lower.ends_with(".bmp") {
-        Some("image/bmp")
-    } else if lower.ends_with(".tiff") || lower.ends_with(".tif") {
-        Some("image/tiff")
-    } else if lower.ends_with(".heic") {
-        Some("image/heic")
-    } else if lower.ends_with(".heif") {
-        Some("image/heif")
-    } else if lower.ends_with(".avif") {
-        Some("image/avif")
-    } else {
-        None
-    }
-}
-
-fn strip_surrounding_quotes(value: &str) -> &str {
-    if value.len() < 2 {
-        return value;
-    }
-    let bytes = value.as_bytes();
-    let first = bytes[0];
-    let last = bytes[value.len() - 1];
-    if (first == b'\'' && last == b'\'') || (first == b'"' && last == b'"') {
-        &value[1..value.len() - 1]
-    } else {
-        value
-    }
-}
-
-fn is_image_path(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    [
-        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif",
-        ".avif",
-    ]
-    .iter()
-    .any(|ext| lower.ends_with(ext))
-}
-
-fn selected_command_name(app: &ChatApp) -> Option<String> {
-    app.filtered_commands
-        .get(app.selected_command_index)
-        .map(|command| command.name.clone())
-}
-
-fn submit_and_handle(
-    app: &mut ChatApp,
-    settings: &Settings,
-    cwd: &Path,
-    event_sender: &TuiEventSender,
-) {
-    let input = app.submit_input();
-    app.update_command_filtering();
-    handle_submitted_input(input, app, settings, cwd, event_sender);
-}
-
-fn handle_enter_key(
-    app: &mut ChatApp,
-    settings: &Settings,
-    cwd: &Path,
-    event_sender: &TuiEventSender,
-) {
-    if let Some(name) = selected_command_name(app)
-        && app.input != name
-    {
-        mutate_input(app, |app| app.set_input(name));
-        return;
-    }
-
-    submit_and_handle(app, settings, cwd, event_sender);
-}
-
-fn scroll_page_down(app: &mut ChatApp, width: u16, height: u16) {
-    let (total_lines, visible_height) = scroll_bounds(app, width, height);
-    app.message_scroll.scroll_down_steps(
-        total_lines,
-        visible_height,
-        visible_height.saturating_sub(1),
-    );
-}
-
-fn scroll_bounds(app: &ChatApp, width: u16, height: u16) -> (usize, usize) {
-    let visible_height = app.message_viewport_height(height);
-    let wrap_width = app.message_wrap_width(width);
-    let lines = app.get_lines(wrap_width);
-    let total_lines = lines.len();
-    drop(lines);
-    (total_lines, visible_height)
-}
-
-/// Copy selected text to clipboard
-fn copy_selection_to_clipboard(app: &ChatApp, terminal_width: u16) -> bool {
-    let wrap_width = app.message_wrap_width(terminal_width);
-    let lines = app.get_lines(wrap_width);
-    let selected_text = app.get_selected_text(&lines);
-
-    if !selected_text.is_empty()
-        && let Ok(mut clipboard) = arboard::Clipboard::new()
-        && clipboard.set_text(&selected_text).is_ok()
-    {
-        return true;
-    }
-
-    false
-}
-
-/// Handle mouse click - start text selection
-fn handle_mouse_click(app: &mut ChatApp, x: u16, y: u16, terminal: &tui::Tui) {
-    if let Some((line, column)) = screen_to_message_coords(app, x, y, terminal) {
-        app.start_selection(line, column);
-    }
-}
-
-/// Handle mouse drag - update text selection
-fn handle_mouse_drag(app: &mut ChatApp, x: u16, y: u16, terminal: &tui::Tui) {
-    if let Some((line, column)) = screen_to_message_coords(app, x, y, terminal) {
-        app.update_selection(line, column);
-    }
-}
-
-/// Handle mouse release - end text selection
-fn handle_mouse_release(app: &mut ChatApp, _x: u16, _y: u16, _terminal: &tui::Tui) {
-    if let Some((line, column)) = screen_to_message_coords(app, _x, _y, _terminal) {
-        app.update_selection(line, column);
-    }
-    if app.text_selection.is_active()
-        && let Ok(size) = _terminal.size()
-    {
-        if copy_selection_to_clipboard(app, size.width) {
-            app.show_clipboard_notice(_x, _y);
-        }
-        app.clear_selection();
-    }
-    app.end_selection();
-}
-
-/// Convert screen coordinates to message line and column
-fn screen_to_message_coords(
-    app: &ChatApp,
-    x: u16,
-    y: u16,
-    terminal: &tui::Tui,
-) -> Option<(usize, usize)> {
-    const MAIN_OUTER_PADDING_X: u16 = 1;
-    const MAIN_OUTER_PADDING_Y: u16 = 1;
-
-    let size = terminal.size().ok()?;
-
-    // Simplified calculation - just check if it's roughly in the message area
-    // The message area is at the top, below it are processing indicator and input
-    let input_area_height = 6; // Approximate input area height
-    if y < MAIN_OUTER_PADDING_Y || y >= size.height.saturating_sub(input_area_height) {
-        return None;
-    }
-
-    let relative_y = (y - MAIN_OUTER_PADDING_Y) as usize;
-    let relative_x = x.saturating_sub(MAIN_OUTER_PADDING_X) as usize;
-
-    let wrap_width = app.message_wrap_width(size.width);
-    let total_lines = app.get_lines(wrap_width).len();
-    let visible_height = app.message_viewport_height(size.height);
-    let scroll_offset = app
-        .message_scroll
-        .effective_offset(total_lines, visible_height);
-
-    let line = scroll_offset.saturating_add(relative_y);
-    let column = relative_x;
-
-    Some((line, column))
-}
-
-fn handle_area_scroll(
-    app: &mut ChatApp,
-    terminal_size: Rect,
-    x: u16,
-    y: u16,
-    up_steps: usize,
-    down_steps: usize,
-) -> bool {
-    let layout_rects = tui::compute_layout_rects(terminal_size, app);
-
-    // Check if mouse is in sidebar
-    if let Some(sidebar_content) = layout_rects.sidebar_content
-        && point_in_rect(x, y, sidebar_content)
-    {
-        let total_lines = app.get_sidebar_lines(sidebar_content.width).len();
-        let visible_height = sidebar_content.height as usize;
-
-        // Only scroll if sidebar has scrollable content
-        if total_lines > visible_height {
-            if up_steps > 0 {
-                app.sidebar_scroll
-                    .scroll_up_steps(total_lines, visible_height, up_steps);
-            }
-            if down_steps > 0 {
-                app.sidebar_scroll
-                    .scroll_down_steps(total_lines, visible_height, down_steps);
-            }
-            return true;
-        }
-        // Sidebar not scrollable, don't scroll anything
-        return true;
-    }
-
-    // Check if mouse is in main messages area
-    if let Some(main_messages) = layout_rects.main_messages
-        && point_in_rect(x, y, main_messages)
-    {
-        let (total_lines, visible_height) =
-            scroll_bounds(app, terminal_size.width, terminal_size.height);
-        if up_steps > 0 {
-            app.message_scroll
-                .scroll_up_steps(total_lines, visible_height, up_steps);
-        }
-        if down_steps > 0 {
-            app.message_scroll
-                .scroll_down_steps(total_lines, visible_height, down_steps);
-        }
-        return true;
-    }
-
-    // Mouse not in a scrollable area
-    false
-}
-
-fn point_in_rect(x: u16, y: u16, rect: Rect) -> bool {
-    x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()
-}
 
 fn spawn_agent_task(
     settings: &Settings,
@@ -754,32 +109,6 @@ fn spawn_agent_task(
             sender.send(TuiEvent::Error(e.to_string()));
         }
     })
-}
-
-fn handle_mouse_event(mouse: MouseEvent) -> Option<InputEvent> {
-    match mouse.kind {
-        MouseEventKind::ScrollUp => Some(InputEvent::ScrollUp {
-            x: mouse.column,
-            y: mouse.row,
-        }),
-        MouseEventKind::ScrollDown => Some(InputEvent::ScrollDown {
-            x: mouse.column,
-            y: mouse.row,
-        }),
-        MouseEventKind::Down(crossterm::event::MouseButton::Left) => Some(InputEvent::MouseClick {
-            x: mouse.column,
-            y: mouse.row,
-        }),
-        MouseEventKind::Drag(crossterm::event::MouseButton::Left) => Some(InputEvent::MouseDrag {
-            x: mouse.column,
-            y: mouse.row,
-        }),
-        MouseEventKind::Up(crossterm::event::MouseButton::Left) => Some(InputEvent::MouseRelease {
-            x: mouse.column,
-            y: mouse.row,
-        }),
-        _ => None,
-    }
 }
 
 async fn run_interactive_chat_loop(
@@ -1028,150 +357,6 @@ fn build_model_options(settings: &Settings) -> Vec<ModelOptionView> {
         .collect()
 }
 
-fn initialize_subagent_manager(settings: Settings, cwd: PathBuf) {
-    let _ = GLOBAL_SUBAGENT_MANAGER.get_or_init(|| Arc::new(build_subagent_manager(settings, cwd)));
-}
-
-fn current_subagent_manager(settings: &Settings, cwd: &Path) -> Arc<SubagentManager> {
-    Arc::clone(
-        GLOBAL_SUBAGENT_MANAGER
-            .get_or_init(|| Arc::new(build_subagent_manager(settings.clone(), cwd.to_path_buf()))),
-    )
-}
-
-fn build_subagent_manager(settings: Settings, cwd: PathBuf) -> SubagentManager {
-    let enabled = settings.agent.parallel_subagents;
-    let max_parallel = settings.agent.max_parallel_subagents;
-    let max_depth = settings.agent.sub_agent_max_depth;
-    let executor_settings = settings.clone();
-    let executor: SubagentExecutor = Arc::new(move |request| {
-        let settings = executor_settings.clone();
-        let cwd = cwd.clone();
-        Box::pin(async move {
-            if !enabled {
-                return SubagentExecutionResult {
-                    status: SubagentStatus::Failed,
-                    summary: "parallel sub-agents are disabled by configuration".to_string(),
-                    error: Some("agent.parallel_subagents=false".to_string()),
-                    failure_reason: Some(SubAgentFailureReason::RuntimeError),
-                };
-            }
-            run_subagent_execution(settings, cwd, request).await
-        })
-    });
-
-    SubagentManager::new(max_parallel, max_depth, executor)
-}
-
-async fn run_subagent_execution(
-    settings: Settings,
-    cwd: PathBuf,
-    request: SubagentExecutionRequest,
-) -> SubagentExecutionResult {
-    let loader = match AgentLoader::new() {
-        Ok(loader) => loader,
-        Err(err) => {
-            return SubagentExecutionResult {
-                status: SubagentStatus::Failed,
-                summary: "failed to initialize agent loader".to_string(),
-                error: Some(err.to_string()),
-                failure_reason: Some(SubAgentFailureReason::RuntimeError),
-            };
-        }
-    };
-    let registry = match loader.load_agents() {
-        Ok(agents) => AgentRegistry::new(agents),
-        Err(err) => {
-            return SubagentExecutionResult {
-                status: SubagentStatus::Failed,
-                summary: "failed to load agents".to_string(),
-                error: Some(err.to_string()),
-                failure_reason: Some(SubAgentFailureReason::RuntimeError),
-            };
-        }
-    };
-
-    let Some(agent) = registry.get_agent(&request.subagent_type).cloned() else {
-        return SubagentExecutionResult {
-            status: SubagentStatus::Failed,
-            summary: format!("unknown subagent_type: {}", request.subagent_type),
-            error: None,
-            failure_reason: Some(SubAgentFailureReason::RuntimeError),
-        };
-    };
-    if agent.mode != AgentMode::Subagent {
-        return SubagentExecutionResult {
-            status: SubagentStatus::Failed,
-            summary: format!("agent '{}' is not a subagent", agent.name),
-            error: None,
-            failure_reason: Some(SubAgentFailureReason::RuntimeError),
-        };
-    }
-
-    let mut child_settings = settings.clone();
-    child_settings.apply_agent_settings(&agent);
-    child_settings.selected_agent = Some(agent.name.clone());
-    let model_ref = child_settings.selected_model_ref().to_string();
-
-    let loop_runner = match create_agent_loop(
-        child_settings,
-        &cwd,
-        &model_ref,
-        NoopEvents,
-        AgentLoopOptions {
-            subagent_manager: Some(current_subagent_manager(&settings, &cwd)),
-            parent_task_id: Some(request.task_id.clone()),
-            depth: request.depth,
-            session_id: Some(request.child_session_id),
-            session_title: Some(request.description),
-            session_parent_id: Some(request.parent_session_id),
-        },
-    ) {
-        Ok(loop_runner) => loop_runner,
-        Err(err) => {
-            return SubagentExecutionResult {
-                status: SubagentStatus::Failed,
-                summary: "failed to initialize sub-agent runtime".to_string(),
-                error: Some(err.to_string()),
-                failure_reason: Some(SubAgentFailureReason::RuntimeError),
-            };
-        }
-    };
-
-    match loop_runner
-        .run_with_question_tool(
-            Message {
-                role: Role::User,
-                content: request.prompt,
-                attachments: Vec::new(),
-                tool_call_id: None,
-            },
-            |_request| async {
-                Ok::<crate::core::ApprovalChoice, anyhow::Error>(
-                    crate::core::ApprovalChoice::AllowSession,
-                )
-            },
-            |_questions| async {
-                anyhow::bail!("question tool is not available in sub-agent mode")
-            },
-        )
-        .await
-    {
-        Ok(output) => SubagentExecutionResult {
-            status: SubagentStatus::Completed,
-            summary: output,
-            error: None,
-            failure_reason: None,
-        },
-        Err(err) => SubagentExecutionResult {
-            status: SubagentStatus::Failed,
-            summary: "sub-agent execution failed".to_string(),
-            error: Some(err.to_string()),
-            failure_reason: Some(SubAgentFailureReason::RuntimeError),
-        },
-    }
-}
-
 fn format_modalities(modalities: &[crate::config::settings::ModelModalityType]) -> String {
     modalities
         .iter()
@@ -1270,32 +455,6 @@ async fn run_agent(
     Ok(())
 }
 
-fn map_subagent_node_event(
-    node: &crate::core::agent::subagent_manager::SubagentNode,
-) -> tui::SubagentEventItem {
-    let status = node.status.label().to_string();
-
-    let finished_at = if node.status.is_terminal() {
-        Some(node.updated_at)
-    } else {
-        None
-    };
-
-    tui::SubagentEventItem {
-        task_id: node.task_id.clone(),
-        name: node.name.clone(),
-        agent_name: node.agent_name.clone(),
-        status,
-        prompt: node.prompt.clone(),
-        depth: node.depth,
-        parent_task_id: node.parent_task_id.clone(),
-        started_at: node.started_at,
-        finished_at,
-        summary: node.summary.clone(),
-        error: node.error.clone(),
-    }
-}
-
 fn validate_image_input_model_support(
     settings: &Settings,
     model_ref: &str,
@@ -1385,6 +544,8 @@ fn approval_request_to_question_prompt(
     }
 }
 
+// Approval option labels are protocol between question prompt rendering and parsing.
+// Keep prompt labels and parse_approval_choice mapping in lock-step.
 fn parse_approval_choice(
     request: &crate::core::ApprovalRequest,
     answers: &crate::core::QuestionAnswers,
@@ -1412,6 +573,8 @@ fn parse_approval_choice(
     }
 }
 
+// Only bash approvals persist to local permission rules.
+// Non-bash approvals remain per-request/per-session decisions.
 fn persist_approval_choice_if_needed(
     cwd: &Path,
     request: &crate::core::ApprovalRequest,
@@ -1602,415 +765,6 @@ where
     })
 }
 
-use anyhow::Context;
-
-fn handle_submitted_input(
-    input: SubmittedInput,
-    app: &mut ChatApp,
-    settings: &Settings,
-    cwd: &Path,
-    event_sender: &TuiEventSender,
-) {
-    if input.text.starts_with('/') && input.attachments.is_empty() {
-        if let Some(tui::ChatMessage::User(last)) = app.messages.last()
-            && last == &input.text
-        {
-            app.messages.pop();
-            app.mark_dirty();
-        }
-        handle_slash_command(input.text, app, settings, cwd, event_sender);
-    } else if app.is_picking_session {
-        if let Err(e) = handle_session_selection(input.text, app, settings, cwd) {
-            app.messages
-                .push(tui::ChatMessage::Assistant(e.to_string()));
-            app.mark_dirty();
-        }
-        app.set_processing(false);
-    } else {
-        handle_chat_message(input, app, settings, cwd, event_sender);
-    }
-}
-
-fn handle_slash_command(
-    input: String,
-    app: &mut ChatApp,
-    settings: &Settings,
-    cwd: &Path,
-    event_sender: &TuiEventSender,
-) {
-    let scoped_sender = event_sender.scoped(app.session_epoch(), app.run_epoch());
-    let mut parts = input.split_whitespace();
-    let command = parts.next().unwrap_or_default();
-
-    match command {
-        "/new" => {
-            app.start_new_session(build_session_name(cwd));
-            finish_idle(app);
-        }
-        "/model" => {
-            if let Some(model_ref) = parts.next() {
-                if let Some(model) = settings.resolve_model_ref(model_ref) {
-                    app.set_selected_model(model_ref);
-                    finish_with_assistant(
-                        app,
-                        format!(
-                            "Switched to {} ({} -> {}, context: {}, output: {})",
-                            model_ref,
-                            format_modalities(&model.model.modalities.input),
-                            format_modalities(&model.model.modalities.output),
-                            model.model.limits.context,
-                            model.model.limits.output
-                        ),
-                    );
-                } else {
-                    finish_with_assistant(app, format!("Unknown model: {model_ref}"));
-                }
-            } else {
-                let mut text = format!(
-                    "Current model: {}\n\nAvailable models:\n",
-                    app.selected_model_ref()
-                );
-                for option in &app.available_models {
-                    text.push_str(&format!(
-                        "- {} ({}, context: {} tokens)\n",
-                        option.full_id, option.modality, option.max_context_size
-                    ));
-                }
-                text.push_str("\nUse /model <provider-id/model-id> to switch.");
-                finish_with_assistant(app, text);
-            }
-        }
-        "/compact" => {
-            let Some(session_id) = app.session_id.clone() else {
-                finish_with_assistant(app, "No active session to compact yet.");
-                return;
-            };
-            let model_ref = app.selected_model_ref().to_string();
-
-            app.handle_event(&TuiEvent::CompactionStart);
-
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                let settings = settings.clone();
-                let cwd = cwd.to_path_buf();
-                let sender = scoped_sender.clone();
-                handle.spawn(async move {
-                    match compact_session_with_llm(settings, &cwd, &session_id, &model_ref).await {
-                        Ok(summary) => sender.send(TuiEvent::CompactionDone(summary)),
-                        Err(e) => sender.send(TuiEvent::Error(format!("Failed to compact: {e}"))),
-                    }
-                });
-            } else {
-                let result = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .context("Failed to create runtime for compaction")
-                    .and_then(|rt| {
-                        rt.block_on(compact_session_with_llm(
-                            settings.clone(),
-                            cwd,
-                            &session_id,
-                            &model_ref,
-                        ))
-                    });
-
-                match result {
-                    Ok(summary) => {
-                        app.handle_event(&TuiEvent::CompactionDone(summary));
-                    }
-                    Err(e) => {
-                        app.handle_event(&TuiEvent::Error(format!("Failed to compact: {e}")));
-                    }
-                }
-            }
-        }
-        "/quit" => {
-            app.should_quit = true;
-        }
-        "/resume" => {
-            let sessions = SessionStore::list(&settings.session.root, cwd).unwrap_or_default();
-            if sessions.is_empty() {
-                finish_with_assistant(app, "No previous sessions found.");
-            } else {
-                app.available_sessions = sessions;
-                app.is_picking_session = true;
-
-                let mut msg = String::from("Available sessions:\n");
-                for (i, s) in app.available_sessions.iter().enumerate() {
-                    msg.push_str(&format!("[{}] {}\n", i + 1, s.title));
-                }
-                msg.push_str("\nEnter number to resume:");
-                finish_with_assistant(app, msg);
-            }
-        }
-        _ => {
-            finish_with_assistant(app, format!("Unknown command: {}", input));
-        }
-    }
-}
-
-fn finish_with_assistant(app: &mut ChatApp, message: impl Into<String>) {
-    app.messages
-        .push(tui::ChatMessage::Assistant(message.into()));
-    finish_idle(app);
-}
-
-fn finish_idle(app: &mut ChatApp) {
-    app.mark_dirty();
-    app.set_processing(false);
-}
-
-async fn compact_session_with_llm(
-    settings: Settings,
-    cwd: &Path,
-    session_id: &str,
-    model_ref: &str,
-) -> anyhow::Result<String> {
-    let store = SessionStore::new(&settings.session.root, cwd, Some(session_id), None)
-        .context("Failed to load session store")?;
-    let messages = store
-        .replay_messages()
-        .context("Failed to replay session for compaction")?;
-
-    if messages.is_empty() {
-        return Ok("No prior context to compact yet.".to_string());
-    }
-
-    let summary = generate_compaction_summary(&settings, messages, model_ref).await?;
-    store
-        .append(&SessionEvent::Compact {
-            id: event_id(),
-            summary: summary.clone(),
-        })
-        .context("Failed to append compact marker")?;
-
-    Ok(summary)
-}
-
-async fn generate_compaction_summary(
-    settings: &Settings,
-    messages: Vec<Message>,
-    model_ref: &str,
-) -> anyhow::Result<String> {
-    #[cfg(test)]
-    {
-        let _ = settings;
-        let _ = messages;
-        let _ = model_ref;
-        Ok("Compacted context summary for tests.".to_string())
-    }
-
-    #[cfg(not(test))]
-    {
-        let mut prompt_messages = Vec::with_capacity(messages.len() + 2);
-        prompt_messages.push(Message {
-            role: crate::core::Role::System,
-            content: "You compact conversation history for an engineering assistant. Produce a concise summary that preserves requirements, decisions, constraints, open questions, and pending work items. Prefer bullet points. Do not invent details.".to_string(),
-            attachments: Vec::new(),
-            tool_call_id: None,
-        });
-        prompt_messages.extend(messages);
-        prompt_messages.push(Message {
-            role: crate::core::Role::User,
-            content: "Compact the conversation so future turns can continue from this summary with minimal context loss.".to_string(),
-            attachments: Vec::new(),
-            tool_call_id: None,
-        });
-
-        let selected = settings
-            .resolve_model_ref(model_ref)
-            .with_context(|| format!("model is not configured: {model_ref}"))?;
-
-        let provider = OpenAiCompatibleProvider::new(
-            selected.provider.base_url.clone(),
-            selected.model.id.clone(),
-            selected.provider.api_key_env.clone(),
-        );
-
-        let response = crate::core::Provider::complete(
-            &provider,
-            crate::core::ProviderRequest {
-                model: selected.model.id.clone(),
-                messages: prompt_messages,
-                tools: Vec::new(),
-            },
-        )
-        .await
-        .context("Compaction request failed")?;
-
-        if !response.tool_calls.is_empty() {
-            anyhow::bail!("Compaction response unexpectedly requested tools");
-        }
-
-        let summary = response.assistant_message.content.trim().to_string();
-        if summary.is_empty() {
-            anyhow::bail!("Compaction response was empty");
-        }
-
-        Ok(summary)
-    }
-}
-
-fn handle_session_selection(
-    input: String,
-    app: &mut ChatApp,
-    settings: &Settings,
-    cwd: &Path,
-) -> anyhow::Result<()> {
-    let idx = input.trim().parse::<usize>().context("Invalid number.")?;
-
-    if idx == 0 || idx > app.available_sessions.len() {
-        anyhow::bail!("Invalid session index.");
-    }
-
-    let session = app.available_sessions[idx - 1].clone();
-    app.bump_session_epoch();
-    app.session_id = Some(session.id.clone());
-    app.session_name = session.title.clone();
-    app.last_context_tokens = None;
-    app.is_picking_session = false;
-
-    let store = SessionStore::new(&settings.session.root, cwd, Some(&session.id), None)
-        .context("Failed to load session store")?;
-
-    let events = store.replay_events().context("Failed to replay session")?;
-
-    app.messages.clear();
-    app.todo_items.clear();
-    app.subagent_items.clear();
-    let mut subagent_items_by_task: HashMap<String, tui::SubagentItemView> = HashMap::new();
-    for event in events {
-        match event {
-            SessionEvent::Message { message, .. } => {
-                let chat_msg = match message.role {
-                    crate::core::Role::User => tui::ChatMessage::User(message.content),
-                    crate::core::Role::Assistant => tui::ChatMessage::Assistant(message.content),
-                    _ => continue,
-                };
-                app.messages.push(chat_msg);
-            }
-            SessionEvent::ToolCall { call } => {
-                app.messages.push(tui::ChatMessage::ToolCall {
-                    name: call.name,
-                    args: call.arguments.to_string(),
-                    output: None,
-                    is_error: None,
-                });
-            }
-            SessionEvent::ToolResult {
-                id: _,
-                is_error,
-                output,
-                result,
-            } => {
-                let pending_tool_name = app.messages.iter().rev().find_map(|msg| match msg {
-                    tui::ChatMessage::ToolCall { name, output, .. } if output.is_none() => {
-                        Some(name.clone())
-                    }
-                    _ => None,
-                });
-                if let Some(name) = pending_tool_name {
-                    let replayed_result = result.unwrap_or_else(|| {
-                        if is_error {
-                            crate::tool::ToolResult::err_text("error", output)
-                        } else {
-                            crate::tool::ToolResult::ok_text("ok", output)
-                        }
-                    });
-                    app.handle_event(&tui::TuiEvent::ToolEnd {
-                        name,
-                        result: replayed_result,
-                    });
-                }
-            }
-            SessionEvent::Thinking { content, .. } => {
-                app.messages.push(tui::ChatMessage::Thinking(content));
-            }
-            SessionEvent::Compact { summary, .. } => {
-                app.messages.push(tui::ChatMessage::Compaction(summary));
-            }
-            SessionEvent::SubAgentStart {
-                id,
-                task_id,
-                name,
-                parent_id,
-                agent_name,
-                prompt,
-                depth,
-                created_at,
-                status,
-                ..
-            } => {
-                let task_id = task_id.unwrap_or(id);
-                subagent_items_by_task.insert(
-                    task_id.clone(),
-                    tui::SubagentItemView {
-                        task_id,
-                        name: name
-                            .or_else(|| agent_name.clone())
-                            .unwrap_or_else(|| "subagent".to_string()),
-                        parent_task_id: parent_id,
-                        agent_name: agent_name.unwrap_or_else(|| "subagent".to_string()),
-                        prompt,
-                        summary: None,
-                        depth,
-                        started_at: created_at,
-                        finished_at: None,
-                        status: tui::SubagentStatusView::from_lifecycle(status),
-                    },
-                );
-            }
-            SessionEvent::SubAgentResult {
-                id,
-                task_id,
-                status,
-                summary,
-                output,
-                ..
-            } => {
-                let task_id = task_id.unwrap_or(id);
-                let entry = subagent_items_by_task
-                    .entry(task_id.clone())
-                    .or_insert_with(|| tui::SubagentItemView {
-                        task_id,
-                        name: "subagent".to_string(),
-                        parent_task_id: None,
-                        agent_name: "subagent".to_string(),
-                        prompt: String::new(),
-                        summary: None,
-                        depth: 0,
-                        started_at: 0,
-                        finished_at: None,
-                        status: tui::SubagentStatusView::Running,
-                    });
-                entry.status = tui::SubagentStatusView::from_lifecycle(status);
-                if entry.status.is_terminal() {
-                    entry.finished_at = Some(entry.started_at);
-                }
-                entry.summary = if let Some(summary) = summary {
-                    Some(summary)
-                } else if output.trim().is_empty() {
-                    None
-                } else {
-                    Some(output)
-                };
-            }
-            _ => {}
-        }
-    }
-    app.subagent_items = subagent_items_by_task.into_values().collect();
-    for item in &mut app.subagent_items {
-        if item.status.is_active() {
-            item.status = tui::SubagentStatusView::Failed;
-            if item.summary.is_none() {
-                item.summary = Some("interrupted_by_restart".to_string());
-            }
-        }
-    }
-    app.mark_dirty();
-
-    Ok(())
-}
-
 fn handle_chat_message(
     input: SubmittedInput,
     app: &mut ChatApp,
@@ -2076,154 +830,19 @@ fn handle_chat_message(
     }
 }
 
-fn fallback_session_title(prompt: &str) -> String {
-    let trimmed = prompt.trim();
-    if trimmed.is_empty() {
-        return "Image input".to_string();
-    }
-
-    trimmed
-        .split_whitespace()
-        .take(12)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn normalize_session_title(raw: &str, fallback: &str) -> String {
-    let cleaned = raw
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .trim_matches('"')
-        .trim_matches('`')
-        .split_whitespace()
-        .take(12)
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    if cleaned.is_empty() {
-        fallback.to_string()
-    } else {
-        cleaned
-    }
-}
-
-fn spawn_session_title_generation_task(
-    settings: &Settings,
-    cwd: &Path,
-    session_id: String,
-    model_ref: String,
-    prompt: String,
-    event_sender: &TuiEventSender,
-) {
-    let settings = settings.clone();
-    let cwd = cwd.to_path_buf();
-    let event_sender = event_sender.clone();
-    tokio::spawn(async move {
-        let fallback = fallback_session_title(&prompt);
-        let generated = match generate_session_title(&settings, &model_ref, &prompt).await {
-            Ok(title) => title,
-            Err(_) => return,
-        };
-
-        let store = match SessionStore::new(&settings.session.root, &cwd, Some(&session_id), None) {
-            Ok(store) => store,
-            Err(_) => return,
-        };
-
-        let title = normalize_session_title(&generated, &fallback);
-        if store.update_title(title.clone()).is_ok() {
-            event_sender.send(TuiEvent::SessionTitle(title));
-        }
-    });
-}
-
-async fn generate_session_title(
-    settings: &Settings,
-    model_ref: &str,
-    prompt: &str,
-) -> anyhow::Result<String> {
-    #[cfg(test)]
-    {
-        let _ = settings;
-        let _ = model_ref;
-        Ok(normalize_session_title(
-            "Generated test title",
-            &fallback_session_title(prompt),
-        ))
-    }
-
-    #[cfg(not(test))]
-    {
-        let selected = settings
-            .resolve_model_ref(model_ref)
-            .with_context(|| format!("model is not configured: {model_ref}"))?;
-
-        let provider = OpenAiCompatibleProvider::new(
-            selected.provider.base_url.clone(),
-            selected.model.id.clone(),
-            selected.provider.api_key_env.clone(),
-        );
-
-        let request = crate::core::ProviderRequest {
-            model: selected.model.id.clone(),
-            messages: vec![
-                Message {
-                    role: crate::core::Role::System,
-                    content: "Generate a concise session title for this prompt. Return only the title, no punctuation wrappers, and keep it to 12 words or fewer.".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                },
-                Message {
-                    role: crate::core::Role::User,
-                    content: prompt.to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                },
-            ],
-            tools: Vec::new(),
-        };
-
-        let mut last_error: Option<anyhow::Error> = None;
-        for attempt in 1..=3 {
-            if attempt > 1 {
-                tokio::time::sleep(Duration::from_millis(350 * attempt as u64)).await;
-            }
-
-            match crate::core::Provider::complete_stream(&provider, request.clone(), |_| {}).await {
-                Ok(response) => {
-                    if !response.tool_calls.is_empty() {
-                        anyhow::bail!("Session title response unexpectedly requested tools");
-                    }
-
-                    let fallback = fallback_session_title(prompt);
-                    return Ok(normalize_session_title(
-                        &response.assistant_message.content,
-                        &fallback,
-                    ));
-                }
-                Err(err) => {
-                    last_error =
-                        Some(err.context(format!("title generation attempt {attempt}/3 failed")));
-                }
-            }
-        }
-
-        let err = last_error.unwrap_or_else(|| anyhow::anyhow!("unknown title request failure"));
-        Err(err).context("Session title request failed")
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::input::{handle_mouse_event, prepare_paste, scroll_up_steps};
     use super::*;
     use crate::config::settings::{
         AgentSettings, ModelLimits, ModelMetadata, ModelModalities, ModelModalityType,
         ModelSettings, ProviderConfig, SessionSettings,
     };
     use crate::core::{Message, Role};
-    use crossterm::event::{KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+    use crate::session::{SessionEvent, event_id};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+    };
     use std::collections::BTreeMap;
     use tempfile::tempdir;
 
@@ -3292,6 +1911,44 @@ mod tests {
     }
 
     #[test]
+    fn parse_approval_choice_maps_bash_and_non_bash_labels() {
+        let bash_request = crate::core::ApprovalRequest {
+            title: "Tool Execution Approval".to_string(),
+            body: "Allow bash?".to_string(),
+            action: serde_json::json!({"approval_kind": "bash"}),
+        };
+        let generic_request = crate::core::ApprovalRequest {
+            title: "Tool Execution Approval".to_string(),
+            body: "Allow action?".to_string(),
+            action: serde_json::json!({"approval_kind": "tool"}),
+        };
+
+        let bash_always = vec![vec!["Always Allow".to_string()]];
+        let generic_session = vec![vec!["Always Allow in this Session".to_string()]];
+
+        assert_eq!(
+            parse_approval_choice(&bash_request, &bash_always),
+            Some(crate::core::ApprovalChoice::AllowAlways)
+        );
+        assert_eq!(
+            parse_approval_choice(&generic_request, &generic_session),
+            Some(crate::core::ApprovalChoice::AllowSession)
+        );
+    }
+
+    #[test]
+    fn parse_approval_choice_returns_none_for_unknown_labels() {
+        let request = crate::core::ApprovalRequest {
+            title: "Tool Execution Approval".to_string(),
+            body: "Allow action?".to_string(),
+            action: serde_json::json!({"approval_kind": "bash"}),
+        };
+
+        let answers = vec![vec!["Not a valid label".to_string()]];
+        assert_eq!(parse_approval_choice(&request, &answers), None);
+    }
+
+    #[test]
     fn persist_bash_always_allow_updates_local_config() {
         let temp_dir = tempdir().expect("tempdir");
         let request = crate::core::ApprovalRequest {
@@ -3315,5 +1972,62 @@ mod tests {
         let local = std::fs::read_to_string(temp_dir.path().join(".hh/config.local.json"))
             .expect("read local config");
         assert!(local.contains("Bash(git status*)"));
+    }
+
+    #[test]
+    fn persist_bash_deny_updates_local_config() {
+        let temp_dir = tempdir().expect("tempdir");
+        let request = crate::core::ApprovalRequest {
+            title: "Tool Execution Approval".to_string(),
+            body: "Deny bash?".to_string(),
+            action: serde_json::json!({
+                "operation": "tool_execution",
+                "tool_name": "bash",
+                "approval_kind": "bash",
+                "permission_rule": "Bash(rm -rf*)"
+            }),
+        };
+
+        persist_approval_choice_if_needed(
+            temp_dir.path(),
+            &request,
+            crate::core::ApprovalChoice::Deny,
+        )
+        .expect("persist deny approval");
+
+        let local = std::fs::read_to_string(temp_dir.path().join(".hh/config.local.json"))
+            .expect("read local config");
+        assert!(local.contains("Bash(rm -rf*)"));
+        assert!(local.contains("\"deny\""));
+    }
+
+    #[test]
+    fn persist_non_bash_or_non_persistent_choices_do_not_write_local_config() {
+        let temp_dir = tempdir().expect("tempdir");
+        let generic_request = crate::core::ApprovalRequest {
+            title: "Approval".to_string(),
+            body: "Allow action?".to_string(),
+            action: serde_json::json!({"approval_kind": "tool", "permission_rule": "Any(*)"}),
+        };
+        let bash_request = crate::core::ApprovalRequest {
+            title: "Approval".to_string(),
+            body: "Allow once?".to_string(),
+            action: serde_json::json!({"approval_kind": "bash", "permission_rule": "Bash(ls*)"}),
+        };
+
+        persist_approval_choice_if_needed(
+            temp_dir.path(),
+            &generic_request,
+            crate::core::ApprovalChoice::AllowAlways,
+        )
+        .expect("non-bash should be ignored");
+        persist_approval_choice_if_needed(
+            temp_dir.path(),
+            &bash_request,
+            crate::core::ApprovalChoice::AllowOnce,
+        )
+        .expect("allow once should not persist");
+
+        assert!(!temp_dir.path().join(".hh/config.local.json").exists());
     }
 }
