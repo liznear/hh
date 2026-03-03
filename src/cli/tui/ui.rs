@@ -225,10 +225,12 @@ fn render_subagent_back_indicator(f: &mut Frame, app: &ChatApp, area: Rect, layo
     ));
     spans.push(Span::raw(PROCESSING_STATUS_GAP));
     spans.push(Span::styled("esc", Style::default().fg(TEXT_MUTED)));
-    spans.push(Span::styled(
-        " back to main agent",
-        Style::default().fg(TEXT_MUTED),
-    ));
+    let back_label = if app.subagent_session_depth() > 1 {
+        " back to upper subagent"
+    } else {
+        " back to main agent"
+    };
+    spans.push(Span::styled(back_label, Style::default().fg(TEXT_MUTED)));
 
     let paragraph =
         ratatui::widgets::Paragraph::new(Line::from(spans)).style(Style::default().bg(PAGE_BG));

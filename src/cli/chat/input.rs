@@ -577,10 +577,6 @@ pub(super) fn handle_mouse_click(
     settings: &Settings,
     cwd: &Path,
 ) {
-    if app.is_viewing_subagent_session() {
-        return;
-    }
-
     if let Some((line, _column)) = screen_to_message_coords(app, x, y, terminal)
         && let Ok(size) = terminal.size()
     {

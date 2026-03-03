@@ -100,6 +100,8 @@ async fn run_subagent_execution(
     child_settings.apply_agent_settings(&agent);
     child_settings.selected_agent = Some(agent.name.clone());
     let model_ref = child_settings.selected_model_ref().to_string();
+    let task_id = request.task_id.clone();
+    let child_session_id = request.child_session_id.clone();
 
     let loop_runner = match create_agent_loop(
         child_settings,
@@ -110,7 +112,7 @@ async fn run_subagent_execution(
             subagent_manager: Some(current_subagent_manager(&settings, &cwd)),
             parent_task_id: Some(request.task_id.clone()),
             depth: request.depth,
-            session_id: Some(request.child_session_id),
+            session_id: Some(child_session_id.clone()),
             session_title: Some(request.description),
             session_parent_id: Some(request.parent_session_id),
         },
@@ -145,18 +147,38 @@ async fn run_subagent_execution(
         )
         .await
     {
-        Ok(output) => SubagentExecutionResult {
-            status: SubagentStatus::Completed,
-            summary: output,
-            error: None,
-            failure_reason: None,
-        },
+        Ok(output) => completed_subagent_result(output, &task_id, &child_session_id),
         Err(err) => SubagentExecutionResult {
             status: SubagentStatus::Failed,
             summary: "sub-agent execution failed".to_string(),
             error: Some(err.to_string()),
             failure_reason: Some(SubAgentFailureReason::RuntimeError),
         },
+    }
+}
+
+fn completed_subagent_result(
+    output: String,
+    task_id: &str,
+    child_session_id: &str,
+) -> SubagentExecutionResult {
+    if output.trim().is_empty() {
+        return SubagentExecutionResult {
+            status: SubagentStatus::Failed,
+            summary: "sub-agent produced no final response".to_string(),
+            error: Some(format!(
+                "empty final assistant response (task_id={}, session_id={})",
+                task_id, child_session_id
+            )),
+            failure_reason: Some(SubAgentFailureReason::RuntimeError),
+        };
+    }
+
+    SubagentExecutionResult {
+        status: SubagentStatus::Completed,
+        summary: output,
+        error: None,
+        failure_reason: None,
     }
 }
 
@@ -184,5 +206,60 @@ pub(super) fn map_subagent_node_event(
         finished_at,
         summary: node.summary.clone(),
         error: node.error.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_request() -> SubagentExecutionRequest {
+        SubagentExecutionRequest {
+            task_id: "task-1".to_string(),
+            name: "child".to_string(),
+            parent_session_id: "parent-session".to_string(),
+            parent_task_id: None,
+            description: "desc".to_string(),
+            prompt: "prompt".to_string(),
+            subagent_type: "general".to_string(),
+            child_session_id: "child-session".to_string(),
+            depth: 1,
+        }
+    }
+
+    #[test]
+    fn completed_subagent_result_rejects_empty_output() {
+        let request = sample_request();
+        let result = completed_subagent_result(
+            "   \n".to_string(),
+            &request.task_id,
+            &request.child_session_id,
+        );
+
+        assert_eq!(result.status, SubagentStatus::Failed);
+        assert_eq!(result.summary, "sub-agent produced no final response");
+        assert_eq!(
+            result.error.as_deref(),
+            Some("empty final assistant response (task_id=task-1, session_id=child-session)")
+        );
+        assert_eq!(
+            result.failure_reason,
+            Some(SubAgentFailureReason::RuntimeError)
+        );
+    }
+
+    #[test]
+    fn completed_subagent_result_keeps_non_empty_output() {
+        let request = sample_request();
+        let result = completed_subagent_result(
+            "done".to_string(),
+            &request.task_id,
+            &request.child_session_id,
+        );
+
+        assert_eq!(result.status, SubagentStatus::Completed);
+        assert_eq!(result.summary, "done");
+        assert!(result.error.is_none());
+        assert!(result.failure_reason.is_none());
     }
 }

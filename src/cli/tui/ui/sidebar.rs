@@ -55,12 +55,13 @@ pub(super) fn build_sidebar_lines(app: &ChatApp, content_width: u16) -> Vec<Line
         Style::default().fg(TEXT_PRIMARY).bold(),
     )));
     lines.push(Line::from(""));
-
-    if let Some(subagent) = app.active_subagent_session() {
+    for title in app.subagent_session_titles() {
         lines.push(Line::from(Span::styled(
-            sidebar_prefixed(&format!("-> Subagent Session: {}", subagent.title)),
+            sidebar_prefixed(&format!("→ {title}")),
             Style::default().fg(TEXT_PRIMARY),
         )));
+    }
+    if app.subagent_session_depth() > 0 {
         lines.push(Line::from(""));
     }
 

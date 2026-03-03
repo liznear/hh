@@ -1494,7 +1494,7 @@ fn custom_typed_value_renders_once() {
 }
 
 #[test]
-fn subagent_session_view_sidebar_and_back_hint_render() {
+fn nested_subagent_session_sidebar_and_back_hint_render() {
     let mut app = ChatApp::default();
     app.session_name = "Parent Session".to_string();
     app.subagent_items.push(crate::cli::tui::SubagentItemView {
@@ -1516,6 +1516,12 @@ fn subagent_session_view_sidebar_and_back_hint_render() {
         "Inspect code".to_string(),
         vec![ChatMessage::Assistant("child message".to_string())],
     );
+    app.open_subagent_session(
+        "task-2".to_string(),
+        "session-1-task-2".to_string(),
+        "Inspect nested code".to_string(),
+        vec![ChatMessage::Assistant("nested child message".to_string())],
+    );
 
     let backend = TestBackend::new(120, 30);
     let mut terminal = Terminal::new(backend).expect("terminal");
@@ -1531,8 +1537,9 @@ fn subagent_session_view_sidebar_and_back_hint_render() {
         .collect::<String>();
 
     assert!(full_text.contains("Parent Session"));
-    assert!(full_text.contains("-> Subagent Session: Inspect code"));
-    assert!(full_text.contains("esc back to main agent"));
+    assert!(full_text.contains("→ Inspect code"));
+    assert!(full_text.contains("→ Inspect nested code"));
+    assert!(full_text.contains("esc back to upper subagent"));
     assert!(!full_text.contains("<- Back"));
 }
 
