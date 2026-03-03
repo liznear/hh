@@ -12,4 +12,4 @@
 - [ ] Subagent doesn't have question tool, but LLM still try. Fix prompt injection.
 - [ ] Subagent failure is not rendered in the main session.
 - [ ] Fetch tool user agent.
-- [ ] Search tool 403. User agent? Permission
+- [x] Search tool 403. User agent? Permission
