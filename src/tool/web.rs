@@ -1,8 +1,8 @@
-use crate::tool::{Tool, ToolResult, ToolSchema};
+use crate::tool::{Tool, ToolResult, ToolSchema, parse_tool_args};
 use async_trait::async_trait;
 use reqwest::StatusCode;
 use scraper::{Html, Selector};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub struct WebFetchTool {
@@ -33,6 +33,16 @@ struct WebSearchOutput {
     query: String,
     count: usize,
     results: Vec<SearchResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebFetchArgs {
+    url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSearchArgs {
+    query: String,
 }
 
 enum WebRequestError {
@@ -82,8 +92,12 @@ impl Tool for WebFetchTool {
     }
 
     async fn execute(&self, args: Value) -> ToolResult {
-        let url = args.get("url").and_then(|v| v.as_str()).unwrap_or_default();
-        let (status, body) = match send_and_read_text(self.client.get(url)).await {
+        let parsed: WebFetchArgs = match parse_tool_args(args, "web_fetch") {
+            Ok(value) => value,
+            Err(err) => return err,
+        };
+        let url = parsed.url;
+        let (status, body) = match send_and_read_text(self.client.get(&url)).await {
             Ok(result) => result,
             Err(WebRequestError::Request(err)) => {
                 return ToolResult::err_text("request_error", err.to_string());
@@ -94,7 +108,7 @@ impl Tool for WebFetchTool {
         };
 
         let output = WebFetchOutput {
-            url: url.to_string(),
+            url,
             status_code: status.as_u16(),
             ok: status.is_success(),
             body,
@@ -149,10 +163,11 @@ impl Tool for WebSearchTool {
     }
 
     async fn execute(&self, args: Value) -> ToolResult {
-        let query = args
-            .get("query")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
+        let parsed: WebSearchArgs = match parse_tool_args(args, "web_search") {
+            Ok(value) => value,
+            Err(err) => return err,
+        };
+        let query = parsed.query;
 
         if query.is_empty() {
             return ToolResult::err_text("invalid_input", "query is required");
@@ -160,7 +175,7 @@ impl Tool for WebSearchTool {
 
         let url = format!(
             "https://html.duckduckgo.com/html/?q={}",
-            urlencoding::encode(query)
+            urlencoding::encode(&query)
         );
 
         let (status, html) = match send_and_read_text(self.client.get(&url)).await {
@@ -188,7 +203,7 @@ impl Tool for WebSearchTool {
 
         let results = parse_ddg_results(&html);
         let output = WebSearchOutput {
-            query: query.to_string(),
+            query,
             count: results.len(),
             results,
         };

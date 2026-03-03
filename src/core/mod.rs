@@ -11,5 +11,5 @@ pub use traits::{
 pub use types::{
     Message, MessageAttachment, ProviderRequest, ProviderResponse, ProviderStreamEvent,
     QuestionAnswer, QuestionAnswers, QuestionOption, QuestionPrompt, Role, SubAgentCall,
-    SubAgentResult, TodoItem, TodoPriority, TodoStatus, ToolCall,
+    SubAgentResult, TodoItem, TodoPriority, TodoStatus, ToolCall, ToolSchema,
 };

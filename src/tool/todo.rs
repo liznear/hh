@@ -3,32 +3,10 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::core::{TodoItem, TodoStatus};
+
 pub struct TodoWriteTool;
 pub struct TodoReadTool;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum TodoStatus {
-    Pending,
-    InProgress,
-    Completed,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum TodoPriority {
-    High,
-    Medium,
-    Low,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TodoItem {
-    content: String,
-    status: TodoStatus,
-    priority: TodoPriority,
-}
 
 #[derive(Debug, Deserialize)]
 struct TodoWriteArgs {

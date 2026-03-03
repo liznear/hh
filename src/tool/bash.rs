@@ -1,11 +1,23 @@
-use crate::tool::{Tool, ToolResult, ToolSchema};
+use crate::tool::{Tool, ToolResult, ToolSchema, parse_tool_args};
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
 
 pub struct BashTool {
     denylist: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BashArgs {
+    command: String,
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+fn default_timeout_ms() -> u64 {
+    60_000
 }
 
 impl Default for BashTool {
@@ -51,16 +63,14 @@ impl Tool for BashTool {
     }
 
     async fn execute(&self, args: Value) -> ToolResult {
-        let command = args
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let timeout_ms = args
-            .get("timeout_ms")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(60_000);
+        let parsed: BashArgs = match parse_tool_args(args, "bash") {
+            Ok(value) => value,
+            Err(err) => return err,
+        };
+        let command = parsed.command;
+        let timeout_ms = parsed.timeout_ms;
 
-        if self.denied(command) {
+        if self.denied(&command) {
             return ToolResult::err_json(
                 "blocked",
                 json!({
@@ -72,7 +82,7 @@ impl Tool for BashTool {
             );
         }
 
-        let fut = Command::new("sh").arg("-lc").arg(command).output();
+        let fut = Command::new("sh").arg("-lc").arg(&command).output();
         let output = match timeout(Duration::from_millis(timeout_ms), fut).await {
             Ok(Ok(out)) => out,
             Ok(Err(err)) => {

@@ -36,6 +36,17 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolSchema {
+    pub name: String,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mutating: Option<bool>,
+    pub parameters: Value,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -88,7 +99,7 @@ pub struct TodoItem {
 pub struct ProviderRequest {
     pub model: String,
     pub messages: Vec<Message>,
-    pub tools: Vec<crate::tool::schema::ToolSchema>,
+    pub tools: Vec<ToolSchema>,
 }
 
 #[derive(Debug, Clone)]

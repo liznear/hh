@@ -20,6 +20,22 @@ pub struct ToolRegistry {
     file_access: Option<FileAccessController>,
 }
 
+struct UnavailableTool {
+    schema: ToolSchema,
+    error: String,
+}
+
+#[async_trait]
+impl Tool for UnavailableTool {
+    fn schema(&self) -> ToolSchema {
+        self.schema.clone()
+    }
+
+    async fn execute(&self, _args: serde_json::Value) -> crate::tool::ToolResult {
+        crate::tool::ToolResult::err_text("unavailable", self.error.clone())
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct ToolRegistryContext {
     pub task: Option<TaskToolRuntimeContext>,
@@ -41,29 +57,36 @@ impl ToolRegistry {
         let mut file_access = None;
 
         if settings.tools.fs {
-            let shared_file_access = match FileAccessController::new(workspace_root.to_path_buf()) {
-                Ok(access) => access,
-                Err(err) => panic!("failed to initialize file access controller: {err}"),
-            };
-            file_access = Some(shared_file_access.clone());
+            match FileAccessController::new(workspace_root.to_path_buf()) {
+                Ok(shared_file_access) => {
+                    file_access = Some(shared_file_access.clone());
 
-            register(&mut tools, "read", FsRead::new(shared_file_access.clone()));
-            register(
-                &mut tools,
-                "write",
-                FsWrite::new(shared_file_access.clone()),
-            );
-            register(&mut tools, "list", FsList::new(shared_file_access.clone()));
-            register(&mut tools, "glob", FsGlob::new(shared_file_access.clone()));
-            register(&mut tools, "grep", FsGrep::new(shared_file_access.clone()));
+                    register(&mut tools, "read", FsRead::new(shared_file_access.clone()));
+                    register(
+                        &mut tools,
+                        "write",
+                        FsWrite::new(shared_file_access.clone()),
+                    );
+                    register(&mut tools, "list", FsList::new(shared_file_access.clone()));
+                    register(&mut tools, "glob", FsGlob::new(shared_file_access.clone()));
+                    register(&mut tools, "grep", FsGrep::new(shared_file_access.clone()));
+                    register(
+                        &mut tools,
+                        "edit",
+                        EditTool::new(shared_file_access.clone()),
+                    );
+                }
+                Err(err) => {
+                    register_fs_unavailable_tools(
+                        &mut tools,
+                        format!("failed to initialize file access controller: {err}"),
+                    );
+                }
+            }
+
             register(&mut tools, "todo_read", TodoReadTool);
             register(&mut tools, "todo_write", TodoWriteTool);
             register(&mut tools, "question", QuestionTool);
-            register(
-                &mut tools,
-                "edit",
-                EditTool::new(shared_file_access.clone()),
-            );
             register(
                 &mut tools,
                 "skill",
@@ -175,4 +198,63 @@ impl ToolExecutor for ToolRegistry {
 
 fn register<T: Tool + 'static>(tools: &mut HashMap<String, Arc<dyn Tool>>, name: &str, tool: T) {
     tools.insert(name.to_string(), Arc::new(tool));
+}
+
+fn register_fs_unavailable_tools(tools: &mut HashMap<String, Arc<dyn Tool>>, error: String) {
+    for (name, description, capability, mutating) in [
+        (
+            "read",
+            "Read files from workspace",
+            Some("read".to_string()),
+            Some(false),
+        ),
+        (
+            "write",
+            "Write files in workspace",
+            Some("write".to_string()),
+            Some(true),
+        ),
+        (
+            "list",
+            "List files in workspace",
+            Some("list".to_string()),
+            Some(false),
+        ),
+        (
+            "glob",
+            "Find files by glob pattern",
+            Some("glob".to_string()),
+            Some(false),
+        ),
+        (
+            "grep",
+            "Search file contents by regex",
+            Some("grep".to_string()),
+            Some(false),
+        ),
+        (
+            "edit",
+            "Edit files in workspace",
+            Some("edit".to_string()),
+            Some(true),
+        ),
+    ] {
+        register(
+            tools,
+            name,
+            UnavailableTool {
+                schema: ToolSchema {
+                    name: name.to_string(),
+                    description: description.to_string(),
+                    capability: capability.clone(),
+                    mutating,
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "additionalProperties": true
+                    }),
+                },
+                error: error.clone(),
+            },
+        );
+    }
 }

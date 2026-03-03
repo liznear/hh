@@ -433,6 +433,51 @@ pub struct AgentSpecificSettings {
 }
 
 impl Settings {
+    pub fn permission_policy_for_capability(&self, capability: &str) -> &str {
+        let permission = &self.permissions;
+        if let Some(raw) = permission.capabilities.get(capability) {
+            return raw;
+        }
+
+        match capability {
+            "read" => &permission.read,
+            "list" => &permission.list,
+            "glob" => &permission.glob,
+            "grep" => &permission.grep,
+            "write" => &permission.write,
+            "edit" => &permission.edit,
+            "todo_write" => &permission.todo_write,
+            "todo_read" => &permission.todo_read,
+            "question" => &permission.question,
+            "task" => &permission.task,
+            "bash" => &permission.bash,
+            "web" => &permission.web,
+            _ => "deny",
+        }
+    }
+
+    fn set_permission_policy_for_capability(&mut self, capability: &str, policy: String) {
+        match capability {
+            "read" => self.permissions.read = policy,
+            "list" => self.permissions.list = policy,
+            "glob" => self.permissions.glob = policy,
+            "grep" => self.permissions.grep = policy,
+            "write" => self.permissions.write = policy,
+            "edit" => self.permissions.edit = policy,
+            "todo_write" => self.permissions.todo_write = policy,
+            "todo_read" => self.permissions.todo_read = policy,
+            "question" => self.permissions.question = policy,
+            "task" => self.permissions.task = policy,
+            "bash" => self.permissions.bash = policy,
+            "web" => self.permissions.web = policy,
+            _ => {
+                self.permissions
+                    .capabilities
+                    .insert(capability.to_string(), policy);
+            }
+        }
+    }
+
     pub fn apply_agent_settings(&mut self, agent: &crate::agent::AgentConfig) {
         // Apply agent system prompt if specified
         if let Some(prompt) = &agent.system_prompt {
@@ -452,25 +497,7 @@ impl Settings {
 
         // Apply permission overrides
         for (capability, policy) in &agent.permission_overrides {
-            match capability.as_str() {
-                "read" => self.permissions.read = policy.clone(),
-                "list" => self.permissions.list = policy.clone(),
-                "glob" => self.permissions.glob = policy.clone(),
-                "grep" => self.permissions.grep = policy.clone(),
-                "write" => self.permissions.write = policy.clone(),
-                "edit" => self.permissions.edit = policy.clone(),
-                "todo_write" => self.permissions.todo_write = policy.clone(),
-                "todo_read" => self.permissions.todo_read = policy.clone(),
-                "question" => self.permissions.question = policy.clone(),
-                "task" => self.permissions.task = policy.clone(),
-                "bash" => self.permissions.bash = policy.clone(),
-                "web" => self.permissions.web = policy.clone(),
-                _ => {
-                    self.permissions
-                        .capabilities
-                        .insert(capability.clone(), policy.clone());
-                }
-            }
+            self.set_permission_policy_for_capability(capability, policy.clone());
         }
     }
 }

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use crate::agent::{AgentLoader, AgentMode, AgentRegistry};
+use crate::cli::chat::agent_run::{AgentLoopOptions, create_agent_loop};
 use crate::cli::tui;
 use crate::config::Settings;
 use crate::core::agent::NoopEvents;
@@ -100,12 +101,12 @@ async fn run_subagent_execution(
     child_settings.selected_agent = Some(agent.name.clone());
     let model_ref = child_settings.selected_model_ref().to_string();
 
-    let loop_runner = match super::create_agent_loop(
+    let loop_runner = match create_agent_loop(
         child_settings,
         &cwd,
         &model_ref,
         NoopEvents,
-        super::AgentLoopOptions {
+        AgentLoopOptions {
             subagent_manager: Some(current_subagent_manager(&settings, &cwd)),
             parent_task_id: Some(request.task_id.clone()),
             depth: request.depth,

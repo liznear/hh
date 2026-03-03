@@ -27,7 +27,7 @@ impl PermissionMatcher {
                 .capability
                 .clone()
                 .unwrap_or_else(|| schema.name.clone());
-            let raw = capability_policy(&settings, capability.as_str());
+            let raw = settings.permission_policy_for_capability(capability.as_str());
             decisions_by_tool.insert(schema.name.clone(), Decision::parse(raw));
             capability_by_tool.insert(schema.name.clone(), capability);
         }
@@ -84,28 +84,5 @@ impl ApprovalPolicy for PermissionMatcher {
             Decision::Ask => ApprovalDecision::Ask,
             Decision::Deny => ApprovalDecision::Deny,
         }
-    }
-}
-
-fn capability_policy<'a>(settings: &'a Settings, capability: &str) -> &'a str {
-    let permission = &settings.permissions;
-    if let Some(raw) = permission.capabilities.get(capability) {
-        return raw;
-    }
-
-    match capability {
-        "read" => &permission.read,
-        "list" => &permission.list,
-        "glob" => &permission.glob,
-        "grep" => &permission.grep,
-        "write" => &permission.write,
-        "edit" => &permission.edit,
-        "todo_write" => &permission.todo_write,
-        "todo_read" => &permission.todo_read,
-        "question" => &permission.question,
-        "task" => &permission.task,
-        "bash" => &permission.bash,
-        "web" => &permission.web,
-        _ => "deny",
     }
 }

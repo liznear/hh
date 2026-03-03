@@ -132,103 +132,102 @@ impl OpenAiCompatibleProvider {
         stream: bool,
         error_context: &str,
     ) -> anyhow::Result<reqwest::Response> {
-        let primary_body = self.request_body(req, stream, true, ImageDataFormat::DataUrl, true);
-
-        let primary = self
-            .client
-            .post(self.endpoint())
-            .headers(self.auth_headers()?)
-            .json(&primary_body)
-            .send()
-            .await
-            .with_context(|| error_context.to_string())?;
-
-        if primary.status().is_success() {
-            return Ok(primary);
+        struct RequestAttempt {
+            label: &'static str,
+            image_url_object: bool,
+            image_data_format: ImageDataFormat,
+            include_tools: bool,
+            requires_retryable_previous_error: bool,
         }
 
-        let primary_status = primary.status();
-        let primary_error = primary.text().await.unwrap_or_default();
-        if has_image_attachments(req)
-            && should_retry_for_image_payload(primary_status, &primary_error)
-        {
-            let no_tools_body =
-                self.request_body(req, stream, true, ImageDataFormat::DataUrl, false);
-            let fallback_no_tools = self
+        let mut attempts = vec![RequestAttempt {
+            label: "primary",
+            image_url_object: true,
+            image_data_format: ImageDataFormat::DataUrl,
+            include_tools: true,
+            requires_retryable_previous_error: false,
+        }];
+
+        if has_image_attachments(req) {
+            attempts.extend([
+                RequestAttempt {
+                    label: "fallback_no_tools",
+                    image_url_object: true,
+                    image_data_format: ImageDataFormat::DataUrl,
+                    include_tools: false,
+                    requires_retryable_previous_error: true,
+                },
+                RequestAttempt {
+                    label: "fallback_raw_base64",
+                    image_url_object: true,
+                    image_data_format: ImageDataFormat::RawBase64,
+                    include_tools: false,
+                    requires_retryable_previous_error: true,
+                },
+                RequestAttempt {
+                    label: "fallback_string_image_url",
+                    image_url_object: false,
+                    image_data_format: ImageDataFormat::DataUrl,
+                    include_tools: false,
+                    requires_retryable_previous_error: false,
+                },
+            ]);
+        }
+
+        let mut failures: Vec<(String, reqwest::StatusCode, String)> = Vec::new();
+        for attempt in attempts {
+            if attempt.requires_retryable_previous_error
+                && !failures
+                    .last()
+                    .is_some_and(|(_, status, body)| should_retry_for_image_payload(*status, body))
+            {
+                break;
+            }
+
+            let body = self.request_body(
+                req,
+                stream,
+                attempt.image_url_object,
+                attempt.image_data_format,
+                attempt.include_tools,
+            );
+            let context = if attempt.label == "primary" {
+                error_context.to_string()
+            } else {
+                format!("{} ({})", error_context, attempt.label)
+            };
+
+            let response = self
                 .client
                 .post(self.endpoint())
                 .headers(self.auth_headers()?)
-                .json(&no_tools_body)
+                .json(&body)
                 .send()
                 .await
-                .with_context(|| format!("{} (fallback: no tools)", error_context))?;
+                .with_context(|| context)?;
 
-            if fallback_no_tools.status().is_success() {
-                return Ok(fallback_no_tools);
+            if response.status().is_success() {
+                return Ok(response);
             }
 
-            let no_tools_status = fallback_no_tools.status();
-            let no_tools_error = fallback_no_tools.text().await.unwrap_or_default();
-
-            if should_retry_for_image_payload(no_tools_status, &no_tools_error) {
-                let raw_base64_body =
-                    self.request_body(req, stream, true, ImageDataFormat::RawBase64, false);
-                let fallback_raw_base64 = self
-                    .client
-                    .post(self.endpoint())
-                    .headers(self.auth_headers()?)
-                    .json(&raw_base64_body)
-                    .send()
-                    .await
-                    .with_context(|| format!("{} (fallback: raw base64)", error_context))?;
-
-                if fallback_raw_base64.status().is_success() {
-                    return Ok(fallback_raw_base64);
-                }
-
-                let raw_base64_status = fallback_raw_base64.status();
-                let raw_base64_error = fallback_raw_base64.text().await.unwrap_or_default();
-
-                let string_image_body =
-                    self.request_body(req, stream, false, ImageDataFormat::DataUrl, false);
-                let fallback_string_image = self
-                    .client
-                    .post(self.endpoint())
-                    .headers(self.auth_headers()?)
-                    .json(&string_image_body)
-                    .send()
-                    .await
-                    .with_context(|| format!("{} (fallback: string image_url)", error_context))?;
-
-                if fallback_string_image.status().is_success() {
-                    return Ok(fallback_string_image);
-                }
-
-                let string_status = fallback_string_image.status();
-                let string_error = fallback_string_image.text().await.unwrap_or_default();
-                bail!(
-                    "provider error {}: {} (fallback_no_tools {}: {}) (fallback_raw_base64 {}: {}) (fallback_string_image_url {}: {})",
-                    primary_status,
-                    primary_error,
-                    no_tools_status,
-                    no_tools_error,
-                    raw_base64_status,
-                    raw_base64_error,
-                    string_status,
-                    string_error
-                );
-            }
-
-            bail!(
-                "provider error {}: {} (fallback_no_tools {}: {})",
-                primary_status,
-                primary_error,
-                no_tools_status,
-                no_tools_error
-            );
+            let status = response.status();
+            let error = response.text().await.unwrap_or_default();
+            failures.push((attempt.label.to_string(), status, error));
         }
 
-        bail!("provider error {}: {}", primary_status, primary_error)
+        if failures.is_empty() {
+            bail!("provider request failed without attempts")
+        }
+
+        let mut details = String::new();
+        for (idx, (label, status, body)) in failures.iter().enumerate() {
+            if idx > 0 {
+                details.push(' ');
+            }
+            details.push_str(&format!("({label} {status}: {body})"));
+        }
+
+        bail!("provider request failed {details}")
     }
 
     async fn complete_stream_inner<F>(
