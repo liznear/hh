@@ -392,6 +392,7 @@ mod tests {
                 parallel_subagents: false,
                 max_parallel_subagents: 2,
                 system_prompt: None,
+                instructions_context: None,
             },
             session: SessionSettings {
                 root: root.to_path_buf(),

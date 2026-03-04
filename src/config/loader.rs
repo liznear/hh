@@ -2,33 +2,49 @@ use crate::agent::{AgentLoader, AgentRegistry};
 use crate::config::settings::Settings;
 use anyhow::Context;
 use serde_json::Value;
-use std::{env, fs, path::PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 pub fn global_config_path() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".config/hh/config.json")
 }
 
-pub fn project_config_path(cwd: &std::path::Path) -> PathBuf {
+pub fn global_instructions_path_for_home(home: &Path) -> Option<PathBuf> {
+    [
+        home.join(".config/hh/AGENTS.md"),
+        home.join(".agents/AGENTS.md"),
+        home.join(".config/claude/CLAUDE.md"),
+    ]
+    .into_iter()
+    .find(|path| path.exists())
+}
+
+pub fn project_config_path(cwd: &Path) -> PathBuf {
     cwd.join(".hh/config.json")
 }
 
-pub fn claude_project_config_path(cwd: &std::path::Path) -> PathBuf {
+pub fn project_instructions_path(cwd: &Path) -> Option<PathBuf> {
+    [cwd.join("AGENTS.md"), cwd.join("CLAUDE.md")]
+        .into_iter()
+        .find(|path| path.exists())
+}
+
+pub fn claude_project_config_path(cwd: &Path) -> PathBuf {
     cwd.join(".claude/settings.json")
 }
 
-pub fn local_config_path(cwd: &std::path::Path) -> PathBuf {
+pub fn local_config_path(cwd: &Path) -> PathBuf {
     cwd.join(".hh/config.local.json")
 }
 
-pub fn claude_local_config_path(cwd: &std::path::Path) -> PathBuf {
+pub fn claude_local_config_path(cwd: &Path) -> PathBuf {
     cwd.join(".claude/settings.local.json")
 }
 
-pub fn load_settings(
-    cwd: &std::path::Path,
-    agent_name: Option<String>,
-) -> anyhow::Result<Settings> {
+pub fn load_settings(cwd: &Path, agent_name: Option<String>) -> anyhow::Result<Settings> {
     let mut merged = serde_json::to_value(Settings::default()).context("serialize defaults")?;
     merge_settings_file(&mut merged, &global_config_path())?;
     merge_settings_file(&mut merged, &claude_project_config_path(cwd))?;
@@ -63,10 +79,40 @@ pub fn load_settings(
         }
     }
 
+    settings.agent.instructions_context = Some(load_instruction_context(cwd)?);
+
     Ok(settings)
 }
 
-fn merge_settings_file(base: &mut Value, path: &std::path::Path) -> anyhow::Result<()> {
+fn load_instruction_context(cwd: &Path) -> anyhow::Result<String> {
+    let mut sections = Vec::new();
+
+    if let Some(home) = dirs::home_dir()
+        && let Some(path) = global_instructions_path_for_home(&home)
+    {
+        sections.push(load_instruction_section("Global instructions", &path)?);
+    }
+
+    if let Some(path) = project_instructions_path(cwd) {
+        sections.push(load_instruction_section("Project instructions", &path)?);
+    }
+
+    Ok(sections.join("\n\n"))
+}
+
+fn load_instruction_section(label: &str, path: &Path) -> anyhow::Result<String> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed reading instruction file {}", path.display()))?;
+    Ok(format!(
+        "<{} path=\"{}\">\n{}\n</{}>",
+        label,
+        path.display(),
+        content,
+        label
+    ))
+}
+
+fn merge_settings_file(base: &mut Value, path: &Path) -> anyhow::Result<()> {
     if !path.exists() {
         return Ok(());
     }

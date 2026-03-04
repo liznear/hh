@@ -2,7 +2,15 @@
   "permissions": {
     "allow": [
       "Bash(date*)",
-      "Bash(cargo test*)"
+      "Bash(cargo test*)",
+      "Bash(find /home/nearsyh/Developer/hh/src -type f -name \"*.rs\" | head -20*)",
+      "Bash(cargo check*)",
+      "Bash(git diff -- src/cli/tui/markdown.rs*)",
+      "Bash(git status --short*)",
+      "Bash(git diff -- src/cli/tui/ui/sidebar.rs*)",
+      "Bash(rg -n \"load_settings\\(|resolved_system_prompt\\(|HH_SYSTEM_PROMPT\" src tests*)",
+      "Bash(git diff --stat*)",
+      "Bash(git diff --short*)"
     ]
   }
 }

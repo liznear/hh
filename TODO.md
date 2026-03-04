@@ -2,14 +2,22 @@
 - [x] Support permission spec like .claude/settings.local.json.
 - [ ] Update tool call rendering: don't mute.
 - [ ] Make "Modified Files" / "TODO" items foldable.
-- [ ] Highlight the current WIP todo item.
+- [x] Highlight the current WIP todo item.
 - [x] Make subagent clickable.
 - [ ] Show the current running skill.
-- [ ] Support loading AGENT.md
+- [x] Support loading AGENT.md
 - [ ] Support custom slash commands.
 - [ ] Support allowed tools for skills.
 - [ ] Support rendering memaid graph.
 - [ ] Subagent doesn't have question tool, but LLM still try. Fix prompt injection.
 - [ ] Subagent failure is not rendered in the main session.
-- [ ] Fetch tool user agent.
+- [x] Fetch tool user agent.
 - [x] Search tool 403. User agent? Permission
+- [x] Click position offset
+- [ ] Know current date.
+- [ ] Error message is not wrapped
+- [x] File name has full path
+- [x] Table style
+- [ ] Don't make the line changes number bold
+- [ ] Support mcp
+- [ ] Bash pattern too specific
