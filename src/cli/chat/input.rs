@@ -622,28 +622,37 @@ pub(super) fn handle_mouse_release(app: &mut ChatApp, x: u16, y: u16, terminal: 
     app.end_selection();
 }
 
-fn screen_to_message_coords(
+#[cfg(test)]
+pub(super) fn test_screen_to_message_coords<B: ratatui::backend::Backend>(
     app: &ChatApp,
     x: u16,
     y: u16,
-    terminal: &tui::Tui,
+    terminal: &ratatui::Terminal<B>,
 ) -> Option<(usize, usize)> {
-    const MAIN_OUTER_PADDING_X: u16 = 1;
-    const MAIN_OUTER_PADDING_Y: u16 = 1;
+    screen_to_message_coords(app, x, y, terminal)
+}
 
+fn screen_to_message_coords<B: ratatui::backend::Backend>(
+    app: &ChatApp,
+    x: u16,
+    y: u16,
+    terminal: &ratatui::Terminal<B>,
+) -> Option<(usize, usize)> {
     let size = terminal.size().ok()?;
+    let terminal_rect = Rect::new(0, 0, size.width, size.height);
+    let layout_rects = tui::compute_layout_rects(terminal_rect, app);
 
-    let input_area_height = 6;
-    if y < MAIN_OUTER_PADDING_Y || y >= size.height.saturating_sub(input_area_height) {
+    let main_messages = layout_rects.main_messages?;
+    if !point_in_rect(x, y, main_messages) {
         return None;
     }
 
-    let relative_y = (y - MAIN_OUTER_PADDING_Y) as usize;
-    let relative_x = x.saturating_sub(MAIN_OUTER_PADDING_X) as usize;
+    let relative_y = (y - main_messages.y) as usize;
+    let relative_x = (x - main_messages.x) as usize;
 
     let wrap_width = app.message_wrap_width(size.width);
     let total_lines = app.get_lines(wrap_width).len();
-    let visible_height = app.message_viewport_height(size.height);
+    let visible_height = main_messages.height as usize;
     let scroll_offset = app
         .message_scroll
         .effective_offset(total_lines, visible_height);

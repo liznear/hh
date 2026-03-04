@@ -1545,4 +1545,46 @@ mod tests {
 
         assert!(!temp_dir.path().join(".hh/config.local.json").exists());
     }
+
+    #[test]
+    fn test_screen_to_message_coords_uses_actual_layout_rects() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let temp_dir = tempdir().unwrap();
+        let cwd = temp_dir.path();
+        let mut app = ChatApp::new("Session".to_string(), cwd);
+
+        // Add some messages
+        app.messages
+            .push(tui::ChatMessage::User("Hello".to_string()));
+        app.messages
+            .push(tui::ChatMessage::Assistant("World".to_string()));
+
+        // Create a test terminal with a specific size
+        let backend = TestBackend::new(80, 24);
+        let terminal = Terminal::new(backend).unwrap();
+
+        // Get the actual layout rects
+        let terminal_rect = Rect::new(0, 0, 80, 24);
+        let layout_rects = tui::compute_layout_rects(terminal_rect, &app);
+        let main_messages = layout_rects.main_messages.expect("main_messages area");
+
+        // Test that a click in the center of the message area is detected correctly
+        let center_x = main_messages.x + main_messages.width / 2;
+        let center_y = main_messages.y + main_messages.height / 2;
+
+        // Import the screen_to_message_coords function via a pub(super) wrapper
+        let result = input::test_screen_to_message_coords(&app, center_x, center_y, &terminal);
+
+        // Should return Some with valid coordinates
+        assert!(result.is_some(), "Click in message area should return Some");
+
+        // Test that a click outside the message area returns None
+        let outside_result = input::test_screen_to_message_coords(&app, 0, 0, &terminal);
+        assert!(
+            outside_result.is_none(),
+            "Click outside message area should return None"
+        );
+    }
 }
