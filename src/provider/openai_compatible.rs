@@ -117,7 +117,8 @@ impl OpenAiCompatibleProvider {
                 role: Role::Assistant,
                 content,
                 attachments: Vec::new(),
-                tool_call_id: None, tool_calls: Vec::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             done: tool_calls.is_empty(),
             tool_calls,
@@ -309,7 +310,8 @@ impl OpenAiCompatibleProvider {
                 role: Role::Assistant,
                 content: assistant,
                 attachments: Vec::new(),
-                tool_call_id: None, tool_calls: Vec::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             done: tool_calls.is_empty(),
             tool_calls,
@@ -403,7 +405,7 @@ fn message_to_wire(
     if let Some(id) = &message.tool_call_id {
         wire["tool_call_id"] = json!(id);
     }
-    
+
     if !message.tool_calls.is_empty() {
         let calls: Vec<Value> = message.tool_calls.iter().map(|call| {
             json!({
@@ -417,7 +419,7 @@ fn message_to_wire(
         }).collect();
         wire["tool_calls"] = json!(calls);
     }
-    
+
     wire
 }
 
@@ -622,20 +624,26 @@ mod tests {
                 role: Role::User,
                 content: "hello".to_string(),
                 attachments: Vec::new(),
-                tool_call_id: None, tool_calls: Vec::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             Message {
                 role: Role::Assistant,
                 content: "".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
-                tool_calls: vec![ToolCall { id: "call_123".to_string(), name: "test".to_string(), arguments: json!({}) }],
+                tool_calls: vec![ToolCall {
+                    id: "call_123".to_string(),
+                    name: "test".to_string(),
+                    arguments: json!({}),
+                }],
             },
             Message {
                 role: Role::Tool,
                 content: "ok".to_string(),
                 attachments: Vec::new(),
-                tool_call_id: Some("call_123".to_string()), tool_calls: Vec::new(),
+                tool_call_id: Some("call_123".to_string()),
+                tool_calls: Vec::new(),
             },
         ];
 
@@ -653,7 +661,8 @@ mod tests {
             role: Role::Tool,
             content: "ok".to_string(),
             attachments: Vec::new(),
-            tool_call_id: None, tool_calls: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         }];
 
         let wire = messages_to_wire(&messages, true, ImageDataFormat::DataUrl);
