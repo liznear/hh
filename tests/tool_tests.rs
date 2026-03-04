@@ -103,7 +103,12 @@ async fn fs_read_symlink_outside_workspace_requests_canonical_parent_folder() {
     assert_eq!(res.payload["action"]["operation"], "allow_folder");
     assert_eq!(
         res.payload["action"]["folder"],
-        outside.path().display().to_string()
+        outside
+            .path()
+            .canonicalize()
+            .expect("canonicalize")
+            .display()
+            .to_string()
     );
 }
 
