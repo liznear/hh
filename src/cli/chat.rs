@@ -549,7 +549,7 @@ mod tests {
         assert!(full_text.contains("TODO"));
         assert!(full_text.contains("1 / 2 done"));
         assert!(full_text.contains("[ ] Resume pending"));
-        assert!(full_text.contains("[x] Resume done"));
+        assert!(full_text.contains("[✓] Resume done"));
         assert!(!full_text.contains("Stale item"));
     }
 

@@ -656,6 +656,19 @@ fn sidebar_todo_rendering_shows_progress_and_status_markers() {
         },
     ];
 
+    let sidebar_lines = super::ui::build_sidebar_lines(&app, 38);
+    let in_progress_line = sidebar_lines
+        .iter()
+        .find(|line| line_text(line).contains("Ship feature"))
+        .expect("in-progress todo line");
+    let marker_span = in_progress_line.spans.first().expect("marker span");
+    let body_span = in_progress_line.spans.get(1).expect("body span");
+
+    assert_eq!(marker_span.style.fg, Some(Color::Rgb(19, 164, 151)));
+    assert_eq!(body_span.style.fg, Some(Color::Rgb(227, 152, 67)));
+    assert_eq!(marker_span.style.bg, None);
+    assert_eq!(body_span.style.bg, None);
+
     let backend = TestBackend::new(120, 40);
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
@@ -671,7 +684,7 @@ fn sidebar_todo_rendering_shows_progress_and_status_markers() {
 
     assert!(full_text.contains("1 / 2 done"));
     assert!(full_text.contains("[ ] Ship feature"));
-    assert!(full_text.contains("[x] Write tests"));
+    assert!(full_text.contains("[✓] Write tests"));
 }
 
 #[test]

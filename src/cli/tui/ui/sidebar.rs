@@ -307,16 +307,31 @@ fn append_sidebar_list(lines: &mut Vec<Line<'static>>, items: &[TodoItemView], m
 
     let shown = items.len().min(max_items);
     for item in items.iter().take(shown) {
-        let (marker, item_style) = match item.status {
-            TodoStatus::Pending | TodoStatus::InProgress => {
-                ("[ ] ", Style::default().fg(TEXT_PRIMARY))
-            }
-            TodoStatus::Completed => ("[x] ", Style::default().fg(TEXT_MUTED)),
-            TodoStatus::Cancelled => ("[-] ", Style::default().fg(TEXT_MUTED)),
+        let (marker, marker_style, item_style) = match item.status {
+            TodoStatus::Pending => (
+                "[ ] ",
+                Style::default().fg(INPUT_ACCENT),
+                Style::default().fg(TEXT_PRIMARY),
+            ),
+            TodoStatus::InProgress => (
+                "[ ] ",
+                Style::default().fg(INPUT_ACCENT),
+                Style::default().fg(TODO_ACTIVE_FG),
+            ),
+            TodoStatus::Completed => (
+                "[✓] ",
+                Style::default().fg(INPUT_ACCENT),
+                Style::default().fg(TEXT_MUTED),
+            ),
+            TodoStatus::Cancelled => (
+                "[-] ",
+                Style::default().fg(INPUT_ACCENT),
+                Style::default().fg(TEXT_MUTED),
+            ),
         };
 
         lines.push(Line::from(vec![
-            Span::styled(sidebar_prefixed(marker), Style::default().fg(INPUT_ACCENT)),
+            Span::styled(sidebar_prefixed(marker), marker_style),
             Span::styled(item.content.clone(), item_style),
         ]));
     }
