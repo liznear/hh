@@ -189,18 +189,49 @@ fn render_table(rows: &[TableRow], width: usize, indent: &str) -> Vec<Line<'stat
     let max_table_width = width.saturating_sub(indent_width).max(min_table_width);
     shrink_column_widths(&mut column_widths, max_table_width);
 
-    let mut rendered = Vec::with_capacity(rows.len() + 3);
-    rendered.push(render_table_border(indent, &column_widths, '┌', '┬', '┐'));
-    rendered.push(render_table_row(indent, &rows[0], &column_widths, true));
+    let mut rendered = Vec::with_capacity(rows.len() * 2 + 3);
+    rendered.push(render_table_border(
+        indent,
+        &column_widths,
+        '┌',
+        '┬',
+        '┐',
+        '─',
+    ));
+    rendered.extend(render_table_row(indent, &rows[0], &column_widths, true));
 
     if rows.len() > 1 {
-        rendered.push(render_table_border(indent, &column_widths, '├', '┼', '┤'));
-        for row in &rows[1..] {
-            rendered.push(render_table_row(indent, row, &column_widths, false));
+        rendered.push(render_table_border(
+            indent,
+            &column_widths,
+            '╞',
+            '╪',
+            '╡',
+            '═',
+        ));
+        for (index, row) in rows[1..].iter().enumerate() {
+            rendered.extend(render_table_row(indent, row, &column_widths, false));
+            if index + 1 != rows.len() - 1 {
+                rendered.push(render_table_border(
+                    indent,
+                    &column_widths,
+                    '├',
+                    '┼',
+                    '┤',
+                    '─',
+                ));
+            }
         }
     }
 
-    rendered.push(render_table_border(indent, &column_widths, '└', '┴', '┘'));
+    rendered.push(render_table_border(
+        indent,
+        &column_widths,
+        '└',
+        '┴',
+        '┘',
+        '─',
+    ));
     rendered
 }
 
@@ -234,12 +265,13 @@ fn render_table_border(
     left: char,
     middle: char,
     right: char,
+    fill: char,
 ) -> Line<'static> {
     let mut text = String::with_capacity(indent.len() + table_total_width(widths));
     text.push_str(indent);
     text.push(left);
     for (index, width) in widths.iter().enumerate() {
-        text.push_str(&"─".repeat(*width + 2));
+        text.push_str(&fill.to_string().repeat(*width + 2));
         text.push(if index + 1 == widths.len() {
             right
         } else {
@@ -249,27 +281,56 @@ fn render_table_border(
     Line::raw(text)
 }
 
-fn render_table_row(indent: &str, row: &TableRow, widths: &[usize], header: bool) -> Line<'static> {
-    let mut spans = vec![Span::raw(indent.to_string()), Span::raw("│ ")];
-
-    for (index, (cell, width)) in row.cells.iter().zip(widths.iter()).enumerate() {
-        let parsed = parse_inline_markdown_spans(cell);
-        let (mut clipped, used) = truncate_spans_to_width(parsed, *width);
-        if header {
-            for span in &mut clipped {
-                *span = Span::styled(span.content.clone().into_owned(), span.style.bold());
+fn render_table_row(
+    indent: &str,
+    row: &TableRow,
+    widths: &[usize],
+    header: bool,
+) -> Vec<Line<'static>> {
+    let wrapped_cells: Vec<Vec<Vec<Span<'static>>>> = row
+        .cells
+        .iter()
+        .zip(widths.iter())
+        .map(|(cell, width)| {
+            let mut wrapped = wrap_spans(&parse_inline_markdown_spans(cell), *width);
+            if header {
+                for line in &mut wrapped {
+                    for span in line {
+                        *span = Span::styled(span.content.clone().into_owned(), span.style.bold());
+                    }
+                }
             }
+            wrapped
+        })
+        .collect();
+
+    let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
+    let mut rendered = Vec::with_capacity(row_height);
+
+    for line_index in 0..row_height {
+        let mut spans = vec![Span::raw(indent.to_string()), Span::raw("│ ")];
+
+        for (column_index, width) in widths.iter().enumerate() {
+            let cell_line = wrapped_cells
+                .get(column_index)
+                .and_then(|cell| cell.get(line_index))
+                .cloned()
+                .unwrap_or_default();
+            let used = spans_width(&cell_line);
+
+            spans.extend(cell_line);
+            spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+            spans.push(Span::raw(if column_index + 1 == widths.len() {
+                " │"
+            } else {
+                " │ "
+            }));
         }
-        spans.extend(clipped);
-        spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
-        spans.push(Span::raw(if index + 1 == widths.len() {
-            " │"
-        } else {
-            " │ "
-        }));
+
+        rendered.push(Line::from(spans));
     }
 
-    Line::from(spans)
+    rendered
 }
 
 const CODE_BLOCK_BG: Color = Color::Rgb(236, 240, 248);
@@ -444,6 +505,10 @@ fn truncate_spans_to_width(
 
 fn truncate_to_width(text: &str, max_width: usize) -> String {
     text.chars().take(max_width).collect()
+}
+
+fn spans_width(spans: &[Span<'static>]) -> usize {
+    spans.iter().map(|span| span.content.chars().count()).sum()
 }
 
 fn pad_right(text: &str, width: usize) -> String {
@@ -746,6 +811,43 @@ mod tests {
         assert!(rendered.iter().any(|line| line.contains("│ Name")));
         assert!(rendered.iter().any(|line| line.contains("│ foo")));
         assert!(rendered.iter().any(|line| line.contains("└")));
+    }
+
+    #[test]
+    fn renders_double_separator_after_table_header() {
+        let markdown = "| Name | Value |\n| --- | --- |\n| foo | bar |";
+        let lines = markdown_to_lines_with_indent(markdown, 80, TEST_INDENT);
+        let rendered: Vec<String> = lines.iter().map(line_text).collect();
+        let double_separator_count = rendered.iter().filter(|line| line.contains("╞")).count();
+        let single_separator_count = rendered.iter().filter(|line| line.contains("├")).count();
+
+        assert_eq!(double_separator_count, 1);
+        assert_eq!(single_separator_count, 0);
+        assert!(rendered.iter().any(|line| line.contains("═")));
+    }
+
+    #[test]
+    fn renders_separator_between_table_data_rows() {
+        let markdown = "| Name | Value |\n| --- | --- |\n| foo | bar |\n| baz | qux |";
+        let lines = markdown_to_lines_with_indent(markdown, 80, TEST_INDENT);
+        let rendered: Vec<String> = lines.iter().map(line_text).collect();
+        let double_separator_count = rendered.iter().filter(|line| line.contains("╞")).count();
+        let single_separator_count = rendered.iter().filter(|line| line.contains("├")).count();
+
+        assert_eq!(double_separator_count, 1);
+        assert_eq!(single_separator_count, 1);
+    }
+
+    #[test]
+    fn wraps_table_cells_instead_of_truncating() {
+        let markdown = "| Name | Value |\n| --- | --- |\n| foo | this cell should wrap across multiple lines |";
+        let lines = markdown_to_lines_with_indent(markdown, 24, TEST_INDENT);
+        let rendered: Vec<String> = lines.iter().map(line_text).collect();
+
+        assert!(rendered.iter().any(|line| line.contains("this")));
+        assert!(rendered.iter().any(|line| line.contains("cell")));
+        assert!(rendered.iter().any(|line| line.contains("should")));
+        assert!(rendered.iter().any(|line| line.contains("multiple")));
     }
 
     #[test]
