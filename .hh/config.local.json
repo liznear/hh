@@ -10,7 +10,11 @@
       "Bash(git diff -- src/cli/tui/ui/sidebar.rs*)",
       "Bash(rg -n \"load_settings\\(|resolved_system_prompt\\(|HH_SYSTEM_PROMPT\" src tests*)",
       "Bash(git diff --stat*)",
-      "Bash(git diff --short*)"
+      "Bash(git diff --short*)",
+      "Bash(pwd*)",
+      "Bash(ls -la*)",
+      "Bash(python - <<'PY'\nimport json, os, tempfile, textwrap, subprocess, pathlib\nPY*)",
+      "Bash(ls -al*)"
     ]
   }
 }

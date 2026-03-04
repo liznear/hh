@@ -21,3 +21,6 @@
 - [ ] Don't make the line changes number bold
 - [ ] Support mcp
 - [ ] Bash pattern too specific
+- [x] Bash pattern match not correct. Allow `git diff --short` in the session would allow `git diff*` in the session temporarily.
+- [ ] Queue message
+- [ ] Run bash command using "!"
