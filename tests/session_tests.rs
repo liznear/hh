@@ -15,6 +15,7 @@ fn appends_and_replays_messages() {
         content: "hello".to_string(),
         attachments: Vec::new(),
         tool_call_id: None,
+        tool_calls: Vec::new(),
     };
     store
         .append(&SessionEvent::Message {
@@ -28,6 +29,7 @@ fn appends_and_replays_messages() {
         content: "hi".to_string(),
         attachments: Vec::new(),
         tool_call_id: None,
+        tool_calls: Vec::new(),
     };
     store
         .append(&SessionEvent::Message {
@@ -111,6 +113,7 @@ fn replay_messages_uses_latest_compact_boundary() {
                 content: "before compact".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
         })
         .expect("append before compact");
@@ -130,6 +133,7 @@ fn replay_messages_uses_latest_compact_boundary() {
                 content: "after compact".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
         })
         .expect("append after compact");

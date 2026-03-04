@@ -94,6 +94,7 @@ async fn agent_loop_stops_on_final_answer() {
                 content: "done".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             tool_calls: vec![],
             done: true,
@@ -132,6 +133,7 @@ async fn agent_loop_stops_on_final_answer() {
                 content: "hello".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
@@ -155,6 +157,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
                     content: "hello world".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![ToolCall {
                     id: "call-1".to_string(),
@@ -171,6 +174,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
                     content: "final".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![],
                 done: true,
@@ -214,6 +218,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
                 content: "hello".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
@@ -246,6 +251,7 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
                 content: "done".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             tool_calls: vec![],
             done: true,
@@ -284,6 +290,7 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
                 content: "hello".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
@@ -330,6 +337,7 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
                     content: "working".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![],
                 done: false,
@@ -342,6 +350,7 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
                     content: "final".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![],
                 done: true,
@@ -380,6 +389,7 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
                 content: "hello".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
@@ -402,6 +412,7 @@ async fn agent_loop_respects_max_steps_when_set() {
                 content: "not done yet".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             tool_calls: vec![],
             done: false,
@@ -439,6 +450,7 @@ async fn agent_loop_respects_max_steps_when_set() {
                 content: "hello".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
@@ -462,6 +474,7 @@ async fn agent_loop_injects_runtime_todo_state_message() {
                     content: String::new(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![ToolCall {
                     id: "call-1".to_string(),
@@ -482,6 +495,7 @@ async fn agent_loop_injects_runtime_todo_state_message() {
                     content: "done".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![],
                 done: true,
@@ -521,6 +535,7 @@ async fn agent_loop_injects_runtime_todo_state_message() {
                 content: "plan and execute".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
@@ -553,6 +568,7 @@ async fn agent_loop_todo_read_returns_current_runtime_snapshot() {
                     content: String::new(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![ToolCall {
                     id: "call-1".to_string(),
@@ -573,6 +589,7 @@ async fn agent_loop_todo_read_returns_current_runtime_snapshot() {
                     content: String::new(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![ToolCall {
                     id: "call-2".to_string(),
@@ -589,6 +606,7 @@ async fn agent_loop_todo_read_returns_current_runtime_snapshot() {
                     content: "done".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![],
                 done: true,
@@ -628,6 +646,7 @@ async fn agent_loop_todo_read_returns_current_runtime_snapshot() {
                 content: "manage todos".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
@@ -667,6 +686,7 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
                     content: String::new(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![ToolCall {
                     id: "call-1".to_string(),
@@ -694,6 +714,7 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
                     content: "done".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![],
                 done: true,
@@ -733,6 +754,7 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
                 content: "ask me".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
@@ -772,6 +794,7 @@ async fn allow_session_choice_is_remembered_for_ask_policy_tools() {
                     content: "writing files".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![
                     ToolCall {
@@ -795,6 +818,7 @@ async fn allow_session_choice_is_remembered_for_ask_policy_tools() {
                     content: "done".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![],
                 done: true,
@@ -836,6 +860,7 @@ async fn allow_session_choice_is_remembered_for_ask_policy_tools() {
                 content: "write two files".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             move |_request| {
                 let approval_count = Arc::clone(&approval_count_for_handler);
@@ -872,6 +897,7 @@ async fn allow_always_choice_is_remembered_for_current_session() {
                     content: "writing files".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![
                     ToolCall {
@@ -895,6 +921,7 @@ async fn allow_always_choice_is_remembered_for_current_session() {
                     content: "done".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![],
                 done: true,
@@ -936,6 +963,7 @@ async fn allow_always_choice_is_remembered_for_current_session() {
                 content: "write two files".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             move |_request| {
                 let approval_count = Arc::clone(&approval_count_for_handler);
@@ -971,6 +999,7 @@ async fn bash_approval_request_includes_llm_stated_purpose() {
                 content: "checking changes".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             tool_calls: vec![ToolCall {
                 id: "call-1".to_string(),
@@ -1018,6 +1047,7 @@ async fn bash_approval_request_includes_llm_stated_purpose() {
                 content: "show changed files".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             move |request| {
                 let captured_for_handler = Arc::clone(&captured_for_handler);
@@ -1050,6 +1080,7 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
                     content: "step1".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![ToolCall {
                     id: "call-1".to_string(),
@@ -1066,6 +1097,7 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
                     content: "done".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![],
                 done: true,
@@ -1101,6 +1133,7 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
                 content: "first".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             move |_request| {
                 let first_prompt_count = Arc::clone(&first_prompt_count_handler);
@@ -1123,6 +1156,7 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
                     content: "step2".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![ToolCall {
                     id: "call-2".to_string(),
@@ -1139,6 +1173,7 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
                     content: "done".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![],
                 done: true,
@@ -1174,6 +1209,7 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
                 content: "second".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             move |_request| {
                 let second_prompt_count = Arc::clone(&second_prompt_count_handler);
@@ -1219,6 +1255,7 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
                     content: "read outside".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![ToolCall {
                     id: "call-1".to_string(),
@@ -1235,6 +1272,7 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
                     content: "done".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![],
                 done: true,
@@ -1270,6 +1308,7 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
                 content: "first".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             move |_request| {
                 let first_prompt_count = Arc::clone(&first_prompt_count_handler);
@@ -1292,6 +1331,7 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
                     content: "read outside again".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![ToolCall {
                     id: "call-2".to_string(),
@@ -1308,6 +1348,7 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
                     content: "done".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
                 tool_calls: vec![],
                 done: true,
@@ -1343,6 +1384,7 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
                 content: "second".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             move |_request| {
                 let second_prompt_count = Arc::clone(&second_prompt_count_handler);

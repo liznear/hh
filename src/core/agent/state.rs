@@ -73,6 +73,7 @@ impl AgentState {
             content: lines.join("\n"),
             attachments: Vec::new(),
             tool_call_id: None,
+            tool_calls: Vec::new(),
         })
     }
 }

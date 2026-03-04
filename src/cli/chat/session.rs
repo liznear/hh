@@ -57,14 +57,14 @@ async fn generate_compaction_summary(
             role: crate::core::Role::System,
             content: "You compact conversation history for an engineering assistant. Produce a concise summary that preserves requirements, decisions, constraints, open questions, and pending work items. Prefer bullet points. Do not invent details.".to_string(),
             attachments: Vec::new(),
-            tool_call_id: None,
+            tool_call_id: None, tool_calls: Vec::new(),
         });
         prompt_messages.extend(messages);
         prompt_messages.push(Message {
             role: crate::core::Role::User,
             content: "Compact the conversation so future turns can continue from this summary with minimal context loss.".to_string(),
             attachments: Vec::new(),
-            tool_call_id: None,
+            tool_call_id: None, tool_calls: Vec::new(),
         });
 
         let selected = settings
@@ -362,13 +362,13 @@ pub(super) async fn generate_session_title(
                     role: crate::core::Role::System,
                     content: "Generate a concise session title for this prompt. Return only the title, no punctuation wrappers, and keep it to 12 words or fewer.".to_string(),
                     attachments: Vec::new(),
-                    tool_call_id: None,
+                    tool_call_id: None, tool_calls: Vec::new(),
                 },
                 Message {
                     role: crate::core::Role::User,
                     content: prompt.to_string(),
                     attachments: Vec::new(),
-                    tool_call_id: None,
+                    tool_call_id: None, tool_calls: Vec::new(),
                 },
             ],
             tools: Vec::new(),

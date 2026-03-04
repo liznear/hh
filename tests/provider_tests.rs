@@ -48,6 +48,7 @@ fn provider_response_supports_thinking_field() {
             content: "hello".to_string(),
             attachments: Vec::new(),
             tool_call_id: None,
+            tool_calls: Vec::new(),
         },
         tool_calls: vec![ToolCall {
             id: "call-1".to_string(),

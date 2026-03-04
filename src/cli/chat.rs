@@ -664,6 +664,7 @@ mod tests {
             .append(&SessionEvent::Message {
                 id: event_id(),
                 message: Message {
+                    tool_calls: Vec::new(),
                     role: Role::User,
                     content: "hello".to_string(),
                     attachments: Vec::new(),

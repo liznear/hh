@@ -199,6 +199,7 @@ impl SessionStore {
                 } => {
                     let content = result.map(|value| value.output).unwrap_or(output);
                     messages.push(Message {
+                        tool_calls: Vec::new(),
                         role: Role::Tool,
                         content,
                         attachments: Vec::new(),
@@ -208,6 +209,7 @@ impl SessionStore {
                 SessionEvent::Compact { summary, .. } => {
                     messages.clear();
                     messages.push(Message {
+                        tool_calls: Vec::new(),
                         role: Role::Assistant,
                         content: summary,
                         attachments: Vec::new(),
@@ -283,6 +285,7 @@ pub fn user_message(content: String) -> SessionEvent {
     SessionEvent::Message {
         id: event_id(),
         message: Message {
+            tool_calls: Vec::new(),
             role: Role::User,
             content,
             attachments: Vec::new(),

@@ -105,6 +105,7 @@ where
                     content: self.system_prompt.clone(),
                     attachments: Vec::new(),
                     tool_call_id: None,
+                    tool_calls: Vec::new(),
                 },
             )?;
         }
@@ -172,6 +173,7 @@ where
                 content: assistant_content.clone(),
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: response.tool_calls.clone(),
             };
 
             self.append_message(&mut state, assistant.clone())?;
@@ -377,6 +379,7 @@ where
             content: result.output.clone(),
             attachments: Vec::new(),
             tool_call_id: Some(call_id.clone()),
+            tool_calls: Vec::new(),
         });
         if state.apply_tool_result(&call.name, &result) {
             self.events.on_todo_items_changed(&state.todo_items);

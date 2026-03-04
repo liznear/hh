@@ -135,6 +135,7 @@ async fn run_subagent_execution(
                 content: request.prompt,
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             |_request| async {
                 Ok::<crate::core::ApprovalChoice, anyhow::Error>(

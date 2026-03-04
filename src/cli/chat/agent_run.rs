@@ -454,6 +454,7 @@ pub(super) fn handle_chat_message(
             content: input.text,
             attachments: input.attachments,
             tool_call_id: None,
+            tool_calls: Vec::new(),
         };
 
         let subagent_manager = current_subagent_manager(settings, cwd);
@@ -537,6 +538,7 @@ where
                 content: prompt,
                 attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: Vec::new(),
             },
             |request| {
                 let cwd = cwd.to_path_buf();

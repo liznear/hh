@@ -117,7 +117,7 @@ impl OpenAiCompatibleProvider {
                 role: Role::Assistant,
                 content,
                 attachments: Vec::new(),
-                tool_call_id: None,
+                tool_call_id: None, tool_calls: Vec::new(),
             },
             done: tool_calls.is_empty(),
             tool_calls,
@@ -309,7 +309,7 @@ impl OpenAiCompatibleProvider {
                 role: Role::Assistant,
                 content: assistant,
                 attachments: Vec::new(),
-                tool_call_id: None,
+                tool_call_id: None, tool_calls: Vec::new(),
             },
             done: tool_calls.is_empty(),
             tool_calls,
@@ -403,6 +403,21 @@ fn message_to_wire(
     if let Some(id) = &message.tool_call_id {
         wire["tool_call_id"] = json!(id);
     }
+    
+    if !message.tool_calls.is_empty() {
+        let calls: Vec<Value> = message.tool_calls.iter().map(|call| {
+            json!({
+                "id": call.id,
+                "type": "function",
+                "function": {
+                    "name": call.name,
+                    "arguments": serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".to_string())
+                }
+            })
+        }).collect();
+        wire["tool_calls"] = json!(calls);
+    }
+    
     wire
 }
 
@@ -411,47 +426,10 @@ fn messages_to_wire(
     image_url_as_object: bool,
     image_data_format: ImageDataFormat,
 ) -> Vec<Value> {
-    let mut wire_messages = Vec::with_capacity(messages.len());
-    let mut known_tool_call_ids = std::collections::HashSet::<String>::new();
-
-    for message in messages {
-        if matches!(message.role, Role::Tool)
-            && let Some(call_id) = message
-                .tool_call_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-            && !known_tool_call_ids.contains(call_id)
-        {
-            wire_messages.push(synthetic_assistant_tool_call(call_id));
-            known_tool_call_ids.insert(call_id.to_string());
-        }
-
-        wire_messages.push(message_to_wire(
-            message,
-            image_url_as_object,
-            image_data_format,
-        ));
-    }
-
-    wire_messages
-}
-
-fn synthetic_assistant_tool_call(call_id: &str) -> Value {
-    json!({
-        "role": "assistant",
-        "content": "",
-        "tool_calls": [
-            {
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": "tool_result",
-                    "arguments": "{}"
-                }
-            }
-        ]
-    })
+    messages
+        .iter()
+        .map(|message| message_to_wire(message, image_url_as_object, image_data_format))
+        .collect()
 }
 
 fn has_image_attachments(req: &ProviderRequest) -> bool {
@@ -644,13 +622,20 @@ mod tests {
                 role: Role::User,
                 content: "hello".to_string(),
                 attachments: Vec::new(),
+                tool_call_id: None, tool_calls: Vec::new(),
+            },
+            Message {
+                role: Role::Assistant,
+                content: "".to_string(),
+                attachments: Vec::new(),
                 tool_call_id: None,
+                tool_calls: vec![ToolCall { id: "call_123".to_string(), name: "test".to_string(), arguments: json!({}) }],
             },
             Message {
                 role: Role::Tool,
                 content: "ok".to_string(),
                 attachments: Vec::new(),
-                tool_call_id: Some("call_123".to_string()),
+                tool_call_id: Some("call_123".to_string()), tool_calls: Vec::new(),
             },
         ];
 
@@ -668,7 +653,7 @@ mod tests {
             role: Role::Tool,
             content: "ok".to_string(),
             attachments: Vec::new(),
-            tool_call_id: None,
+            tool_call_id: None, tool_calls: Vec::new(),
         }];
 
         let wire = messages_to_wire(&messages, true, ImageDataFormat::DataUrl);
