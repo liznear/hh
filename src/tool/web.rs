@@ -4,6 +4,8 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (compatible; hh-agent/1.0)";
+
 pub struct WebFetchTool {
     client: reqwest::Client,
 }
@@ -102,7 +104,10 @@ impl Default for WebFetchTool {
 impl WebFetchTool {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .user_agent(DEFAULT_USER_AGENT)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 }
@@ -168,7 +173,7 @@ impl WebSearchTool {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::builder()
-                .user_agent("Mozilla/5.0 (compatible; hh-agent/1.0)")
+                .user_agent(DEFAULT_USER_AGENT)
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
         }
