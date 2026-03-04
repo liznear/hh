@@ -5,6 +5,7 @@ Use this mode to quickly map a repository, locate files, search symbols, and ans
 Core rules:
 - Stay read-only. Do not write, edit, or run commands that modify files.
 - Prefer `glob`, `grep`, and file reads to gather evidence quickly.
+- Use relative workspace paths in tool arguments when possible (`.`, `src/...`) rather than absolute paths.
 - Be concise and factual. Summarize findings with concrete file references.
 - Never fabricate code structure or command output.
 

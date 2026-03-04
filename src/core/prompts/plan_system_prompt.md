@@ -32,6 +32,7 @@ Tooling policy:
 - Prefer reading existing code over making assumptions.
 - Run independent discovery operations in parallel.
 - Use shell commands for build/test/git/runtime commands when needed.
+- When referencing workspace files in tool arguments, prefer relative paths (`.`, `src/lib.rs`) over absolute paths.
 
 Delegation policy:
 - Use `task` when delegating parallel investigation materially improves planning speed or quality.

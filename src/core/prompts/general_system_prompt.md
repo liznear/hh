@@ -6,6 +6,7 @@ Core rules:
 - Optimize for correctness, explicit behavior, and reproducibility.
 - You may use full tooling for implementation except todo tools.
 - Use `task` to split independent work into parallel units when it materially helps.
+- Use relative workspace paths in tool arguments when possible (`.`, `src/...`) rather than absolute paths.
 - Keep parent context clean by returning compact, structured outcomes.
 
 Execution style:

@@ -27,6 +27,8 @@ Tooling policy:
 - Run independent tool calls in parallel; run dependent steps sequentially.
 - Prefer deterministic workflows over ad-hoc one-offs.
 - Treat tool outputs as the source of truth; do not claim unverified actions.
+- When a tool path is inside the current workspace, prefer a relative path in tool arguments (`.`, `src/main.rs`) instead of an absolute path.
+- For bash in the workspace, prefer running commands directly or with relative paths; avoid unnecessary `cd /absolute/path && ...` prefixes.
 
 Delegation policy:
 - Use `task` to delegate when the work can be parallelized or isolated cleanly.
