@@ -47,10 +47,19 @@ pub fn claude_local_config_path(cwd: &Path) -> PathBuf {
 pub fn load_settings(cwd: &Path, agent_name: Option<String>) -> anyhow::Result<Settings> {
     let mut merged = serde_json::to_value(Settings::default()).context("serialize defaults")?;
     merge_settings_file(&mut merged, &global_config_path())?;
-    merge_settings_file(&mut merged, &claude_project_config_path(cwd))?;
-    merge_settings_file(&mut merged, &project_config_path(cwd))?;
-    merge_settings_file(&mut merged, &claude_local_config_path(cwd))?;
-    merge_settings_file(&mut merged, &local_config_path(cwd))?;
+
+    for path in ancestor_config_paths(cwd, ".claude/settings.json") {
+        merge_settings_file(&mut merged, &path)?;
+    }
+    for path in ancestor_config_paths(cwd, ".hh/config.json") {
+        merge_settings_file(&mut merged, &path)?;
+    }
+    for path in ancestor_config_paths(cwd, ".claude/settings.local.json") {
+        merge_settings_file(&mut merged, &path)?;
+    }
+    for path in ancestor_config_paths(cwd, ".hh/config.local.json") {
+        merge_settings_file(&mut merged, &path)?;
+    }
 
     let mut settings: Settings =
         serde_json::from_value(merged).context("deserialize merged settings")?;
@@ -124,6 +133,19 @@ fn merge_settings_file(base: &mut Value, path: &Path) -> anyhow::Result<()> {
     merge_json_value(base, value, &mut Vec::new());
 
     Ok(())
+}
+
+fn ancestor_config_paths(cwd: &Path, relative_path: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut current = Some(cwd);
+
+    while let Some(dir) = current {
+        paths.push(dir.join(relative_path));
+        current = dir.parent();
+    }
+
+    paths.reverse();
+    paths
 }
 
 fn merge_json_value(base: &mut Value, incoming: Value, path: &mut Vec<String>) {

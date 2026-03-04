@@ -122,6 +122,36 @@ fn bash_wildcard_rule_matches_expected_commands() {
 }
 
 #[test]
+fn persisted_local_bash_allow_rule_in_parent_workspace_applies_from_subdirectory() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    let nested = workspace.join("nested/project");
+    std::fs::create_dir_all(workspace.join(".hh")).expect("create config dir");
+    std::fs::create_dir_all(&nested).expect("create nested cwd");
+
+    std::fs::write(
+        workspace.join(".hh/config.local.json"),
+        r#"{
+  "permissions": {
+    "allow": ["Bash(ls -al*)"]
+  }
+}
+"#,
+    )
+    .expect("write local config");
+
+    let settings = hh_cli::config::load_settings(&nested, None).expect("load settings");
+    let registry = ToolRegistry::new(&settings, &nested);
+    let schemas = registry.schemas();
+    let matcher = PermissionMatcher::new(settings, &schemas, &nested);
+
+    assert_eq!(
+        matcher.decision_for_tool_call("bash", &json!({"command": "ls -alh"})),
+        Decision::Allow
+    );
+}
+
+#[test]
 fn read_edit_rules_support_project_and_absolute_patterns() {
     let temp = tempfile::tempdir().expect("tempdir");
     let cwd = temp.path().join("workspace");

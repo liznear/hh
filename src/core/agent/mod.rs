@@ -8,6 +8,7 @@ use crate::core::{
     ProviderRequest, ProviderStreamEvent, QuestionAnswers, QuestionPrompt, Role, SessionReader,
     SessionSink, ToolCall, ToolExecutor,
 };
+use crate::permission::rules::{PermissionRule, RuleContext};
 use crate::safety::sanitize_tool_output;
 use crate::session::{SessionEvent, event_id};
 use crate::tool::ToolResult;
@@ -15,6 +16,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use serde::Serialize;
 use state::AgentState;
 use std::future::Future;
+use std::path::Path;
 
 pub struct AgentLoop<P, E, T, A, S>
 where
@@ -71,9 +73,15 @@ where
             todo_items: Vec::new(),
             step: 0,
         };
-        let mut session_allowed_tools = std::collections::HashSet::<String>::new();
+        let mut session_allowed_actions = std::collections::HashSet::<String>::new();
+        let mut session_allowed_bash_rules = std::collections::HashSet::<String>::new();
 
-        restore_session_approvals(&replayed_events, &self.tools, &mut session_allowed_tools)?;
+        restore_session_approvals(
+            &replayed_events,
+            &self.tools,
+            &mut session_allowed_actions,
+            &mut session_allowed_bash_rules,
+        )?;
 
         let mut tool_name_by_call_id = std::collections::HashMap::new();
         for event in &replayed_events {
@@ -199,16 +207,30 @@ where
                         continue;
                     }
                     ApprovalDecision::Ask => {
-                        if !session_allowed_tools.contains(&call.name) {
+                        let request = build_tool_execution_approval_request(&call);
+                        let session_key = session_approval_key(&call.name, &request.action);
+                        let matched_bash_session_rule = call.name == "bash"
+                            && session_allowed_bash_rules
+                                .iter()
+                                .any(|rule| bash_rule_matches_call(rule, &call.arguments));
+
+                        if !session_allowed_actions.contains(&session_key)
+                            && !matched_bash_session_rule
+                        {
                             self.events.on_tool_start(&call.name, &call.arguments);
-                            let request = build_tool_execution_approval_request(&call);
                             let choice = approve(request.clone()).await?;
 
                             if matches!(
                                 choice,
                                 ApprovalChoice::AllowSession | ApprovalChoice::AllowAlways
                             ) {
-                                session_allowed_tools.insert(call.name.clone());
+                                session_allowed_actions.insert(session_key);
+                            }
+                            if choice == ApprovalChoice::AllowAlways
+                                && let Some(rule) =
+                                    bash_permission_rule_from_action(&request.action)
+                            {
+                                session_allowed_bash_rules.insert(rule.to_string());
                             }
 
                             let approved = choice != ApprovalChoice::Deny;
@@ -527,7 +549,8 @@ fn normalize_path_pattern(path: &str) -> String {
 fn restore_session_approvals<T: ToolExecutor>(
     replayed_events: &[SessionEvent],
     tools: &T,
-    session_allowed_tools: &mut std::collections::HashSet<String>,
+    session_allowed_actions: &mut std::collections::HashSet<String>,
+    session_allowed_bash_rules: &mut std::collections::HashSet<String>,
 ) -> anyhow::Result<()> {
     for event in replayed_events {
         let SessionEvent::Approval {
@@ -547,13 +570,19 @@ fn restore_session_approvals<T: ToolExecutor>(
             continue;
         }
 
-        if let Some(tool_name) = action.get("tool_name").and_then(|value| value.as_str())
-            && action
-                .get("operation")
-                .and_then(|value| value.as_str())
-                .is_some_and(|value| value == "tool_execution")
+        if action
+            .get("operation")
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value == "tool_execution")
         {
-            session_allowed_tools.insert(tool_name.to_string());
+            if let Some(tool_name) = action.get("tool_name").and_then(|value| value.as_str()) {
+                session_allowed_actions.insert(session_approval_key(tool_name, action));
+                if *choice == ApprovalChoice::AllowAlways
+                    && let Some(rule) = bash_permission_rule_from_action(action)
+                {
+                    session_allowed_bash_rules.insert(rule.to_string());
+                }
+            }
             continue;
         }
 
@@ -561,6 +590,51 @@ fn restore_session_approvals<T: ToolExecutor>(
     }
 
     Ok(())
+}
+
+fn session_approval_key(tool_name: &str, action: &serde_json::Value) -> String {
+    let approval_kind = action
+        .get("approval_kind")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+
+    if approval_kind == "bash"
+        && let Some(rule) = action
+            .get("permission_rule")
+            .and_then(|value| value.as_str())
+            .filter(|rule| !rule.trim().is_empty())
+    {
+        return format!("rule:{rule}");
+    }
+
+    format!("tool:{tool_name}")
+}
+
+fn bash_permission_rule_from_action(action: &serde_json::Value) -> Option<&str> {
+    let approval_kind = action
+        .get("approval_kind")
+        .and_then(|value| value.as_str())?;
+    if approval_kind != "bash" {
+        return None;
+    }
+
+    action
+        .get("permission_rule")
+        .and_then(|value| value.as_str())
+        .filter(|rule| !rule.trim().is_empty())
+}
+
+fn bash_rule_matches_call(rule: &str, args: &serde_json::Value) -> bool {
+    let Some(parsed_rule) = PermissionRule::parse(rule) else {
+        return false;
+    };
+
+    parsed_rule.matches(&RuleContext {
+        tool_name: "bash",
+        capability: "bash",
+        args,
+        workspace_root: Path::new("."),
+    })
 }
 
 fn parse_approval_request(result: &ToolResult) -> Option<ApprovalRequest> {
@@ -623,4 +697,284 @@ fn todo_snapshot_result(items: &[crate::core::TodoItem]) -> ToolResult {
         "application/vnd.hh.todo+json",
         &output,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Settings;
+    use crate::permission::PermissionMatcher;
+    use crate::provider::ProviderResponse;
+    use crate::session::SessionStore;
+    use crate::tool::registry::ToolRegistry;
+    use async_trait::async_trait;
+    use serde_json::json;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use tempfile::tempdir;
+
+    #[derive(Clone)]
+    struct TestProvider {
+        responses: Arc<Mutex<VecDeque<ProviderResponse>>>,
+    }
+
+    #[async_trait]
+    impl Provider for TestProvider {
+        async fn complete(&self, _req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
+            self.responses
+                .lock()
+                .expect("provider lock")
+                .pop_front()
+                .ok_or_else(|| anyhow::anyhow!("no scripted provider response remaining"))
+        }
+    }
+
+    #[tokio::test]
+    async fn allowing_one_bash_command_for_session_does_not_skip_approval_for_other_bash_commands()
+    {
+        let temp = tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let mut settings = Settings::default();
+        settings.session.root = temp.path().join("sessions");
+
+        let tools = ToolRegistry::new(&settings, &workspace);
+        let approvals = PermissionMatcher::new(settings.clone(), &tools.schemas(), &workspace);
+        let session = SessionStore::new(
+            &settings.session.root,
+            &workspace,
+            None,
+            Some("test session".to_string()),
+        )
+        .expect("session store");
+
+        let provider = TestProvider {
+            responses: Arc::new(Mutex::new(VecDeque::from(vec![
+                ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: String::new(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: vec![ToolCall {
+                            id: "call-1".to_string(),
+                            name: "bash".to_string(),
+                            arguments: json!({ "command": "printf first", "timeout_ms": 1000 }),
+                        }],
+                    },
+                    tool_calls: vec![ToolCall {
+                        id: "call-1".to_string(),
+                        name: "bash".to_string(),
+                        arguments: json!({ "command": "printf first", "timeout_ms": 1000 }),
+                    }],
+                    done: false,
+                    thinking: None,
+                    context_tokens: None,
+                },
+                ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: String::new(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: vec![ToolCall {
+                            id: "call-2".to_string(),
+                            name: "bash".to_string(),
+                            arguments: json!({ "command": "printf second", "timeout_ms": 1000 }),
+                        }],
+                    },
+                    tool_calls: vec![ToolCall {
+                        id: "call-2".to_string(),
+                        name: "bash".to_string(),
+                        arguments: json!({ "command": "printf second", "timeout_ms": 1000 }),
+                    }],
+                    done: false,
+                    thinking: None,
+                    context_tokens: None,
+                },
+                ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: "done".to_string(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    tool_calls: Vec::new(),
+                    done: true,
+                    thinking: None,
+                    context_tokens: None,
+                },
+            ]))),
+        };
+
+        let agent = AgentLoop {
+            provider,
+            tools,
+            approvals,
+            max_steps: 10,
+            model: "test".to_string(),
+            system_prompt: String::new(),
+            session: session.clone(),
+            events: NoopEvents,
+        };
+
+        let approval_count = Arc::new(Mutex::new(0usize));
+        let approval_count_for_closure = approval_count.clone();
+
+        let result = agent
+            .run(
+                Message {
+                    role: Role::User,
+                    content: "run checks".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                move |_request| {
+                    let approval_count = approval_count_for_closure.clone();
+                    async move {
+                        let mut count = approval_count.lock().expect("approval count lock");
+                        *count += 1;
+                        Ok(ApprovalChoice::AllowSession)
+                    }
+                },
+            )
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(*approval_count.lock().expect("approval count lock"), 2);
+
+        let events = session.replay_events().expect("replay events");
+        let approvals_recorded = events
+            .iter()
+            .filter(|event| matches!(event, SessionEvent::Approval { .. }))
+            .count();
+        assert_eq!(approvals_recorded, 2);
+    }
+
+    #[tokio::test]
+    async fn allow_always_bash_rule_applies_to_matching_command_in_same_session() {
+        let temp = tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let mut settings = Settings::default();
+        settings.session.root = temp.path().join("sessions");
+
+        let tools = ToolRegistry::new(&settings, &workspace);
+        let approvals = PermissionMatcher::new(settings.clone(), &tools.schemas(), &workspace);
+        let session = SessionStore::new(
+            &settings.session.root,
+            &workspace,
+            None,
+            Some("test session".to_string()),
+        )
+        .expect("session store");
+
+        let provider = TestProvider {
+            responses: Arc::new(Mutex::new(VecDeque::from(vec![
+                ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: String::new(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: vec![ToolCall {
+                            id: "call-1".to_string(),
+                            name: "bash".to_string(),
+                            arguments: json!({ "command": "echo hello", "timeout_ms": 1000 }),
+                        }],
+                    },
+                    tool_calls: vec![ToolCall {
+                        id: "call-1".to_string(),
+                        name: "bash".to_string(),
+                        arguments: json!({ "command": "echo hello", "timeout_ms": 1000 }),
+                    }],
+                    done: false,
+                    thinking: None,
+                    context_tokens: None,
+                },
+                ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: String::new(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: vec![ToolCall {
+                            id: "call-2".to_string(),
+                            name: "bash".to_string(),
+                            arguments: json!({ "command": "echo hello world", "timeout_ms": 1000 }),
+                        }],
+                    },
+                    tool_calls: vec![ToolCall {
+                        id: "call-2".to_string(),
+                        name: "bash".to_string(),
+                        arguments: json!({ "command": "echo hello world", "timeout_ms": 1000 }),
+                    }],
+                    done: false,
+                    thinking: None,
+                    context_tokens: None,
+                },
+                ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: "done".to_string(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    tool_calls: Vec::new(),
+                    done: true,
+                    thinking: None,
+                    context_tokens: None,
+                },
+            ]))),
+        };
+
+        let agent = AgentLoop {
+            provider,
+            tools,
+            approvals,
+            max_steps: 10,
+            model: "test".to_string(),
+            system_prompt: String::new(),
+            session: session.clone(),
+            events: NoopEvents,
+        };
+
+        let approval_count = Arc::new(Mutex::new(0usize));
+        let approval_count_for_closure = approval_count.clone();
+
+        let result = agent
+            .run(
+                Message {
+                    role: Role::User,
+                    content: "run bash commands".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                move |_request| {
+                    let approval_count = approval_count_for_closure.clone();
+                    async move {
+                        let mut count = approval_count.lock().expect("approval count lock");
+                        *count += 1;
+                        Ok(ApprovalChoice::AllowAlways)
+                    }
+                },
+            )
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(*approval_count.lock().expect("approval count lock"), 1);
+
+        let events = session.replay_events().expect("replay events");
+        let approvals_recorded = events
+            .iter()
+            .filter(|event| matches!(event, SessionEvent::Approval { .. }))
+            .count();
+        assert_eq!(approvals_recorded, 1);
+    }
 }
