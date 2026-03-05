@@ -569,14 +569,19 @@ fn copy_selection_to_clipboard(app: &ChatApp, terminal_width: u16) -> bool {
     false
 }
 
-pub(super) fn handle_mouse_click(
+pub(super) fn handle_mouse_click<B: ratatui::backend::Backend>(
     app: &mut ChatApp,
     x: u16,
     y: u16,
-    terminal: &tui::Tui,
+    terminal: &ratatui::Terminal<B>,
     settings: &Settings,
     cwd: &Path,
 ) {
+    if let Some(section_id) = screen_to_sidebar_header(app, x, y, terminal) {
+        app.toggle_sidebar_section_folded(section_id);
+        return;
+    }
+
     if let Some((line, _column)) = screen_to_message_coords(app, x, y, terminal)
         && let Ok(size) = terminal.size()
     {
@@ -661,6 +666,41 @@ fn screen_to_message_coords<B: ratatui::backend::Backend>(
     let column = relative_x;
 
     Some((line, column))
+}
+
+fn screen_to_sidebar_header<B: ratatui::backend::Backend>(
+    app: &ChatApp,
+    x: u16,
+    y: u16,
+    terminal: &ratatui::Terminal<B>,
+) -> Option<&'static str> {
+    let size = terminal.size().ok()?;
+    let terminal_rect = Rect::new(0, 0, size.width, size.height);
+    let layout_rects = tui::compute_layout_rects(terminal_rect, app);
+    let sidebar_content = layout_rects.sidebar_content?;
+
+    if !point_in_rect(x, y, sidebar_content) {
+        return None;
+    }
+
+    let relative_y = (y - sidebar_content.y) as usize;
+    let relative_x = x - sidebar_content.x;
+
+    let scroll_offset = {
+        let lines = app.get_sidebar_lines(sidebar_content.width);
+        app.sidebar_scroll
+            .effective_offset(lines.len(), sidebar_content.height as usize)
+    };
+    let line_index = scroll_offset.saturating_add(relative_y);
+
+    tui::sidebar_section_header_hitboxes(app, sidebar_content.width)
+        .into_iter()
+        .find(|hitbox| {
+            hitbox.line_index == line_index
+                && relative_x < hitbox.title_width
+                && hitbox.title_width > 0
+        })
+        .map(|hitbox| hitbox.section_id)
 }
 
 pub(super) fn handle_area_scroll(

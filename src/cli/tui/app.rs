@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -293,6 +294,7 @@ pub struct ChatApp {
     pub cached_sidebar_lines: RefCell<Vec<Line<'static>>>,
     pub cached_sidebar_width: RefCell<u16>,
     pub sidebar_needs_rebuild: RefCell<bool>,
+    folded_sidebar_sections: HashSet<String>,
     pub cached_context_usage_estimate: RefCell<Option<usize>>,
     pub available_sessions: Vec<SessionMetadata>,
     pub is_picking_session: bool,
@@ -368,6 +370,7 @@ impl ChatApp {
             cached_sidebar_lines: RefCell::new(Vec::new()),
             cached_sidebar_width: RefCell::new(0),
             sidebar_needs_rebuild: RefCell::new(true),
+            folded_sidebar_sections: HashSet::new(),
             cached_context_usage_estimate: RefCell::new(None),
             available_sessions: Vec::new(),
             is_picking_session: false,
@@ -1450,6 +1453,25 @@ impl ChatApp {
     pub fn mark_sidebar_dirty(&self) {
         *self.sidebar_needs_rebuild.borrow_mut() = true;
         *self.cached_context_usage_estimate.borrow_mut() = None;
+    }
+
+    pub fn is_sidebar_section_folded(&self, section_id: &str) -> bool {
+        self.folded_sidebar_sections.contains(section_id)
+    }
+
+    pub fn toggle_sidebar_section_folded(&mut self, section_id: &str) {
+        if !self.folded_sidebar_sections.insert(section_id.to_string()) {
+            self.folded_sidebar_sections.remove(section_id);
+        }
+        self.mark_sidebar_dirty();
+    }
+
+    pub fn set_sidebar_section_folded(&mut self, section_id: &str, folded: bool) {
+        if folded {
+            self.folded_sidebar_sections.insert(section_id.to_string());
+        } else {
+            self.folded_sidebar_sections.remove(section_id);
+        }
     }
 
     pub fn configure_models(

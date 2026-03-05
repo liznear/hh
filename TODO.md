@@ -1,7 +1,7 @@
 - [x] Support fine-grained bash permissions like claude.
 - [x] Support permission spec like .claude/settings.local.json.
 - [ ] Update tool call rendering: don't mute.
-- [ ] Make "Modified Files" / "TODO" items foldable.
+- [x] Make "Modified Files" / "TODO" items foldable.
 - [x] Highlight the current WIP todo item.
 - [x] Make subagent clickable.
 - [ ] Show the current running skill.
@@ -24,3 +24,4 @@
 - [x] Bash pattern match not correct. Allow `git diff --short` in the session would allow `git diff*` in the session temporarily.
 - [ ] Queue message
 - [ ] Run bash command using "!"
+- [ ] Change TODO title to "TODO (x / y)"

@@ -22,6 +22,8 @@ use super::tool_presentation::render_tool_start;
 use theme::*;
 pub(crate) use theme::{AppLayoutRects, UiLayout};
 
+pub(crate) use sidebar::SidebarSectionHeaderHitbox;
+
 #[derive(Debug, Deserialize)]
 struct EditToolOutput {
     path: String,
@@ -388,6 +390,13 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
 
 pub(crate) fn build_sidebar_lines(app: &ChatApp, content_width: u16) -> Vec<Line<'static>> {
     sidebar::build_sidebar_lines(app, content_width)
+}
+
+pub(crate) fn sidebar_section_header_hitboxes(
+    app: &ChatApp,
+    content_width: u16,
+) -> Vec<SidebarSectionHeaderHitbox> {
+    sidebar::sidebar_section_header_hitboxes(app, content_width)
 }
 
 fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {

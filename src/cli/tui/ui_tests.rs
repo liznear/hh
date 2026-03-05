@@ -708,6 +708,29 @@ fn sidebar_omits_todo_section_when_empty() {
 }
 
 #[test]
+fn sidebar_foldable_sections_render_chevrons_and_can_fold() {
+    let mut app = ChatApp::default();
+    app.todo_items = (1..=6)
+        .map(|idx| TodoItemView {
+            content: format!("Task {idx}"),
+            status: TodoStatus::Pending,
+            priority: TodoPriority::Medium,
+        })
+        .collect();
+
+    let expanded = super::ui::build_sidebar_lines(&app, 38);
+    let expanded_text: Vec<String> = expanded.iter().map(line_text).collect();
+    assert!(expanded_text.iter().any(|line| line.contains("▼ TODO")));
+    assert!(expanded_text.iter().any(|line| line.contains("Task 1")));
+
+    app.set_sidebar_section_folded("todo", true);
+    let folded = super::ui::build_sidebar_lines(&app, 38);
+    let folded_text: Vec<String> = folded.iter().map(line_text).collect();
+    assert!(folded_text.iter().any(|line| line.contains("▶ TODO")));
+    assert!(!folded_text.iter().any(|line| line.contains("Task 1")));
+}
+
+#[test]
 fn sidebar_modified_files_section_shows_aggregated_stats() {
     let mut app = ChatApp::default();
     app.messages.push(ChatMessage::ToolCall {

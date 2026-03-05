@@ -10,6 +10,15 @@ use serde_json::Value;
 use super::super::app::{ChatApp, ChatMessage, TodoItemView, TodoStatus};
 use super::theme::*;
 
+const FOLDABLE_SECTION_MIN_LINES: usize = 7;
+
+#[derive(Clone, Copy)]
+pub(crate) struct SidebarSectionHeaderHitbox {
+    pub(crate) section_id: &'static str,
+    pub(crate) line_index: usize,
+    pub(crate) title_width: u16,
+}
+
 pub(super) fn render_sidebar(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
     let block = Block::default().style(Style::default().bg(SIDEBAR_BG));
     let inner = block.inner(area);
@@ -29,6 +38,35 @@ pub(super) fn render_sidebar(f: &mut Frame, app: &ChatApp, area: ratatui::layout
 }
 
 pub(super) fn build_sidebar_lines(app: &ChatApp, content_width: u16) -> Vec<Line<'static>> {
+    build_sidebar_model(app, content_width).lines
+}
+
+pub(crate) fn sidebar_section_header_hitboxes(
+    app: &ChatApp,
+    content_width: u16,
+) -> Vec<SidebarSectionHeaderHitbox> {
+    build_sidebar_model(app, content_width).hitboxes
+}
+
+struct SidebarSection {
+    id: &'static str,
+    title: &'static str,
+    title_style: Style,
+    body_lines: Vec<Line<'static>>,
+}
+
+impl SidebarSection {
+    fn total_lines(&self) -> usize {
+        1 + self.body_lines.len()
+    }
+}
+
+struct SidebarRenderModel {
+    lines: Vec<Line<'static>>,
+    hitboxes: Vec<SidebarSectionHeaderHitbox>,
+}
+
+fn build_sidebar_model(app: &ChatApp, content_width: u16) -> SidebarRenderModel {
     let content_width = content_width.max(1);
 
     let (used, budget) = app.context_usage();
@@ -50,6 +88,8 @@ pub(super) fn build_sidebar_lines(app: &ChatApp, content_width: u16) -> Vec<Line
     let directory_text =
         format_sidebar_directory(&app.working_directory, app.git_branch.as_deref());
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
+    let mut hitboxes = Vec::new();
+
     lines.push(Line::from(Span::styled(
         sidebar_prefixed(&app.session_name),
         Style::default().fg(TEXT_PRIMARY).bold(),
@@ -74,56 +114,88 @@ pub(super) fn build_sidebar_lines(app: &ChatApp, content_width: u16) -> Vec<Line
     )));
     lines.push(Line::from(""));
 
-    let mut sections: Vec<Vec<Line<'static>>> = Vec::new();
-    sections.push(vec![
-        Line::from(Span::styled(
-            sidebar_label("Context"),
-            Style::default().fg(TEXT_SECONDARY).bold(),
-        )),
-        Line::from(Span::styled(
+    let mut sections = vec![SidebarSection {
+        id: "context",
+        title: "Context",
+        title_style: Style::default().fg(TEXT_SECONDARY).bold(),
+        body_lines: vec![Line::from(Span::styled(
             sidebar_prefixed(&format!("{} / {} ({}%)", used, budget, context_percent)),
             Style::default().fg(context_usage_color),
-        )),
-    ]);
+        ))],
+    }];
 
     let modified_files = collect_modified_files(&app.messages);
     if !modified_files.is_empty() {
-        let mut modified_lines = vec![Line::from(Span::styled(
-            sidebar_label("Modified Files"),
-            Style::default().fg(TEXT_SECONDARY).bold(),
-        ))];
+        let mut modified_lines = Vec::new();
         append_modified_file_list(&mut modified_lines, &modified_files, content_width as usize);
-        sections.push(modified_lines);
+        sections.push(SidebarSection {
+            id: "modified_files",
+            title: "Modified Files",
+            title_style: Style::default().fg(TEXT_SECONDARY).bold(),
+            body_lines: modified_lines,
+        });
     }
 
     if !app.todo_items.is_empty() {
-        let mut todo_lines = vec![Line::from(Span::styled(
-            sidebar_label("TODO"),
-            Style::default().fg(TEXT_SECONDARY).bold(),
-        ))];
         let done = app
             .todo_items
             .iter()
             .filter(|item| item.status == TodoStatus::Completed)
             .count();
-        todo_lines.push(Line::from(Span::styled(
+
+        let mut todo_lines = vec![Line::from(Span::styled(
             sidebar_label(&format!("{} / {} done", done, app.todo_items.len())),
             Style::default().fg(TEXT_MUTED),
-        )));
+        ))];
 
         append_sidebar_list(&mut todo_lines, &app.todo_items, app.todo_items.len());
-        sections.push(todo_lines);
+        sections.push(SidebarSection {
+            id: "todo",
+            title: "TODO",
+            title_style: Style::default().fg(TEXT_SECONDARY).bold(),
+            body_lines: todo_lines,
+        });
     }
 
     let section_count = sections.len();
     for (index, section) in sections.into_iter().enumerate() {
-        lines.extend(section);
+        let is_foldable = section.total_lines() >= FOLDABLE_SECTION_MIN_LINES;
+        let is_folded = is_foldable && app.is_sidebar_section_folded(section.id);
+        let title_text = if is_foldable {
+            if is_folded {
+                format!("▶ {}", section.title)
+            } else {
+                format!("▼ {}", section.title)
+            }
+        } else {
+            section.title.to_string()
+        };
+        let rendered_title = sidebar_label(&title_text);
+        let title_width = rendered_title.chars().count() as u16;
+        let line_index = lines.len();
+        lines.push(Line::from(Span::styled(
+            rendered_title,
+            section.title_style,
+        )));
+
+        if is_foldable {
+            hitboxes.push(SidebarSectionHeaderHitbox {
+                section_id: section.id,
+                line_index,
+                title_width,
+            });
+        }
+
+        if !is_folded {
+            lines.extend(section.body_lines);
+        }
+
         if index + 1 < section_count {
             lines.push(Line::from(""));
         }
     }
 
-    lines
+    SidebarRenderModel { lines, hitboxes }
 }
 
 fn abbreviate_path(path: &str, max_chars: usize) -> String {

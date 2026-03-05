@@ -344,7 +344,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::input::{handle_mouse_event, prepare_paste, scroll_up_steps};
+    use super::input::{handle_mouse_click, handle_mouse_event, prepare_paste, scroll_up_steps};
     use super::*;
     use crate::config::settings::{
         AgentSettings, ModelLimits, ModelMetadata, ModelModalities, ModelModalityType,
@@ -1385,6 +1385,43 @@ mod tests {
         assert!(in_main_scrolled);
         assert!(app.message_scroll.offset > previous_message_offset);
         assert_eq!(app.sidebar_scroll.offset, previous_sidebar_offset);
+    }
+
+    #[test]
+    fn test_sidebar_title_click_toggles_foldable_section() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let temp_dir = tempdir().unwrap();
+        let settings = create_dummy_settings(temp_dir.path());
+        let cwd = temp_dir.path();
+        let mut app = ChatApp::new("Session".to_string(), cwd);
+        app.todo_items = (1..=6)
+            .map(|idx| tui::TodoItemView {
+                content: format!("Task {idx}"),
+                status: tui::TodoStatus::Pending,
+                priority: tui::TodoPriority::Medium,
+            })
+            .collect();
+
+        let backend = TestBackend::new(120, 40);
+        let terminal = Terminal::new(backend).unwrap();
+        let terminal_rect = Rect::new(0, 0, 120, 40);
+        let layout_rects = tui::compute_layout_rects(terminal_rect, &app);
+        let sidebar_content = layout_rects.sidebar_content.expect("sidebar content");
+
+        let hitbox = tui::sidebar_section_header_hitboxes(&app, sidebar_content.width)
+            .into_iter()
+            .find(|hitbox| hitbox.section_id == "todo")
+            .expect("todo hitbox");
+        let click_x = sidebar_content.x;
+        let click_y = sidebar_content.y + hitbox.line_index as u16;
+
+        handle_mouse_click(&mut app, click_x, click_y, &terminal, &settings, cwd);
+        assert!(app.is_sidebar_section_folded("todo"));
+
+        handle_mouse_click(&mut app, click_x, click_y, &terminal, &settings, cwd);
+        assert!(!app.is_sidebar_section_folded("todo"));
     }
 
     #[test]
