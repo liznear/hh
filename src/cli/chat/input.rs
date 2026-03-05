@@ -140,6 +140,7 @@ where
                 match c {
                     'a' | 'A' => app.move_to_line_start(),
                     'e' | 'E' => app.move_to_line_end(),
+                    'j' | 'J' => mutate_input(app, |app| app.insert_char('\n')),
                     _ => {}
                 }
             } else {

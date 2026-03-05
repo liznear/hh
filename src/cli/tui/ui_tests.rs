@@ -593,7 +593,7 @@ fn thinking_prefix_is_yellow_and_body_is_grey() {
         .iter()
         .find(|span| span.content.contains("hello"))
         .expect("thinking body span");
-    assert_eq!(body_span.style.fg, Some(Color::Rgb(98, 108, 124)));
+    assert!(body_span.style.add_modifier.contains(ratatui::style::Modifier::DIM));
 }
 
 #[test]
