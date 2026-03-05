@@ -662,7 +662,7 @@ fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usiz
         }
 
         spans.extend(line.spans.into_iter().map(|span| {
-            let style = span.style.fg(TEXT_SECONDARY);
+            let style = span.style.add_modifier(ratatui::style::Modifier::DIM);
             Span::styled(span.content.into_owned(), style)
         }));
 
@@ -939,7 +939,7 @@ fn render_completed_tool_call(
             Span::raw(" "),
         ],
         vec![Span::raw(context.style.done_continuation.to_string())],
-        Style::default().fg(TEXT_SECONDARY),
+        Style::default().fg(TEXT_PRIMARY),
     );
 
     if completed.is_error {
@@ -1055,7 +1055,7 @@ fn render_pending_tool_call(
             Style::default().fg(TEXT_MUTED),
         )],
         vec![Span::raw(tool_pending_continuation.to_string())],
-        Style::default().fg(TEXT_SECONDARY),
+        Style::default().fg(TEXT_PRIMARY),
     );
 }
 
