@@ -1,28 +1,31 @@
 # Happy Harness
 
-Version: 0.1.0
+Version: 0.1.3
 
 Happy Harness (`hh`) is a terminal-based coding agent runtime with a TUI, provider-agnostic core domain types, and a configurable tool/permission system.
 
 ## Current Status
 
-`hh` is usable for day-to-day coding workflows and still actively evolving.
+`hh` is usable for day-to-day coding workflows and is still actively evolving.
 
-- Core agent loop, tool execution, approvals, and termination are implemented.
-- TUI chat, one-shot `run`, and frame replay debugging are implemented.
-- Config loading, per-workspace sessions, and history compaction are implemented.
-- OpenAI-compatible provider support is implemented.
-- Multi-agent scaffolding and the `task` sub-agent protocol exist; the `task` tool is exposed when runtime task context is available.
+Implemented today:
+- Core agent loop, tool execution, approvals, and termination
+- Interactive chat (`hh chat`) and one-shot mode (`hh run`)
+- Config loading with layered overrides
+- Workspace-scoped session persistence and history compaction
+- OpenAI-compatible provider adapter
+- Built-in primary and subagent profiles (`build`, `plan`, `explorer`, `general`)
+- Subagent orchestration via the `task` protocol when task context is available
 
 ## Features
 
-- **Terminal TUI**: Interactive UI built with `ratatui`, markdown rendering, syntax highlighting, and debug frame dumping.
+- **Terminal TUI**: Interactive chat experience built with `ratatui`.
 - **Provider-Agnostic Core**: Canonical LLM domain types and runtime traits shared across providers.
 - **Tool Runtime**: File, shell, web, skill, question, and todo tools with schema-driven invocation.
-- **Permission Policy**: Per-tool allow/ask/deny policy with capability overrides.
-- **Session Persistence**: Workspace-aware storage and resume/compact workflows.
-- **Agent Profiles**: Built-in agents (`build`, `plan`, `explorer`, `general`) plus custom Markdown-defined agents.
-- **Image Input**: Clipboard and file-path image attachments for multimodal prompts.
+- **Permission Policy**: Per-capability allow/ask/deny policy with override support.
+- **Session Persistence**: Workspace-aware session storage and resume/compact workflows.
+- **Agent Profiles**: Built-in agents plus Markdown-defined custom agents.
+- **Image Input**: Clipboard and file-path image attachments in chat input.
 
 ## Quick Start
 
@@ -45,17 +48,12 @@ hh run "list files in current directory"
 
 # Interactive chat
 hh chat
-
-# Debug/replay UI frames
-hh run "debug this prompt" --debug ./debug
-hh replay ./debug
 ```
 
 ## CLI Commands
 
-- `hh chat [--debug <dir>] [--max-turns <n>] [--agent <name>]`
-- `hh run <prompt> [--debug <dir>] [--max-turns <n>] [--agent <name>]`
-- `hh replay <dir> [--delay <ms>] [--loop]`
+- `hh chat [--max-turns <n>] [--agent <name>]`
+- `hh run <prompt> [--max-turns <n>] [--agent <name>]`
 - `hh tools`
 - `hh agents`
 - `hh config init`
@@ -71,7 +69,7 @@ hh replay ./debug
 
 ## Available Tools
 
-Current default tool list from `hh tools`:
+Default tool names from `hh tools` with default settings:
 
 - `bash`
 - `edit`
@@ -87,50 +85,53 @@ Current default tool list from `hh tools`:
 - `web_search`
 - `write`
 
-The `task` tool is runtime-context dependent and may not appear in `hh tools` outside task-enabled execution paths.
+Notes:
+- `task` is registered only when runtime task context is available.
+- File tools are workspace-scoped by a file access controller.
+
+## Agents
+
+Built-in agents:
+- `build` (primary)
+- `plan` (primary)
+- `explorer` (subagent, read-only)
+- `general` (subagent, broader execution permissions)
+
+Custom agents are discovered from:
+- `./.agents/agents/*.md`
+- `./.claude/agents/*.md`
+- `~/.agents/agents/*.md`
+- `~/.claude/agents/*.md`
 
 ## Configuration
 
-`hh` uses JSON config files:
+`hh` uses JSON configuration files and merges them in order (lowest to highest precedence):
 
-- Global: `~/.config/hh/config.json`
-- Claude project: `.claude/settings.json`
-- Project: `.hh/config.json`
-- Claude local project override: `.claude/settings.local.json`
-- Local project override: `.hh/config.local.json`
+1. `~/.config/hh/config.json`
+2. ancestor `.claude/settings.json`
+3. ancestor `.hh/config.json`
+4. ancestor `.claude/settings.local.json`
+5. ancestor `.hh/config.local.json`
 
-Precedence (lowest -> highest): global, `.claude/settings.json`, `.hh/config.json`, `.claude/settings.local.json`, `.hh/config.local.json`.
+Environment overrides:
+- `HH_MODEL`
+- `HH_BASE_URL`
+- `HH_API_KEY_ENV`
+- `HH_SYSTEM_PROMPT`
 
-### Key Settings
-
-- `models.default` - selected model reference (`provider-id/model-id`)
-- `providers` - provider definitions (`base_url`, `api_key_env`, model metadata)
-- `agent` - runtime limits and behavior (`max_steps`, sub-agent settings, optional `system_prompt`)
-- `tools` - enable/disable tool groups (`fs`, `bash`, `web`)
-- `permissions` - per-tool policies (`allow`/`ask`/`deny`)
-- `session.root` - session storage root
-- `agents` - per-agent overrides (for example model selection)
-
-### Environment Overrides
-
-- `OPENAI_API_KEY` (default provider auth)
-- `HH_MODEL` (override selected model)
-- `HH_BASE_URL` (override selected provider base URL)
-- `HH_API_KEY_ENV` (override selected provider API-key env var name)
-- `HH_SYSTEM_PROMPT` (override runtime system prompt)
+Default provider API key variable:
+- `OPENAI_API_KEY`
 
 ## Architecture
 
-The project keeps LLM semantics in a provider-agnostic core and composes runtime behavior through traits.
-
-- `src/core/` - runtime loop, domain types, traits, prompts
-- `src/provider/` - provider adapters (OpenAI-compatible wire mapping)
+- `src/core/` - agent loop, domain types, traits, prompts
+- `src/provider/` - provider adapters (OpenAI-compatible mapping)
 - `src/tool/` - tool implementations and registry
 - `src/session/` - session persistence and compaction
 - `src/permission/` - policy and capability matching
-- `src/config/` - settings model + loader/overrides
-- `src/cli/` - commands, chat runtime, TUI/replay
-- `src/agent/` - agent profile definitions and discovery
+- `src/config/` - settings model, loading, and overrides
+- `src/cli/` - CLI commands and TUI runtime
+- `src/agent/` - agent profiles and discovery
 
 ## Development
 
@@ -142,14 +143,14 @@ cargo fmt --check
 cargo clippy -- -D warnings
 ```
 
-Use `hh run ... --debug <dir>` or `hh chat --debug <dir>` to capture screen frames, then `hh replay <dir>` to inspect UI behavior.
-
-See `AGENTS.md` for architecture constraints and debugging workflow details.
+See `AGENTS.md` for architecture constraints and project workflows.
 
 ## Session Storage
 
-Sessions are stored under `~/.local/state/hh/sessions/<workspace-path>/` and scoped by workspace.
+By default, sessions are stored under:
+
+`~/.local/state/hh/sessions/<workspace-path>/`
 
 ## License
 
-License not specified yet.
+MIT
