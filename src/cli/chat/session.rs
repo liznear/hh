@@ -133,7 +133,10 @@ pub(super) fn handle_session_selection(
         match event {
             SessionEvent::Message { message, .. } => {
                 let chat_msg = match message.role {
-                    crate::core::Role::User => tui::ChatMessage::User(message.content),
+                    crate::core::Role::User => tui::ChatMessage::User {
+                        text: message.content,
+                        queued: false,
+                    },
                     crate::core::Role::Assistant => tui::ChatMessage::Assistant(message.content),
                     _ => continue,
                 };

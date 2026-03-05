@@ -527,10 +527,11 @@ fn render_message_line_item(
     render_context: MessageRenderContext<'_>,
 ) {
     match msg {
-        ChatMessage::User(text) => {
+        ChatMessage::User { text, queued } => {
             render_user_message_block(
                 lines,
                 text,
+                *queued,
                 render_context.width,
                 render_context.tool_context.layout,
                 render_context.border_color,
@@ -1345,6 +1346,7 @@ fn render_edit_diff_block_single_column(
 fn render_user_message_block(
     lines: &mut Vec<Line<'static>>,
     text: &str,
+    queued: bool,
     width: usize,
     layout: UiLayout,
     border_color: Color,
@@ -1370,6 +1372,19 @@ fn render_user_message_block(
             border_color,
         ));
     }
+    if queued {
+        lines.push(build_user_bubble_line(
+            "",
+            content_width,
+            layout,
+            border_color,
+        ));
+        lines.push(build_user_bubble_tag_line(
+            content_width,
+            layout,
+            border_color,
+        ));
+    }
     lines.push(build_user_bubble_line(
         "",
         content_width,
@@ -1377,6 +1392,36 @@ fn render_user_message_block(
         border_color,
     ));
     lines.push(Line::from(""));
+}
+
+fn build_user_bubble_tag_line(
+    content_width: usize,
+    layout: UiLayout,
+    border_color: Color,
+) -> Line<'static> {
+    let tag_text = " queued ";
+    let tag_width = tag_text.chars().count();
+    let bubble_padding = " ".repeat(layout.user_bubble_inner_padding);
+    let bubble_padding_width = bubble_padding.chars().count();
+    let used_width = bubble_padding_width + tag_width;
+    let trailing_width = content_width.saturating_sub(used_width);
+
+    Line::from(vec![
+        Span::raw(" ".repeat(layout.user_bubble_indent())),
+        Span::styled("▌", Style::default().fg(border_color).bg(INPUT_PANEL_BG)),
+        Span::styled(
+            bubble_padding,
+            Style::default().fg(TEXT_PRIMARY).bg(INPUT_PANEL_BG),
+        ),
+        Span::styled(
+            tag_text,
+            Style::default().fg(TEXT_PRIMARY).bg(QUEUED_TAG_BG),
+        ),
+        Span::styled(
+            " ".repeat(trailing_width),
+            Style::default().fg(TEXT_PRIMARY).bg(INPUT_PANEL_BG),
+        ),
+    ])
 }
 
 fn ensure_single_blank_line(lines: &mut Vec<Line<'static>>) {

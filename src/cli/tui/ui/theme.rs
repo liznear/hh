@@ -22,6 +22,7 @@ pub(super) const SELECTION_BG: Color = Color::Rgb(55, 114, 255);
 pub(super) const NOTICE_BG: Color = Color::Rgb(224, 227, 233);
 pub(super) const PROGRESS_HEAD: Color = Color::Rgb(124, 72, 227);
 pub(super) const THINKING_LABEL: Color = Color::Rgb(227, 152, 67);
+pub(super) const QUEUED_TAG_BG: Color = Color::Rgb(201, 227, 255);
 pub(super) const TODO_ACTIVE_FG: Color = Color::Rgb(227, 152, 67);
 pub(super) const QUESTION_BORDER: Color = Color::Rgb(220, 96, 180);
 pub(super) const CONTEXT_USAGE_YELLOW: Color = Color::Rgb(214, 168, 46);

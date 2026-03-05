@@ -599,7 +599,10 @@ fn thinking_prefix_is_yellow_and_body_is_grey() {
 #[test]
 fn user_prompt_box_has_inner_top_bottom_padding_and_left_indent() {
     let mut app = ChatApp::default();
-    app.messages.push(ChatMessage::User("hello".to_string()));
+    app.messages.push(ChatMessage::User {
+        text: "hello".to_string(),
+        queued: false,
+    });
 
     let rendered: Vec<String> = build_message_lines(&app, 120)
         .iter()
@@ -615,6 +618,28 @@ fn user_prompt_box_has_inner_top_bottom_padding_and_left_indent() {
             .iter()
             .all(|line| line.starts_with(&bubble_prefix))
     );
+}
+
+#[test]
+fn queued_user_message_shows_light_blue_queued_tag() {
+    let mut app = ChatApp::default();
+    app.messages.push(ChatMessage::User {
+        text: "hello".to_string(),
+        queued: true,
+    });
+
+    let lines = build_message_lines(&app, 120);
+    let queued_line = lines
+        .iter()
+        .find(|line| line_text(line).contains("queued"))
+        .expect("queued tag line");
+    let queued_span = queued_line
+        .spans
+        .iter()
+        .find(|span| span.content.contains("queued"))
+        .expect("queued tag span");
+
+    assert_eq!(queued_span.style.bg, Some(Color::Rgb(201, 227, 255)));
 }
 
 #[test]

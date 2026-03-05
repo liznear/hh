@@ -11,7 +11,7 @@ use ratatui::layout::Rect;
 
 use crate::cli::tui::{self, ChatApp, QuestionKeyResult, TuiEventSender};
 use crate::config::Settings;
-use crate::core::MessageAttachment;
+use crate::core::{Message, MessageAttachment, Role};
 use crate::session::{SessionEvent, SessionStore};
 
 const INPUT_POLL_TIMEOUT: Duration = Duration::from_millis(16);
@@ -517,6 +517,21 @@ fn submit_and_handle(
 ) {
     let input = app.submit_input();
     app.update_command_filtering();
+
+    if input.queued {
+        event_sender.enqueue_queued_user_message(crate::core::QueuedUserMessage {
+            message: Message {
+                role: Role::User,
+                content: input.text,
+                attachments: input.attachments,
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+            },
+            message_index: input.message_index,
+        });
+        return;
+    }
+
     super::handle_submitted_input(input, app, settings, cwd, event_sender);
 }
 
@@ -769,7 +784,10 @@ pub(super) fn load_session_messages(
         match event {
             SessionEvent::Message { message, .. } => {
                 let chat_msg = match message.role {
-                    crate::core::Role::User => tui::ChatMessage::User(message.content),
+                    crate::core::Role::User => tui::ChatMessage::User {
+                        text: message.content,
+                        queued: false,
+                    },
                     crate::core::Role::Assistant => tui::ChatMessage::Assistant(message.content),
                     _ => continue,
                 };

@@ -14,12 +14,21 @@ pub(super) fn handle_submitted_input(
     cwd: &Path,
     event_sender: &TuiEventSender,
 ) {
+    if input.queued {
+        return;
+    }
+
     if input.text.starts_with('/') && input.attachments.is_empty() {
-        if let Some(tui::ChatMessage::User(last)) = app.messages.last()
-            && last == &input.text
+        if let Some(message_index) = input.message_index {
+            if let Some(tui::ChatMessage::User { text, .. }) = app.messages.get(message_index)
+                && text == &input.text
+            {
+                app.remove_message_at(message_index);
+            }
+        } else if let Some(tui::ChatMessage::User { text, .. }) = app.messages.last()
+            && text == &input.text
         {
-            app.messages.pop();
-            app.mark_dirty();
+            app.remove_message_at(app.messages.len().saturating_sub(1));
         }
         handle_slash_command(input.text, app, settings, cwd, event_sender);
     } else if app.is_picking_session {

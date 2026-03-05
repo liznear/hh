@@ -1,5 +1,5 @@
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -48,6 +48,7 @@ pub enum TuiEvent {
     AssistantDelta(String),
     ContextUsage(usize),
     AssistantDone,
+    QueuedMessagesConsumed(Vec<usize>),
     SessionTitle(String),
     CompactionStart,
     CompactionDone(String),
@@ -65,6 +66,7 @@ pub enum TuiEvent {
 #[derive(Clone)]
 pub struct TuiEventSender {
     tx: Arc<mpsc::UnboundedSender<ScopedTuiEvent>>,
+    queued_user_messages: Arc<Mutex<VecDeque<crate::core::QueuedUserMessage>>>,
     session_epoch: u64,
     run_epoch: u64,
 }
@@ -73,6 +75,7 @@ impl TuiEventSender {
     pub fn new(tx: mpsc::UnboundedSender<ScopedTuiEvent>) -> Self {
         Self {
             tx: Arc::new(tx),
+            queued_user_messages: Arc::new(Mutex::new(VecDeque::new())),
             session_epoch: 0,
             run_epoch: 0,
         }
@@ -81,6 +84,7 @@ impl TuiEventSender {
     pub fn scoped(&self, session_epoch: u64, run_epoch: u64) -> Self {
         Self {
             tx: Arc::clone(&self.tx),
+            queued_user_messages: Arc::clone(&self.queued_user_messages),
             session_epoch,
             run_epoch,
         }
@@ -92,6 +96,12 @@ impl TuiEventSender {
             run_epoch: self.run_epoch,
             event,
         });
+    }
+
+    pub fn enqueue_queued_user_message(&self, message: crate::core::QueuedUserMessage) {
+        if let Ok(mut queued) = self.queued_user_messages.lock() {
+            queued.push_back(message);
+        }
     }
 }
 
@@ -128,5 +138,22 @@ impl AgentEvents for TuiEventSender {
 
     fn on_assistant_done(&self) {
         self.send(TuiEvent::AssistantDone);
+    }
+
+    fn drain_queued_user_messages(&self) -> Vec<crate::core::QueuedUserMessage> {
+        let Ok(mut queued) = self.queued_user_messages.lock() else {
+            return Vec::new();
+        };
+        queued.drain(..).collect()
+    }
+
+    fn on_queued_user_messages_consumed(&self, messages: &[crate::core::QueuedUserMessage]) {
+        let consumed_indexes = messages
+            .iter()
+            .filter_map(|message| message.message_index)
+            .collect::<Vec<_>>();
+        if !consumed_indexes.is_empty() {
+            self.send(TuiEvent::QueuedMessagesConsumed(consumed_indexes));
+        }
     }
 }

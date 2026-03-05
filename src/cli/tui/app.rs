@@ -141,7 +141,10 @@ pub struct TaskSessionTarget {
 
 #[derive(Debug, Clone)]
 pub enum ChatMessage {
-    User(String),
+    User {
+        text: String,
+        queued: bool,
+    },
     Assistant(String),
     CompactionPending,
     Compaction(String),
@@ -334,6 +337,8 @@ pub struct AgentOptionView {
 pub struct SubmittedInput {
     pub text: String,
     pub attachments: Vec<MessageAttachment>,
+    pub message_index: Option<usize>,
+    pub queued: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -718,6 +723,9 @@ impl ChatApp {
                     self.last_run_interrupted = false;
                 }
             }
+            TuiEvent::QueuedMessagesConsumed(indexes) => {
+                self.clear_queued_user_messages(indexes);
+            }
             TuiEvent::SessionTitle(title) => {
                 self.session_name = title.clone();
                 self.mark_dirty();
@@ -1034,15 +1042,57 @@ impl ChatApp {
         let attachments = std::mem::take(&mut self.pending_attachments);
         self.cursor = 0;
         self.preferred_column = None;
-        if !input.is_empty() || !attachments.is_empty() {
-            self.messages.push(ChatMessage::User(input.clone()));
-            self.set_processing(true);
-            self.message_scroll.auto_follow = true; // Follow the new response
-            self.mark_dirty();
-        }
-        SubmittedInput {
+
+        let queued = self.is_processing;
+        let mut submitted = SubmittedInput {
             text: input,
             attachments,
+            message_index: None,
+            queued,
+        };
+
+        if submitted.text.is_empty() && submitted.attachments.is_empty() {
+            return submitted;
+        }
+
+        self.messages.push(ChatMessage::User {
+            text: submitted.text.clone(),
+            queued,
+        });
+        let message_index = self.messages.len().saturating_sub(1);
+        submitted.message_index = Some(message_index);
+
+        if !queued {
+            self.set_processing(true);
+        }
+
+        self.message_scroll.auto_follow = true;
+        self.mark_dirty();
+        submitted
+    }
+
+    pub fn remove_message_at(&mut self, index: usize) {
+        if index >= self.messages.len() {
+            return;
+        }
+        self.messages.remove(index);
+        self.mark_dirty();
+    }
+
+    pub fn clear_queued_user_messages(&mut self, indexes: &[usize]) {
+        let mut changed = false;
+        for index in indexes {
+            if let Some(ChatMessage::User {
+                queued: is_queued, ..
+            }) = self.messages.get_mut(*index)
+                && *is_queued
+            {
+                *is_queued = false;
+                changed = true;
+            }
+        }
+        if changed {
+            self.mark_dirty();
         }
     }
 
@@ -1109,7 +1159,7 @@ impl ChatApp {
         let mut chars = self.input.len();
         for message in self.messages.iter().skip(boundary) {
             chars += match message {
-                ChatMessage::User(text)
+                ChatMessage::User { text, .. }
                 | ChatMessage::Assistant(text)
                 | ChatMessage::Compaction(text)
                 | ChatMessage::Thinking(text) => text.len(),
@@ -1946,6 +1996,37 @@ mod tests {
         app.last_timer_refresh_second = Some(0);
 
         assert!(app.on_periodic_tick());
+    }
+
+    #[test]
+    fn submit_input_marks_message_as_queued_while_processing() {
+        let mut app = ChatApp::default();
+        app.set_processing(true);
+        app.set_input("queued follow-up".to_string());
+
+        let submitted = app.submit_input();
+
+        assert!(submitted.queued);
+        assert!(matches!(
+            app.messages.first(),
+            Some(ChatMessage::User { text, queued: true }) if text == "queued follow-up"
+        ));
+    }
+
+    #[test]
+    fn clear_queued_user_messages_clears_queued_flag_on_message() {
+        let mut app = ChatApp::default();
+        app.messages.push(ChatMessage::User {
+            text: "queued follow-up".to_string(),
+            queued: true,
+        });
+
+        app.clear_queued_user_messages(&[0]);
+
+        assert!(matches!(
+            app.messages.first(),
+            Some(ChatMessage::User { queued: false, .. })
+        ));
     }
 
     #[test]

@@ -125,6 +125,11 @@ where
                 anyhow::bail!("Reached max steps without final answer")
             }
 
+            let queued_user_messages = self.events.drain_queued_user_messages();
+            for queued in &queued_user_messages {
+                self.append_message(&mut state, queued.message.clone())?;
+            }
+
             let mut request_messages = state.messages.clone();
             if let Some(state_message) = state.state_for_llm() {
                 request_messages.push(state_message);
@@ -135,6 +140,11 @@ where
                 messages: request_messages,
                 tools: self.tools.schemas(),
             };
+
+            if !queued_user_messages.is_empty() {
+                self.events
+                    .on_queued_user_messages_consumed(&queued_user_messages);
+            }
 
             let mut assistant_content = String::new();
             let mut thinking_content = String::new();
@@ -716,16 +726,51 @@ mod tests {
     #[derive(Clone)]
     struct TestProvider {
         responses: Arc<Mutex<VecDeque<ProviderResponse>>>,
+        captured_requests: Arc<Mutex<Vec<ProviderRequest>>>,
     }
 
     #[async_trait]
     impl Provider for TestProvider {
-        async fn complete(&self, _req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
+        async fn complete(&self, req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
+            if let Ok(mut captured) = self.captured_requests.lock() {
+                captured.push(req);
+            }
             self.responses
                 .lock()
                 .expect("provider lock")
                 .pop_front()
                 .ok_or_else(|| anyhow::anyhow!("no scripted provider response remaining"))
+        }
+    }
+
+    #[derive(Clone)]
+    struct TestQueuedEvents {
+        queued: Arc<Mutex<VecDeque<crate::core::QueuedUserMessage>>>,
+        consumed: Arc<Mutex<Vec<Vec<crate::core::QueuedUserMessage>>>>,
+        enqueue_after_tool_end: Option<crate::core::QueuedUserMessage>,
+    }
+
+    impl AgentEvents for TestQueuedEvents {
+        fn on_tool_end(&self, _name: &str, _result: &crate::tool::ToolResult) {
+            if let Some(message) = self.enqueue_after_tool_end.clone()
+                && let Ok(mut queued) = self.queued.lock()
+                && queued.is_empty()
+            {
+                queued.push_back(message);
+            }
+        }
+
+        fn drain_queued_user_messages(&self) -> Vec<crate::core::QueuedUserMessage> {
+            let Ok(mut queued) = self.queued.lock() else {
+                return Vec::new();
+            };
+            queued.drain(..).collect()
+        }
+
+        fn on_queued_user_messages_consumed(&self, messages: &[crate::core::QueuedUserMessage]) {
+            if let Ok(mut consumed) = self.consumed.lock() {
+                consumed.push(messages.to_vec());
+            }
         }
     }
 
@@ -807,6 +852,7 @@ mod tests {
                     context_tokens: None,
                 },
             ]))),
+            captured_requests: Arc::new(Mutex::new(Vec::new())),
         };
 
         let agent = AgentLoop {
@@ -931,6 +977,7 @@ mod tests {
                     context_tokens: None,
                 },
             ]))),
+            captured_requests: Arc::new(Mutex::new(Vec::new())),
         };
 
         let agent = AgentLoop {
@@ -976,5 +1023,120 @@ mod tests {
             .filter(|event| matches!(event, SessionEvent::Approval { .. }))
             .count();
         assert_eq!(approvals_recorded, 1);
+    }
+
+    #[tokio::test]
+    async fn queued_user_message_is_appended_before_next_provider_call() {
+        let temp = tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let mut settings = Settings::default();
+        settings.session.root = temp.path().join("sessions");
+
+        let tools = ToolRegistry::new(&settings, &workspace);
+        let approvals = PermissionMatcher::new(settings.clone(), &tools.schemas(), &workspace);
+        let session = SessionStore::new(
+            &settings.session.root,
+            &workspace,
+            None,
+            Some("queued messages".to_string()),
+        )
+        .expect("session store");
+
+        let captured_requests = Arc::new(Mutex::new(Vec::new()));
+        let provider = TestProvider {
+            responses: Arc::new(Mutex::new(VecDeque::from(vec![
+                ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: String::new(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: vec![ToolCall {
+                            id: "call-1".to_string(),
+                            name: "todo_read".to_string(),
+                            arguments: json!({}),
+                        }],
+                    },
+                    tool_calls: vec![ToolCall {
+                        id: "call-1".to_string(),
+                        name: "todo_read".to_string(),
+                        arguments: json!({}),
+                    }],
+                    done: false,
+                    thinking: None,
+                    context_tokens: None,
+                },
+                ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: "done".to_string(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    tool_calls: Vec::new(),
+                    done: true,
+                    thinking: None,
+                    context_tokens: None,
+                },
+            ]))),
+            captured_requests: Arc::clone(&captured_requests),
+        };
+
+        let consumed = Arc::new(Mutex::new(Vec::new()));
+        let queued_events = TestQueuedEvents {
+            queued: Arc::new(Mutex::new(VecDeque::new())),
+            consumed: Arc::clone(&consumed),
+            enqueue_after_tool_end: Some(crate::core::QueuedUserMessage {
+                message: Message {
+                    role: Role::User,
+                    content: "queued follow-up".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                message_index: Some(7),
+            }),
+        };
+
+        let agent = AgentLoop {
+            provider,
+            tools,
+            approvals,
+            max_steps: 5,
+            model: "test".to_string(),
+            system_prompt: String::new(),
+            session,
+            events: queued_events,
+        };
+
+        let result = agent
+            .run(
+                Message {
+                    role: Role::User,
+                    content: "initial prompt".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                |_request| async { Ok(ApprovalChoice::AllowOnce) },
+            )
+            .await;
+
+        assert!(result.is_ok());
+
+        let requests = captured_requests.lock().expect("captured requests");
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].messages.iter().any(|message| {
+            message.role == Role::User && message.content == "queued follow-up"
+        }));
+
+        let consumed = consumed.lock().expect("consumed queue");
+        assert_eq!(consumed.len(), 1);
+        assert_eq!(consumed[0].len(), 1);
+        assert_eq!(consumed[0][0].message.content, "queued follow-up");
+        assert_eq!(consumed[0][0].message_index, Some(7));
     }
 }

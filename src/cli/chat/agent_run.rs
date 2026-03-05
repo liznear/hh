@@ -418,6 +418,10 @@ pub(super) fn handle_chat_message(
     cwd: &Path,
     event_sender: &TuiEventSender,
 ) {
+    if input.queued {
+        return;
+    }
+
     if !input.text.is_empty() || !input.attachments.is_empty() {
         // Ensure any run-epoch bump from replacing an existing task happens
         // before we scope events for the new run.

@@ -886,6 +886,8 @@ mod tests {
                 media_type: "image/png".to_string(),
                 data_base64: "aGVsbG8=".to_string(),
             }],
+            message_index: None,
+            queued: false,
         };
 
         let _enter = runtime.enter();
@@ -1594,8 +1596,10 @@ mod tests {
         let mut app = ChatApp::new("Session".to_string(), cwd);
 
         // Add some messages
-        app.messages
-            .push(tui::ChatMessage::User("Hello".to_string()));
+        app.messages.push(tui::ChatMessage::User {
+            text: "Hello".to_string(),
+            queued: false,
+        });
         app.messages
             .push(tui::ChatMessage::Assistant("World".to_string()));
 

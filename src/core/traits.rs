@@ -26,6 +26,12 @@ pub struct ApprovalRequest {
     pub action: Value,
 }
 
+#[derive(Debug, Clone)]
+pub struct QueuedUserMessage {
+    pub message: Message,
+    pub message_index: Option<usize>,
+}
+
 pub trait AgentEvents: Send + Sync {
     fn on_thinking(&self, _text: &str) {}
     fn on_tool_start(&self, _name: &str, _args: &Value) {}
@@ -34,6 +40,10 @@ pub trait AgentEvents: Send + Sync {
     fn on_assistant_delta(&self, _delta: &str) {}
     fn on_context_usage(&self, _tokens: usize) {}
     fn on_assistant_done(&self) {}
+    fn drain_queued_user_messages(&self) -> Vec<QueuedUserMessage> {
+        Vec::new()
+    }
+    fn on_queued_user_messages_consumed(&self, _messages: &[QueuedUserMessage]) {}
 }
 
 #[derive(Debug, Default, Clone, Copy)]

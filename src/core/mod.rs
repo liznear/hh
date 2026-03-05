@@ -6,7 +6,7 @@ pub mod types;
 pub use agent::AgentLoop;
 pub use traits::{
     AgentEvents, ApprovalChoice, ApprovalDecision, ApprovalPolicy, ApprovalRequest, NoopEvents,
-    Provider, SessionReader, SessionSink, ToolExecutor,
+    Provider, QueuedUserMessage, SessionReader, SessionSink, ToolExecutor,
 };
 pub use types::{
     Message, MessageAttachment, ProviderRequest, ProviderResponse, ProviderStreamEvent,
