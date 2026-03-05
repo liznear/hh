@@ -50,7 +50,7 @@ pub(crate) fn sidebar_section_header_hitboxes(
 
 struct SidebarSection {
     id: &'static str,
-    title: &'static str,
+    title: String,
     title_style: Style,
     body_lines: Vec<Line<'static>>,
 }
@@ -116,7 +116,7 @@ fn build_sidebar_model(app: &ChatApp, content_width: u16) -> SidebarRenderModel 
 
     let mut sections = vec![SidebarSection {
         id: "context",
-        title: "Context",
+        title: "Context".to_string(),
         title_style: Style::default().fg(TEXT_SECONDARY).bold(),
         body_lines: vec![Line::from(Span::styled(
             sidebar_prefixed(&format!("{} / {} ({}%)", used, budget, context_percent)),
@@ -130,7 +130,7 @@ fn build_sidebar_model(app: &ChatApp, content_width: u16) -> SidebarRenderModel 
         append_modified_file_list(&mut modified_lines, &modified_files, content_width as usize);
         sections.push(SidebarSection {
             id: "modified_files",
-            title: "Modified Files",
+            title: "Modified Files".to_string(),
             title_style: Style::default().fg(TEXT_SECONDARY).bold(),
             body_lines: modified_lines,
         });
@@ -151,7 +151,7 @@ fn build_sidebar_model(app: &ChatApp, content_width: u16) -> SidebarRenderModel 
         append_sidebar_list(&mut todo_lines, &app.todo_items, app.todo_items.len());
         sections.push(SidebarSection {
             id: "todo",
-            title: "TODO",
+            title: format!("TODO ({} / {})", done, app.todo_items.len()),
             title_style: Style::default().fg(TEXT_SECONDARY).bold(),
             body_lines: todo_lines,
         });
