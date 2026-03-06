@@ -1,3 +1,4 @@
+use crate::core::agent::{StateOp, StatePatch};
 use crate::tool::{Tool, ToolResult, ToolSchema, parse_tool_args};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -143,5 +144,25 @@ impl Tool for TodoWriteTool {
             "application/vnd.hh.todo+json",
             &output,
         )
+    }
+
+    fn state_patch(&self, _args: &Value, result: &ToolResult) -> StatePatch {
+        if result.is_error {
+            return StatePatch::none();
+        }
+
+        let Some(payload) = result.payload.as_object() else {
+            return StatePatch::none();
+        };
+
+        let Some(todos) = payload.get("todos") else {
+            return StatePatch::none();
+        };
+
+        let Ok(items) = serde_json::from_value::<Vec<TodoItem>>(todos.clone()) else {
+            return StatePatch::none();
+        };
+
+        StatePatch::with_op(StateOp::SetTodoItems { items })
     }
 }

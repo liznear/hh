@@ -120,4 +120,6 @@ pub struct SessionMetadata {
     pub is_child_session: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_state_snapshot: Option<crate::core::agent::RunnerState>,
 }

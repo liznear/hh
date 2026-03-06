@@ -529,6 +529,7 @@ mod tests {
             parent_session_id: None,
             is_child_session: false,
             parent_tool_call_id: None,
+            runner_state_snapshot: None,
         }];
         app.is_picking_session = true;
 

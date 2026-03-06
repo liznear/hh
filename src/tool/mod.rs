@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 
 pub use schema::ToolSchema;
 
+use crate::core::agent::types::StatePatch;
+
 #[derive(Debug, Clone)]
 pub struct ToolCall {
     pub name: String,
@@ -30,6 +32,25 @@ pub struct ToolResult {
     pub content_type: String,
     pub payload: Value,
     pub output: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolExecution {
+    pub result: ToolResult,
+    pub patch: StatePatch,
+}
+
+impl ToolExecution {
+    pub fn from_result(result: ToolResult) -> Self {
+        Self {
+            result,
+            patch: StatePatch::none(),
+        }
+    }
+
+    pub fn new(result: ToolResult, patch: StatePatch) -> Self {
+        Self { result, patch }
+    }
 }
 
 impl ToolResult {
@@ -131,4 +152,7 @@ pub fn parse_tool_args<T: DeserializeOwned>(args: Value, tool_name: &str) -> Res
 pub trait Tool: Send + Sync {
     fn schema(&self) -> ToolSchema;
     async fn execute(&self, args: Value) -> ToolResult;
+    fn state_patch(&self, _args: &Value, _result: &ToolResult) -> StatePatch {
+        StatePatch::none()
+    }
 }

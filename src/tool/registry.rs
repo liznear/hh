@@ -8,7 +8,7 @@ use crate::tool::skill::SkillTool;
 use crate::tool::task::{TaskTool, TaskToolRuntimeContext};
 use crate::tool::todo::{TodoReadTool, TodoWriteTool};
 use crate::tool::web::{WebFetchTool, WebSearchTool};
-use crate::tool::{Tool, ToolSchema};
+use crate::tool::{Tool, ToolExecution, ToolSchema};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::Path;
@@ -119,12 +119,17 @@ impl ToolRegistry {
         self.tools.values().map(|t| t.schema()).collect()
     }
 
-    pub async fn execute(&self, name: &str, args: serde_json::Value) -> crate::tool::ToolResult {
+    pub async fn execute(&self, name: &str, args: serde_json::Value) -> ToolExecution {
         match self.tools.get(name) {
-            Some(tool) => tool.execute(args).await,
-            None => {
-                crate::tool::ToolResult::err_text("unknown_tool", format!("unknown tool: {}", name))
+            Some(tool) => {
+                let result = tool.execute(args.clone()).await;
+                let patch = tool.state_patch(&args, &result);
+                ToolExecution::new(result, patch)
             }
+            None => ToolExecution::from_result(crate::tool::ToolResult::err_text(
+                "unknown_tool",
+                format!("unknown tool: {}", name),
+            )),
         }
     }
 
@@ -141,7 +146,7 @@ impl ToolExecutor for ToolRegistry {
         self.schemas()
     }
 
-    async fn execute(&self, name: &str, args: serde_json::Value) -> crate::tool::ToolResult {
+    async fn execute(&self, name: &str, args: serde_json::Value) -> ToolExecution {
         self.execute(name, args).await
     }
 

@@ -79,7 +79,7 @@ pub trait Provider: Send + Sync {
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
     fn schemas(&self) -> Vec<crate::tool::schema::ToolSchema>;
-    async fn execute(&self, name: &str, args: Value) -> crate::tool::ToolResult;
+    async fn execute(&self, name: &str, args: Value) -> crate::tool::ToolExecution;
     fn apply_approval_decision(
         &self,
         _action: &Value,

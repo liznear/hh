@@ -57,6 +57,7 @@ impl SessionStore {
                 parent_session_id: None,
                 is_child_session: false,
                 parent_tool_call_id: None,
+                runner_state_snapshot: None,
             };
             let f = fs::File::create(&meta_file)?;
             serde_json::to_writer(f, &metadata)?;
@@ -87,6 +88,7 @@ impl SessionStore {
                 is_child_session: parent_session_id.is_some(),
                 parent_session_id,
                 parent_tool_call_id,
+                runner_state_snapshot: None,
             })?;
         }
 
@@ -162,8 +164,47 @@ impl SessionStore {
                 parent_session_id: None,
                 is_child_session: false,
                 parent_tool_call_id: None,
+                runner_state_snapshot: None,
             }
         };
+        self.write_metadata(metadata)
+    }
+
+    pub fn load_runner_state_snapshot(
+        &self,
+    ) -> anyhow::Result<Option<crate::core::agent::RunnerState>> {
+        if !self.metadata_file.exists() {
+            return Ok(None);
+        }
+
+        let file = fs::File::open(&self.metadata_file)?;
+        let metadata: SessionMetadata = serde_json::from_reader(file)?;
+        Ok(metadata.runner_state_snapshot)
+    }
+
+    pub fn save_runner_state_snapshot(
+        &self,
+        snapshot: &crate::core::agent::RunnerState,
+    ) -> anyhow::Result<()> {
+        let timestamp = now();
+        let mut metadata = if self.metadata_file.exists() {
+            let file = fs::File::open(&self.metadata_file)?;
+            serde_json::from_reader::<_, SessionMetadata>(file)?
+        } else {
+            SessionMetadata {
+                id: self.id.clone(),
+                title: "Session".to_string(),
+                created_at: timestamp,
+                last_updated_at: timestamp,
+                parent_session_id: None,
+                is_child_session: false,
+                parent_tool_call_id: None,
+                runner_state_snapshot: None,
+            }
+        };
+
+        metadata.last_updated_at = timestamp;
+        metadata.runner_state_snapshot = Some(snapshot.clone());
         self.write_metadata(metadata)
     }
 

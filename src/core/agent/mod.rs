@@ -1,5 +1,11 @@
 pub mod state;
 pub mod subagent_manager;
+pub mod types;
+
+pub use types::{
+    CoreInput, CoreOutput, ErrorPayload, RunnerInput, RunnerOutput, RunnerState, StateOp,
+    StatePatch,
+};
 
 pub use super::{AgentEvents, NoopEvents};
 
@@ -11,7 +17,7 @@ use crate::core::{
 use crate::permission::rules::{PermissionRule, RuleContext};
 use crate::safety::sanitize_tool_output;
 use crate::session::{SessionEvent, event_id};
-use crate::tool::ToolResult;
+use crate::tool::{ToolExecution, ToolResult};
 use futures::stream::{FuturesUnordered, StreamExt};
 use serde::Serialize;
 use state::AgentState;
@@ -285,7 +291,7 @@ where
                     self.events.on_tool_start(&call.name, &event_args);
                     pending_non_blocking.push(async {
                         let mut result = self.tools.execute(&call.name, execution_args).await;
-                        result.output = sanitize_tool_output(&result.output);
+                        result.result.output = sanitize_tool_output(&result.result.output);
                         (call, result)
                     });
                     continue;
@@ -296,8 +302,8 @@ where
             }
 
             while let Some((call, result)) = pending_non_blocking.next().await {
-                self.events.on_tool_end(&call.name, &result);
-                self.record_tool_result(&call, result, &mut state)?;
+                self.events.on_tool_end(&call.name, &result.result);
+                self.record_tool_execution_result(&call, result.result, result.patch, &mut state)?;
             }
 
             state.step += 1;
@@ -342,11 +348,13 @@ where
                 call.arguments.clone()
             };
             self.events.on_tool_start(&call.name, &event_args);
-            let mut result = if call.name == "todo_read" {
-                todo_snapshot_result(&state.todo_items)
+            let execution = if call.name == "todo_read" {
+                ToolExecution::from_result(todo_snapshot_result(&state.todo_items))
             } else {
                 self.tools.execute(&call.name, execution_args).await
             };
+
+            let ToolExecution { mut result, patch } = execution;
 
             if let Some(request) = parse_approval_request(&result) {
                 let choice = approve(request.clone()).await?;
@@ -383,7 +391,7 @@ where
 
             result.output = sanitize_tool_output(&result.output);
             self.events.on_tool_end(&call.name, &result);
-            return self.record_tool_result(call, result, state);
+            return self.record_tool_execution_result(call, result, patch, state);
         }
     }
 
@@ -405,6 +413,16 @@ where
         result: ToolResult,
         state: &mut AgentState,
     ) -> anyhow::Result<()> {
+        self.record_tool_execution_result(call, result, StatePatch::none(), state)
+    }
+
+    fn record_tool_execution_result(
+        &self,
+        call: &ToolCall,
+        result: ToolResult,
+        patch: StatePatch,
+        state: &mut AgentState,
+    ) -> anyhow::Result<()> {
         let call_id = call.id.clone();
         state.push(Message {
             role: Role::Tool,
@@ -413,7 +431,11 @@ where
             tool_call_id: Some(call_id.clone()),
             tool_calls: Vec::new(),
         });
-        if state.apply_tool_result(&call.name, &result) {
+        let mut changed = state.apply_tool_result(&call.name, &result);
+        if apply_state_patch(state, patch) {
+            changed = true;
+        }
+        if changed {
             self.events.on_todo_items_changed(&state.todo_items);
         }
         self.session.append(&SessionEvent::ToolResult {
@@ -432,6 +454,22 @@ where
             message,
         })
     }
+}
+
+fn apply_state_patch(state: &mut AgentState, patch: StatePatch) -> bool {
+    let mut changed = false;
+    for op in patch.ops {
+        match op {
+            StateOp::SetTodoItems { items } => {
+                if state.todo_items != items {
+                    state.todo_items = items;
+                    changed = true;
+                }
+            }
+            StateOp::SetContextTokens { .. } => {}
+        }
+    }
+    changed
 }
 
 fn decorate_tool_start_args(
