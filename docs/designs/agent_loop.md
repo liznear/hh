@@ -24,7 +24,7 @@ The outer layer wraps the Core and manages side-effects, typed state, concurrenc
   - Evaluates tool calls against the `ApprovalPolicy`.
   - Manages concurrent, non-blocking tool execution (`FuturesUnordered`).
   - Routes interactive tools (like `"question"`) and security approvals to the UI layer.
-  - Passes `RunnerState` into `Tool::execute` and receives the mutated state back.
+  - Executes tools and applies returned `StatePatch` values to `RunnerState` sequentially.
   - Translates the new `RunnerState` into a text string (`state_for_llm`) and feeds it to the Core.
   - Emits the entire `RunnerState` to the UI via `RunnerOutput` whenever it changes.
 - **Interface:** Communicates with the Core via inner channels, and with the CLI/TUI via `RunnerInput` and `RunnerOutput` channels.
@@ -58,11 +58,43 @@ pub struct RunnerState {
 ```
 
 ### Tool Execution Flow (State as a Reducer)
-Tools are treated as pure state reducers.
+Tools are treated as state patch producers.
 1. The `AgentRunner` receives `ToolCallRequested` from the Core.
-2. The Runner passes the arguments and the current `RunnerState` into the `ToolExecutor`.
-3. The `Tool` executes its logic, mutates the state if necessary, and returns `(ToolResult, RunnerState)`.
-4. The Runner replaces its internal state with the new state.
+2. The Runner executes each tool call via the `ToolExecutor`.
+3. The `Tool` returns `ToolResult` plus a typed `StatePatch` (or no-op patch).
+4. The Runner applies each patch to `RunnerState` in a single-threaded reducer path.
+
+### Turn Ordering and Non-Blocking Tool Completions
+Turn boundaries are implicit and enforced by protocol invariants (no explicit `TurnStarted`/`TurnToolsCompleted` events required).
+
+- For each provider turn, the Core tracks a pending set of tool `call_id`s.
+- The Core does not issue the next provider request until every `call_id` in the current turn has a corresponding `CoreInput::ToolResult` (or the turn is cancelled).
+- Blocking tools may complete immediately; non-blocking tools (for example, `task`) may complete out of order.
+- Out-of-order completions are valid because correlation is by `call_id`, not arrival order.
+- The Runner may execute non-blocking tools concurrently, but patch application to `RunnerState` is always sequential.
+
+### Cancellation Model
+Cancellation is whole-turn and best-effort immediate.
+
+- `RunnerInput::Cancel` causes the Runner to cancel provider streaming, all in-flight tool futures, and pending approval/question waits.
+- No new tool executions are started after cancellation begins.
+- The Core resolves the turn as cancelled instead of waiting for missing tool results.
+- The Runner emits a terminal lifecycle signal (`TurnComplete` with cancelled context, or equivalent) so UI/CLI can clear processing state deterministically.
+
+### Replay and Resumption
+Replay uses session events plus a persisted runner-state snapshot.
+
+- The session metadata stores the latest serialized `RunnerState` snapshot.
+- On resume, the Runner loads this snapshot before accepting new input.
+- New tool results continue to be appended as session events for inspectability and debugging.
+- Snapshot writes happen after each successful patch application and at turn completion.
+
+### Backpressure and Channel Policy
+Channels between Core/Runner/UI are bounded.
+
+- Delta-style streams (thinking/assistant deltas) use bounded queues with coalescing under pressure.
+- Control-plane events (tool start/end, approvals, questions, cancel) are never dropped.
+- A small bound is acceptable for control channels; delta channels should use a higher bound to avoid excessive token loss.
 
 ### State Projection
 The Runner acts as the translator between the typed system state and the LLM's text-only world, as well as the UI's visual world.
@@ -88,7 +120,7 @@ pub enum CoreOutput {
     ContextUsage(usize),
     ToolCallRequested(ToolCall),
     TurnComplete,
-    Error(anyhow::Error),
+    Error(String),
 }
 ```
 
@@ -119,6 +151,6 @@ pub enum RunnerOutput {
     ToolEnd { call_id: String, name: String, result: ToolResult },
     
     TurnComplete,
-    Error(anyhow::Error),
+    Error(String),
 }
 ```
