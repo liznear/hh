@@ -391,6 +391,10 @@ where
             let ToolExecution { mut result, patch } = execution;
 
             if let Some(request) = parse_approval_request(&result) {
+                emit_output(RunnerOutput::ApprovalRequired {
+                    call_id: call.id.clone(),
+                    request: request.clone(),
+                });
                 let choice = approve(request.clone()).await?;
                 let approved = choice != ApprovalChoice::Deny;
                 emit_output(RunnerOutput::ApprovalRecorded {
@@ -777,16 +781,74 @@ where
     {
         let (cancel_tx, cancel_rx) = watch::channel(false);
         let mut pending_messages = VecDeque::<Message>::new();
+        let pending_approvals = std::sync::Arc::new(std::sync::Mutex::new(VecDeque::<(
+            String,
+            ApprovalChoice,
+        )>::new()));
+        let pending_approvals_notify = std::sync::Arc::new(tokio::sync::Notify::new());
+        let pending_answers = std::sync::Arc::new(std::sync::Mutex::new(VecDeque::<(
+            String,
+            QuestionAnswers,
+        )>::new()));
+        let pending_answers_notify = std::sync::Arc::new(tokio::sync::Notify::new());
         let mut step = 0usize;
+        let _ = approve;
+        let _ = ask_question;
 
-        let first_message = match input_rx.recv().await {
-            Some(RunnerInput::Message(message)) => Some(message),
-            Some(RunnerInput::Cancel) => {
-                let _ = cancel_tx.send(true);
-                None
+        let mut approve_from_input = |_request: ApprovalRequest| {
+            let pending_approvals = pending_approvals.clone();
+            let pending_approvals_notify = pending_approvals_notify.clone();
+            async move {
+                loop {
+                    if let Ok(mut queued) = pending_approvals.lock()
+                        && let Some((_call_id, choice)) = queued.pop_front()
+                    {
+                        return Ok(choice);
+                    }
+                    pending_approvals_notify.notified().await;
+                }
             }
-            None => None,
         };
+
+        let mut question_from_input = |questions: Vec<QuestionPrompt>| {
+            let pending_answers = pending_answers.clone();
+            let pending_answers_notify = pending_answers_notify.clone();
+            async move {
+                let _ = questions;
+                loop {
+                    if let Ok(mut queued) = pending_answers.lock()
+                        && let Some((_call_id, answers)) = queued.pop_front()
+                    {
+                        return Ok(answers);
+                    }
+                    pending_answers_notify.notified().await;
+                }
+            }
+        };
+
+        let mut first_message = None;
+        while first_message.is_none() {
+            match input_rx.recv().await {
+                Some(RunnerInput::Message(message)) => first_message = Some(message),
+                Some(RunnerInput::ApprovalDecision { call_id, choice }) => {
+                    if let Ok(mut queued) = pending_approvals.lock() {
+                        queued.push_back((call_id, choice));
+                        pending_approvals_notify.notify_one();
+                    }
+                }
+                Some(RunnerInput::QuestionAnswered { call_id, answers }) => {
+                    if let Ok(mut queued) = pending_answers.lock() {
+                        queued.push_back((call_id, answers));
+                        pending_answers_notify.notify_one();
+                    }
+                }
+                Some(RunnerInput::Cancel) => {
+                    let _ = cancel_tx.send(true);
+                    break;
+                }
+                None => break,
+            }
+        }
 
         let Some(first_message) = first_message else {
             if *cancel_rx.borrow() {
@@ -822,8 +884,8 @@ where
             let turn_future = self.execute_turn_with_output_sink(
                 messages,
                 &mut step,
-                approve,
-                ask_question,
+                &mut approve_from_input,
+                &mut question_from_input,
                 emit_output,
                 &mut cancel,
             );
@@ -838,6 +900,18 @@ where
                         match maybe_input {
                             Some(RunnerInput::Message(message)) => {
                                 pending_messages.push_back(message);
+                            }
+                            Some(RunnerInput::ApprovalDecision { call_id, choice }) => {
+                                if let Ok(mut queued) = pending_approvals.lock() {
+                                    queued.push_back((call_id, choice));
+                                    pending_approvals_notify.notify_one();
+                                }
+                            }
+                            Some(RunnerInput::QuestionAnswered { call_id, answers }) => {
+                                if let Ok(mut queued) = pending_answers.lock() {
+                                    queued.push_back((call_id, answers));
+                                    pending_answers_notify.notify_one();
+                                }
                             }
                             Some(RunnerInput::Cancel) => {
                                 let _ = cancel_tx.send(true);
@@ -877,11 +951,23 @@ where
 
         let (turn_result, thinking_content, cancelled) = {
             let mut thinking_content = String::new();
-            let (core_tx, mut core_rx) = mpsc::unbounded_channel::<CoreOutput>();
+            let (core_tx, mut core_rx) = mpsc::channel::<CoreOutput>(256);
+            let overflow_outputs =
+                std::sync::Arc::new(std::sync::Mutex::new(VecDeque::<CoreOutput>::new()));
             let request_messages = messages.clone();
-            let complete_turn = self.complete_turn(&request_messages, |output| {
-                let _ = core_tx.send(output);
-            });
+            let overflow_for_emit = overflow_outputs.clone();
+            let complete_turn =
+                self.complete_turn(&request_messages, |output| match core_tx.try_send(output) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(output)) => {
+                        if !is_coalescible_core_output(&output)
+                            && let Ok(mut overflow) = overflow_for_emit.lock()
+                        {
+                            overflow.push_back(output);
+                        }
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {}
+                });
             tokio::pin!(complete_turn);
 
             let mut apply_core_output = |output: CoreOutput| match output {
@@ -903,6 +989,13 @@ where
 
             let mut cancelled = false;
             let turn_result = loop {
+                if let Ok(mut overflow) = overflow_outputs.lock()
+                    && let Some(output) = overflow.pop_front()
+                {
+                    apply_core_output(output);
+                    continue;
+                }
+
                 tokio::select! {
                     _ = cancel() => {
                         cancelled = true;
@@ -921,11 +1014,21 @@ where
                                 while let Ok(output) = core_rx.try_recv() {
                                     apply_core_output(output);
                                 }
+                                if let Ok(mut overflow) = overflow_outputs.lock() {
+                                    while let Some(output) = overflow.pop_front() {
+                                        apply_core_output(output);
+                                    }
+                                }
                                 return Err(err);
                             }
                         };
                         while let Ok(output) = core_rx.try_recv() {
                             apply_core_output(output);
+                        }
+                        if let Ok(mut overflow) = overflow_outputs.lock() {
+                            while let Some(output) = overflow.pop_front() {
+                                apply_core_output(output);
+                            }
                         }
                         break Some(turn);
                     }
@@ -1223,6 +1326,13 @@ async fn wait_for_cancel(mut cancel_rx: watch::Receiver<bool>) {
         return;
     }
     let _ = cancel_rx.changed().await;
+}
+
+fn is_coalescible_core_output(output: &CoreOutput) -> bool {
+    matches!(
+        output,
+        CoreOutput::ThinkingDelta(_) | CoreOutput::AssistantDelta(_)
+    )
 }
 
 #[cfg(test)]

@@ -8,9 +8,9 @@ The architecture implements an Event-Driven Actor Model via a two-layer design. 
 ### Layer 1: Agent Core (The Pure State Machine)
 The inner layer is responsible *solely* for managing the LLM interaction loop and conversation state.
 
-- **Responsibilities:** 
+- **Responsibilities:**
   - Streams tokens and tool calls from the LLM Provider.
-  - Maintains the conversational context (`Vec<Message>`).
+  - Tracks turn-level provider state (pending tool `call_id`s, ephemeral state).
   - Emits pure events representing intent (e.g., "The LLM wants to execute tool X").
   - Accepts external ephemeral text to inject into the LLM context window.
 - **Knowledge:** It has zero knowledge of the OS, the filesystem, UI/CLI, persistence, or typed application state (like TODOs). To the Core, all tools are identical black boxes. It only knows about tool schemas provided to it during initialization.
@@ -20,6 +20,7 @@ The inner layer is responsible *solely* for managing the LLM interaction loop an
 The outer layer wraps the Core and manages side-effects, typed state, concurrency, and security policies.
 
 - **Responsibilities:**
+  - Owns the canonical conversation transcript (`Vec<Message>`) and `RunnerState`.
   - Owns the strongly-typed `RunnerState` (e.g., TODO items, active subagents).
   - Evaluates tool calls against the `ApprovalPolicy`.
   - Manages concurrent, non-blocking tool execution (`FuturesUnordered`).
@@ -94,6 +95,7 @@ Channels between Core/Runner/UI are bounded.
 
 - Delta-style streams (thinking/assistant deltas) use bounded queues with coalescing under pressure.
 - Control-plane events (tool start/end, approvals, questions, cancel) are never dropped.
+- Runner must preserve control-plane events under pressure; if necessary, queue them out-of-band while continuing to coalesce deltas.
 - A small bound is acceptable for control channels; delta channels should use a higher bound to avoid excessive token loss.
 
 ### State Projection
@@ -108,7 +110,6 @@ The Runner acts as the translator between the typed system state and the LLM's t
 ### Core Channels
 ```rust
 pub enum CoreInput {
-    Message(Message),
     ToolResult { call_id: String, name: String, result: ToolResult },
     SetEphemeralState(Option<Message>),
     Cancel,

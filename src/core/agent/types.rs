@@ -1,4 +1,6 @@
-use crate::core::{ApprovalChoice, ApprovalRequest, Message, QuestionPrompt, TodoItem, ToolCall};
+use crate::core::{
+    ApprovalChoice, ApprovalRequest, Message, QuestionAnswers, QuestionPrompt, TodoItem, ToolCall,
+};
 use crate::tool::ToolResult;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -89,6 +91,14 @@ pub enum CoreOutput {
 #[derive(Debug, Clone)]
 pub enum RunnerInput {
     Message(Message),
+    ApprovalDecision {
+        call_id: String,
+        choice: ApprovalChoice,
+    },
+    QuestionAnswered {
+        call_id: String,
+        answers: QuestionAnswers,
+    },
     Cancel,
 }
 
