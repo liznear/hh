@@ -1,5 +1,5 @@
 use crate::core::ApprovalChoice;
-use crate::core::agent::AgentEvents;
+use crate::core::RunnerOutputObserver;
 use serde_json::Value;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
@@ -69,7 +69,7 @@ impl Default for LiveRender {
     }
 }
 
-impl AgentEvents for LiveRender {
+impl RunnerOutputObserver for LiveRender {
     fn on_thinking(&self, text: &str) {
         let Ok(mut state) = self.inner.lock() else {
             return;
@@ -156,6 +156,58 @@ impl AgentEvents for LiveRender {
             state.thinking_line_open = false;
             state.assistant_line_open = false;
         }
+    }
+
+    fn on_error(&self, message: &str) {
+        let Ok(mut state) = self.inner.lock() else {
+            return;
+        };
+        if state.thinking_line_open || state.assistant_line_open {
+            println!();
+            state.thinking_line_open = false;
+            state.assistant_line_open = false;
+        }
+        drop(state);
+        print_error(message);
+    }
+
+    fn on_cancelled(&self) {
+        let Ok(mut state) = self.inner.lock() else {
+            return;
+        };
+        if state.thinking_line_open || state.assistant_line_open {
+            println!();
+            state.thinking_line_open = false;
+            state.assistant_line_open = false;
+        }
+        println!("assistant> cancelled");
+    }
+
+    fn on_approval_required(&self, call_id: &str, request: &crate::core::ApprovalRequest) {
+        let Ok(mut state) = self.inner.lock() else {
+            return;
+        };
+        if state.assistant_line_open || state.thinking_line_open {
+            println!();
+            state.assistant_line_open = false;
+            state.thinking_line_open = false;
+        }
+        println!(
+            "approval> {} ({call_id})",
+            truncate_text(&request.body, 220)
+        );
+    }
+
+    fn on_question_required(&self, call_id: &str, prompts: &[crate::core::QuestionPrompt]) {
+        let Ok(mut state) = self.inner.lock() else {
+            return;
+        };
+        if state.assistant_line_open || state.thinking_line_open {
+            println!();
+            state.assistant_line_open = false;
+            state.thinking_line_open = false;
+        }
+        println!("question> {} prompt(s) required ({call_id})", prompts.len());
     }
 }
 

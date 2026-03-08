@@ -1,4 +1,6 @@
-pub mod state;
+pub mod core;
+pub mod output_channel;
+pub mod runner;
 pub mod subagent_manager;
 pub mod types;
 
@@ -7,27 +9,33 @@ pub use types::{
     StatePatch,
 };
 
-pub use super::{AgentEvents, NoopEvents};
-
+use self::core::AgentCore as EngineCore;
+use self::runner::{AgentRunner, is_cancellation_error};
 use crate::core::{
-    ApprovalChoice, ApprovalDecision, ApprovalPolicy, ApprovalRequest, Message, Provider,
-    ProviderRequest, ProviderStreamEvent, QuestionAnswers, QuestionPrompt, Role, SessionReader,
-    SessionSink, ToolCall, ToolExecutor,
+    ApprovalChoice, ApprovalPolicy, ApprovalRequest, Message, Provider, QuestionAnswers,
+    QuestionPrompt, SessionReader, SessionSink, ToolExecutor,
 };
-use crate::permission::rules::{PermissionRule, RuleContext};
-use crate::safety::sanitize_tool_output;
 use crate::session::{SessionEvent, event_id};
-use crate::tool::{ToolExecution, ToolResult};
-use futures::stream::{FuturesUnordered, StreamExt};
-use serde::Serialize;
-use state::AgentState;
 use std::future::Future;
-use std::path::Path;
 
-pub struct AgentLoop<P, E, T, A, S>
+pub trait RunnerOutputObserver: Send + Sync {
+    fn on_thinking(&self, _text: &str) {}
+    fn on_tool_start(&self, _name: &str, _args: &serde_json::Value) {}
+    fn on_tool_end(&self, _name: &str, _result: &crate::tool::ToolResult) {}
+    fn on_approval_required(&self, _call_id: &str, _request: &crate::core::ApprovalRequest) {}
+    fn on_question_required(&self, _call_id: &str, _prompts: &[crate::core::QuestionPrompt]) {}
+    fn on_cancelled(&self) {}
+    fn on_runner_state_updated(&self, _state: &crate::core::agent::RunnerState) {}
+    fn on_assistant_delta(&self, _delta: &str) {}
+    fn on_error(&self, _message: &str) {}
+    fn on_assistant_done(&self) {}
+}
+
+impl RunnerOutputObserver for () {}
+
+pub struct AgentCore<P, T, A, S>
 where
     P: Provider,
-    E: AgentEvents,
     T: ToolExecutor,
     A: ApprovalPolicy,
     S: SessionSink + SessionReader,
@@ -39,13 +47,11 @@ where
     pub model: String,
     pub system_prompt: String,
     pub session: S,
-    pub events: E,
 }
 
-impl<P, E, T, A, S> AgentLoop<P, E, T, A, S>
+impl<P, T, A, S> AgentCore<P, T, A, S>
 where
     P: Provider,
-    E: AgentEvents,
     T: ToolExecutor,
     A: ApprovalPolicy,
     S: SessionSink + SessionReader,
@@ -55,711 +61,249 @@ where
         AP: FnMut(ApprovalRequest) -> APFut,
         APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
     {
-        self.run_with_question_tool(prompt, &mut approve, |_questions| async {
+        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
             anyhow::bail!("question tool is unavailable in this mode; provide a question handler")
-        })
+        };
+        let initial_runner_state = self
+            .session
+            .load_runner_state_snapshot()?
+            .unwrap_or_default();
+        let mut last_emitted_todo_items = initial_runner_state.todo_items;
+        self.run_with_runner_output_sink_cancellable(
+            prompt,
+            &mut approve,
+            &mut ask_question,
+            &mut || std::future::pending::<()>(),
+            &mut |output| {
+                apply_runner_output_to_observer(
+                    &(),
+                    &self.session,
+                    output,
+                    &mut last_emitted_todo_items,
+                )
+            },
+            &mut Vec::new,
+        )
         .await
     }
 
-    pub async fn run_with_question_tool<AP, APFut, Q, QFut>(
+    pub async fn run_with_runner_output_sink_cancellable<AP, APFut, Q, QFut, C, CFut, O, D>(
         &self,
         prompt: Message,
-        mut approve: AP,
-        mut ask_question: Q,
+        approve: &mut AP,
+        ask_question: &mut Q,
+        cancel: &mut C,
+        emit_output: &mut O,
+        drain_pending_messages: &mut D,
     ) -> anyhow::Result<String>
     where
         AP: FnMut(ApprovalRequest) -> APFut,
         APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
         Q: FnMut(Vec<QuestionPrompt>) -> QFut,
         QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
+        C: FnMut() -> CFut,
+        CFut: Future<Output = ()> + Send,
+        O: FnMut(RunnerOutput) -> anyhow::Result<()> + Send,
+        D: FnMut() -> Vec<Message>,
     {
         let replayed_events = self.session.replay_events()?;
-        let mut state = AgentState {
-            messages: self.session.replay_messages()?,
-            todo_items: Vec::new(),
-            step: 0,
-        };
-        let mut session_allowed_actions = std::collections::HashSet::<String>::new();
-        let mut session_allowed_bash_rules = std::collections::HashSet::<String>::new();
-
-        restore_session_approvals(
-            &replayed_events,
+        let loaded_snapshot = self.session.load_runner_state_snapshot()?;
+        let runner_snapshot = loaded_snapshot.clone().unwrap_or_default();
+        let mut messages = self.session.replay_messages()?;
+        let core = EngineCore::new(
+            &self.provider,
+            self.model.clone(),
+            self.system_prompt.clone(),
+            self.tools.schemas(),
+            self.max_steps,
+        );
+        let mut runner = AgentRunner::new(
+            core,
             &self.tools,
-            &mut session_allowed_actions,
-            &mut session_allowed_bash_rules,
-        )?;
+            &self.approvals,
+            RunnerState {
+                todo_items: runner_snapshot.todo_items.clone(),
+                context_tokens: runner_snapshot.context_tokens,
+            },
+        );
+        runner.restore_session_approvals(&replayed_events)?;
+        runner
+            .hydrate_state_from_replayed_tool_results(&replayed_events, loaded_snapshot.is_some());
 
-        let mut tool_name_by_call_id = std::collections::HashMap::new();
-        for event in &replayed_events {
-            match event {
-                SessionEvent::ToolCall { call } => {
-                    tool_name_by_call_id.insert(call.id.clone(), call.name.clone());
-                }
-                SessionEvent::ToolResult { id, result, .. } => {
-                    if let (Some(name), Some(tool_result)) =
-                        (tool_name_by_call_id.get(id), result.as_ref())
-                    {
-                        state.apply_tool_result(name, tool_result);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        if state
-            .messages
-            .iter()
-            .all(|message| message.role != Role::System)
-            && !self.system_prompt.trim().is_empty()
-        {
-            self.append_message(
-                &mut state,
-                Message {
-                    role: Role::System,
-                    content: self.system_prompt.clone(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                },
+        if runner.core.should_inject_system_prompt(&messages) {
+            push_message_and_record(
+                &self.session,
+                &mut messages,
+                runner.core.system_prompt_message(),
             )?;
         }
 
-        self.append_message(&mut state, prompt)?;
+        let (input_tx, input_rx) = tokio::sync::mpsc::channel(64);
+        input_tx
+            .try_send(RunnerInput::Message(prompt))
+            .map_err(|_| anyhow::anyhow!("failed to enqueue initial runner input"))?;
 
-        loop {
-            if self.max_steps > 0 && state.step >= self.max_steps {
-                anyhow::bail!("Reached max steps without final answer")
-            }
+        struct ObserverState {
+            error: Option<anyhow::Error>,
+        }
+        let observer_state = std::sync::Mutex::new(ObserverState { error: None });
 
-            let queued_user_messages = self.events.drain_queued_user_messages();
-            for queued in &queued_user_messages {
-                self.append_message(&mut state, queued.message.clone())?;
-            }
-
-            let mut request_messages = state.messages.clone();
-            if let Some(state_message) = state.state_for_llm() {
-                request_messages.push(state_message);
-            }
-
-            let req = ProviderRequest {
-                model: self.model.clone(),
-                messages: request_messages,
-                tools: self.tools.schemas(),
+        let mut emit_wrapped = |output| {
+            let Ok(mut observer) = observer_state.lock() else {
+                return;
             };
 
-            if !queued_user_messages.is_empty() {
-                self.events
-                    .on_queued_user_messages_consumed(&queued_user_messages);
-            }
-
-            let mut assistant_content = String::new();
-            let mut thinking_content = String::new();
-            let response = self
-                .provider
-                .complete_stream(req, |event| match event {
-                    ProviderStreamEvent::AssistantDelta(delta) => {
-                        assistant_content.push_str(&delta);
-                        self.events.on_assistant_delta(&delta);
-                    }
-                    ProviderStreamEvent::ThinkingDelta(delta) => {
-                        thinking_content.push_str(&delta);
-                        self.events.on_thinking(&delta);
-                    }
-                })
-                .await?;
-
-            if let Some(tokens) = response.context_tokens {
-                self.events.on_context_usage(tokens);
-            }
-
-            if assistant_content.is_empty() {
-                assistant_content = response.assistant_message.content.clone();
-                if !assistant_content.is_empty() {
-                    self.events.on_assistant_delta(&assistant_content);
-                }
-            }
-
-            if thinking_content.is_empty()
-                && let Some(t) = &response.thinking
+            if observer.error.is_none()
+                && let Err(err) = emit_output(output)
             {
-                thinking_content = t.clone();
+                observer.error = Some(err);
             }
-
-            if !thinking_content.is_empty() {
-                self.session.append(&SessionEvent::Thinking {
-                    id: event_id(),
-                    content: thinking_content,
-                })?;
-            }
-
-            let assistant = Message {
-                role: Role::Assistant,
-                content: assistant_content.clone(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: response.tool_calls.clone(),
-            };
-
-            self.append_message(&mut state, assistant.clone())?;
-
-            if response.done {
-                self.events.on_assistant_done();
-                return Ok(assistant_content);
-            }
-
-            let mut pending_non_blocking = FuturesUnordered::new();
-
-            for call in response.tool_calls {
-                self.session
-                    .append(&SessionEvent::ToolCall { call: call.clone() })?;
-
-                match self
-                    .approvals
-                    .decision_for_tool_call(&call.name, &call.arguments)
-                {
-                    ApprovalDecision::Deny => {
-                        let output = format!("tool denied: {}", call.name);
-                        self.record_tool_error(&call, output, &mut state)?;
-                        continue;
-                    }
-                    ApprovalDecision::Ask => {
-                        let request = build_tool_execution_approval_request(&call);
-                        let session_key = session_approval_key(&call.name, &request.action);
-                        let matched_bash_session_rule = call.name == "bash"
-                            && session_allowed_bash_rules
-                                .iter()
-                                .any(|rule| bash_rule_matches_call(rule, &call.arguments));
-
-                        if !session_allowed_actions.contains(&session_key)
-                            && !matched_bash_session_rule
-                        {
-                            self.events.on_tool_start(&call.name, &call.arguments);
-                            let choice = approve(request.clone()).await?;
-
-                            if matches!(
-                                choice,
-                                ApprovalChoice::AllowSession | ApprovalChoice::AllowAlways
-                            ) {
-                                session_allowed_actions.insert(session_key);
-                            }
-                            if choice == ApprovalChoice::AllowAlways
-                                && let Some(rule) =
-                                    bash_permission_rule_from_action(&request.action)
-                            {
-                                session_allowed_bash_rules.insert(rule.to_string());
-                            }
-
-                            let approved = choice != ApprovalChoice::Deny;
-                            self.session.append(&SessionEvent::Approval {
-                                id: event_id(),
-                                tool_name: call.name.clone(),
-                                approved,
-                                action: Some(request.action.clone()),
-                                choice: Some(choice),
-                            })?;
-                            if !approved {
-                                self.record_tool_error(
-                                    &call,
-                                    format!("tool approval denied: {}", call.name),
-                                    &mut state,
-                                )?;
-                                continue;
-                            }
-                        }
-                    }
-                    ApprovalDecision::Allow => {}
-                }
-
-                if call.name == "question" {
-                    self.events.on_tool_start(&call.name, &call.arguments);
-                    let result = self
-                        .execute_question_tool_call(&call, &mut ask_question)
-                        .await;
-                    self.events.on_tool_end(&call.name, &result);
-                    self.record_tool_result(&call, result, &mut state)?;
-                    continue;
-                }
-
-                if self.tools.is_non_blocking(&call.name) {
-                    let event_args =
-                        decorate_tool_start_args(&call.id, &call.name, &call.arguments);
-                    let execution_args = if call.name == "task" {
-                        event_args.clone()
-                    } else {
-                        call.arguments.clone()
-                    };
-                    self.events.on_tool_start(&call.name, &event_args);
-                    pending_non_blocking.push(async {
-                        let mut result = self.tools.execute(&call.name, execution_args).await;
-                        result.result.output = sanitize_tool_output(&result.result.output);
-                        (call, result)
-                    });
-                    continue;
-                }
-
-                self.execute_tool_call(&call, &mut state, &mut approve)
-                    .await?;
-            }
-
-            while let Some((call, result)) = pending_non_blocking.next().await {
-                self.events.on_tool_end(&call.name, &result.result);
-                self.record_tool_execution_result(&call, result.result, result.patch, &mut state)?;
-            }
-
-            state.step += 1;
-        }
-    }
-
-    async fn execute_question_tool_call<Q, QFut>(
-        &self,
-        call: &ToolCall,
-        ask_question: &mut Q,
-    ) -> ToolResult
-    where
-        Q: FnMut(Vec<QuestionPrompt>) -> QFut,
-        QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
-    {
-        let parsed = match crate::tool::question::parse_question_args(call.arguments.clone()) {
-            Ok(parsed) => parsed,
-            Err(err) => return ToolResult::err_text("invalid_question_args", err.to_string()),
         };
 
-        match ask_question(parsed.questions.clone()).await {
-            Ok(answers) => crate::tool::question::question_result(&parsed.questions, answers),
-            Err(err) => ToolResult::err_text("question_dismissed", err.to_string()),
-        }
-    }
+        let run_future = runner.run_input_loop(
+            &mut messages,
+            input_rx,
+            approve,
+            ask_question,
+            &mut emit_wrapped,
+            drain_pending_messages,
+        );
+        tokio::pin!(run_future);
 
-    async fn execute_tool_call<AP, APFut>(
-        &self,
-        call: &ToolCall,
-        state: &mut AgentState,
-        approve: &mut AP,
-    ) -> anyhow::Result<()>
-    where
-        AP: FnMut(ApprovalRequest) -> APFut,
-        APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
-    {
-        loop {
-            let event_args = decorate_tool_start_args(&call.id, &call.name, &call.arguments);
-            let execution_args = if call.name == "task" {
-                event_args.clone()
-            } else {
-                call.arguments.clone()
-            };
-            self.events.on_tool_start(&call.name, &event_args);
-            let execution = if call.name == "todo_read" {
-                ToolExecution::from_result(todo_snapshot_result(&state.todo_items))
-            } else {
-                self.tools.execute(&call.name, execution_args).await
-            };
-
-            let ToolExecution { mut result, patch } = execution;
-
-            if let Some(request) = parse_approval_request(&result) {
-                let choice = approve(request.clone()).await?;
-                let approved = choice != ApprovalChoice::Deny;
-                self.session.append(&SessionEvent::Approval {
-                    id: event_id(),
-                    tool_name: call.name.clone(),
-                    approved,
-                    action: Some(request.action.clone()),
-                    choice: Some(choice),
-                })?;
-
-                if !approved {
-                    let denied = ToolResult::err_text("denied", "approval denied by user");
-                    self.events.on_tool_end(&call.name, &denied);
-                    return self.record_tool_result(call, denied, state);
-                }
-
-                let applied = self
-                    .tools
-                    .apply_approval_decision(&request.action, choice)?;
-                if !applied {
-                    result = ToolResult::err_text(
-                        "approval_error",
-                        "approval decision could not be applied",
-                    );
-                    result.output = sanitize_tool_output(&result.output);
-                    self.events.on_tool_end(&call.name, &result);
-                    return self.record_tool_result(call, result, state);
-                }
-
-                continue;
+        let run_result = tokio::select! {
+            result = &mut run_future => result,
+            _ = cancel() => {
+                let _ = input_tx.send(RunnerInput::Cancel).await;
+                run_future.as_mut().await
             }
+        };
 
-            result.output = sanitize_tool_output(&result.output);
-            self.events.on_tool_end(&call.name, &result);
-            return self.record_tool_execution_result(call, result, patch, state);
+        let mut observer = observer_state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("output observer state poisoned"))?;
+        let observer_error = observer.error.take();
+        drop(observer);
+
+        if let Some(err) = observer_error {
+            return Err(err);
         }
-    }
 
-    fn record_tool_error(
-        &self,
-        call: &ToolCall,
-        output: String,
-        state: &mut AgentState,
-    ) -> anyhow::Result<()> {
-        self.events.on_tool_start(&call.name, &call.arguments);
-        let result = ToolResult::err_text("denied", sanitize_tool_output(&output));
-        self.events.on_tool_end(&call.name, &result);
-        self.record_tool_result(call, result, state)
-    }
-
-    fn record_tool_result(
-        &self,
-        call: &ToolCall,
-        result: ToolResult,
-        state: &mut AgentState,
-    ) -> anyhow::Result<()> {
-        self.record_tool_execution_result(call, result, StatePatch::none(), state)
-    }
-
-    fn record_tool_execution_result(
-        &self,
-        call: &ToolCall,
-        result: ToolResult,
-        patch: StatePatch,
-        state: &mut AgentState,
-    ) -> anyhow::Result<()> {
-        let call_id = call.id.clone();
-        state.push(Message {
-            role: Role::Tool,
-            content: result.output.clone(),
-            attachments: Vec::new(),
-            tool_call_id: Some(call_id.clone()),
-            tool_calls: Vec::new(),
-        });
-        let mut changed = state.apply_tool_result(&call.name, &result);
-        if apply_state_patch(state, patch) {
-            changed = true;
+        match run_result {
+            Ok(Some(final_answer)) => Ok(final_answer),
+            Ok(None) => anyhow::bail!("runner input loop ended without final answer"),
+            Err(err) if is_cancellation_error(&err) => Err(err),
+            Err(err) => Err(err),
         }
-        if changed {
-            self.events.on_todo_items_changed(&state.todo_items);
-        }
-        self.session.append(&SessionEvent::ToolResult {
-            id: call_id,
-            is_error: result.is_error,
-            output: result.output.clone(),
-            result: Some(result),
-        })?;
-        Ok(())
-    }
-
-    fn append_message(&self, state: &mut AgentState, message: Message) -> anyhow::Result<()> {
-        state.push(message.clone());
-        self.session.append(&SessionEvent::Message {
-            id: event_id(),
-            message,
-        })
     }
 }
 
-fn apply_state_patch(state: &mut AgentState, patch: StatePatch) -> bool {
-    let mut changed = false;
-    for op in patch.ops {
-        match op {
-            StateOp::SetTodoItems { items } => {
-                if state.todo_items != items {
-                    state.todo_items = items;
-                    changed = true;
-                }
-            }
-            StateOp::SetContextTokens { .. } => {}
-        }
-    }
-    changed
-}
-
-fn decorate_tool_start_args(
-    call_id: &str,
-    name: &str,
-    args: &serde_json::Value,
-) -> serde_json::Value {
-    if name != "task" {
-        return args.clone();
-    }
-    let mut obj = args.as_object().cloned().unwrap_or_default();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    obj.insert("__started_at".to_string(), serde_json::Value::from(now));
-    obj.insert(
-        "__call_id".to_string(),
-        serde_json::Value::from(call_id.to_string()),
-    );
-    serde_json::Value::Object(obj)
-}
-
-fn build_tool_execution_approval_request(call: &ToolCall) -> ApprovalRequest {
-    let permission_rule = suggested_permission_rule(call);
-    let approval_kind = if call.name == "bash" {
-        "bash"
-    } else if is_file_write_tool(&call.name) {
-        "file_write"
-    } else {
-        "generic"
-    };
-
-    let stated_purpose = call
-        .arguments
-        .get("description")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.trim_end_matches('.'));
-
-    let body = match call.name.as_str() {
-        "bash" => {
-            let command = call
-                .arguments
-                .get("command")
-                .and_then(|value| value.as_str())
-                .unwrap_or("<unknown command>");
-            if let Some(purpose) = stated_purpose {
-                format!("Allow `{command}` to {purpose}")
-            } else {
-                format!("Allow `{command}` for the requested task")
-            }
-        }
-        "write" | "edit" => {
-            let path = call
-                .arguments
-                .get("path")
-                .and_then(|value| value.as_str())
-                .unwrap_or("<unknown path>");
-            if let Some(purpose) = stated_purpose {
-                format!("Allow writing `{path}` to {purpose}")
-            } else {
-                format!("Allow writing `{path}`")
-            }
-        }
-        _ => {
-            if let Some(purpose) = stated_purpose {
-                format!("Allow tool `{}` to {purpose}", call.name)
-            } else {
-                format!("Allow tool `{}` with current arguments", call.name)
-            }
-        }
-    };
-
-    ApprovalRequest {
-        title: "Tool Execution Approval".to_string(),
-        body,
-        action: serde_json::json!({
-            "operation": "tool_execution",
-            "tool_name": call.name,
-            "approval_kind": approval_kind,
-            "permission_rule": permission_rule,
-        }),
-    }
-}
-
-fn is_file_write_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "write" | "edit")
-}
-
-fn suggested_permission_rule(call: &ToolCall) -> Option<String> {
-    match call.name.as_str() {
-        "bash" => {
-            let command = call.arguments.get("command")?.as_str()?.trim();
-            if command.is_empty() {
-                return None;
-            }
-            Some(format!("Bash({command}*)"))
-        }
-        "write" | "edit" => {
-            let path = call.arguments.get("path")?.as_str()?.trim();
-            if path.is_empty() {
-                return None;
-            }
-            Some(format!("Edit({})", normalize_path_pattern(path)))
-        }
-        _ => None,
-    }
-}
-
-fn normalize_path_pattern(path: &str) -> String {
-    let path = path.replace('\\', "/");
-    if std::path::Path::new(&path).is_absolute() {
-        return format!("//{}", path.trim_start_matches('/'));
-    }
-    if path.starts_with("./") {
-        return path;
-    }
-    if path.starts_with('/') {
-        return path;
-    }
-    format!("./{path}")
-}
-
-fn restore_session_approvals<T: ToolExecutor>(
-    replayed_events: &[SessionEvent],
-    tools: &T,
-    session_allowed_actions: &mut std::collections::HashSet<String>,
-    session_allowed_bash_rules: &mut std::collections::HashSet<String>,
+fn push_message_and_record<S: SessionSink>(
+    session: &S,
+    messages: &mut Vec<Message>,
+    message: Message,
 ) -> anyhow::Result<()> {
-    for event in replayed_events {
-        let SessionEvent::Approval {
-            approved: true,
-            action: Some(action),
-            choice: Some(choice),
-            ..
-        } = event
-        else {
-            continue;
-        };
+    messages.push(message.clone());
+    session.append(&SessionEvent::Message {
+        id: event_id(),
+        message,
+    })
+}
 
-        if !matches!(
-            choice,
-            ApprovalChoice::AllowSession | ApprovalChoice::AllowAlways
-        ) {
-            continue;
+pub fn apply_runner_output_to_observer<E: RunnerOutputObserver>(
+    events: &E,
+    session: &impl SessionSink,
+    output: RunnerOutput,
+    last_emitted_todo_items: &mut Vec<crate::core::TodoItem>,
+) -> anyhow::Result<()> {
+    match output {
+        RunnerOutput::ThinkingDelta(delta) => events.on_thinking(&delta),
+        RunnerOutput::ThinkingRecorded(content) => {
+            session.append(&SessionEvent::Thinking {
+                id: event_id(),
+                content,
+            })?;
         }
-
-        if action
-            .get("operation")
-            .and_then(|value| value.as_str())
-            .is_some_and(|value| value == "tool_execution")
-        {
-            if let Some(tool_name) = action.get("tool_name").and_then(|value| value.as_str()) {
-                session_allowed_actions.insert(session_approval_key(tool_name, action));
-                if *choice == ApprovalChoice::AllowAlways
-                    && let Some(rule) = bash_permission_rule_from_action(action)
-                {
-                    session_allowed_bash_rules.insert(rule.to_string());
-                }
+        RunnerOutput::AssistantDelta(delta) => events.on_assistant_delta(&delta),
+        RunnerOutput::ToolCallRecorded(call) => {
+            session.append(&SessionEvent::ToolCall { call })?;
+        }
+        RunnerOutput::ToolStart { name, args, .. } => events.on_tool_start(&name, &args),
+        RunnerOutput::ToolEnd {
+            call_id,
+            name,
+            result,
+        } => {
+            session.append(&SessionEvent::ToolResult {
+                id: call_id,
+                is_error: result.is_error,
+                output: result.output.clone(),
+                result: Some(result.clone()),
+            })?;
+            events.on_tool_end(&name, &result)
+        }
+        RunnerOutput::SnapshotUpdated(snapshot) => {
+            session.save_runner_state_snapshot(&snapshot)?;
+        }
+        RunnerOutput::StateUpdated(updated) => {
+            events.on_runner_state_updated(&updated);
+            if updated.todo_items != *last_emitted_todo_items {
+                *last_emitted_todo_items = updated.todo_items;
             }
-            continue;
         }
-
-        let _ = tools.apply_approval_decision(action, ApprovalChoice::AllowSession)?;
+        RunnerOutput::TurnComplete => events.on_assistant_done(),
+        RunnerOutput::Cancelled => events.on_cancelled(),
+        RunnerOutput::ApprovalRequired { call_id, request } => {
+            events.on_approval_required(&call_id, &request)
+        }
+        RunnerOutput::ApprovalRecorded {
+            tool_name,
+            approved,
+            action,
+            choice,
+        } => {
+            session.append(&SessionEvent::Approval {
+                id: event_id(),
+                tool_name,
+                approved,
+                action,
+                choice,
+            })?;
+        }
+        RunnerOutput::QuestionRequired { call_id, prompts } => {
+            events.on_question_required(&call_id, &prompts)
+        }
+        RunnerOutput::MessageAdded(message) => {
+            session.append(&SessionEvent::Message {
+                id: event_id(),
+                message,
+            })?;
+        }
+        RunnerOutput::Error(_) => {}
     }
 
     Ok(())
-}
-
-fn session_approval_key(tool_name: &str, action: &serde_json::Value) -> String {
-    let approval_kind = action
-        .get("approval_kind")
-        .and_then(|value| value.as_str())
-        .unwrap_or_default();
-
-    if approval_kind == "bash"
-        && let Some(rule) = action
-            .get("permission_rule")
-            .and_then(|value| value.as_str())
-            .filter(|rule| !rule.trim().is_empty())
-    {
-        return format!("rule:{rule}");
-    }
-
-    format!("tool:{tool_name}")
-}
-
-fn bash_permission_rule_from_action(action: &serde_json::Value) -> Option<&str> {
-    let approval_kind = action
-        .get("approval_kind")
-        .and_then(|value| value.as_str())?;
-    if approval_kind != "bash" {
-        return None;
-    }
-
-    action
-        .get("permission_rule")
-        .and_then(|value| value.as_str())
-        .filter(|rule| !rule.trim().is_empty())
-}
-
-fn bash_rule_matches_call(rule: &str, args: &serde_json::Value) -> bool {
-    let Some(parsed_rule) = PermissionRule::parse(rule) else {
-        return false;
-    };
-
-    parsed_rule.matches(&RuleContext {
-        tool_name: "bash",
-        capability: "bash",
-        args,
-        workspace_root: Path::new("."),
-    })
-}
-
-fn parse_approval_request(result: &ToolResult) -> Option<ApprovalRequest> {
-    if result.summary != "approval_required" {
-        return None;
-    }
-
-    let payload = result.payload.as_object()?;
-    let title = payload.get("title")?.as_str()?.to_string();
-    let body = payload.get("body")?.as_str()?.to_string();
-    let action = payload.get("action")?.clone();
-
-    Some(ApprovalRequest {
-        title,
-        body,
-        action,
-    })
-}
-
-#[derive(Debug, Serialize)]
-struct TodoSnapshotCounts {
-    total: usize,
-    pending: usize,
-    in_progress: usize,
-    completed: usize,
-    cancelled: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct TodoSnapshotOutput {
-    todos: Vec<crate::core::TodoItem>,
-    counts: TodoSnapshotCounts,
-}
-
-fn todo_snapshot_result(items: &[crate::core::TodoItem]) -> ToolResult {
-    let mut counts = TodoSnapshotCounts {
-        total: items.len(),
-        pending: 0,
-        in_progress: 0,
-        completed: 0,
-        cancelled: 0,
-    };
-
-    for item in items {
-        match item.status {
-            crate::core::TodoStatus::Pending => counts.pending += 1,
-            crate::core::TodoStatus::InProgress => counts.in_progress += 1,
-            crate::core::TodoStatus::Completed => counts.completed += 1,
-            crate::core::TodoStatus::Cancelled => counts.cancelled += 1,
-        }
-    }
-
-    let output = TodoSnapshotOutput {
-        todos: items.to_vec(),
-        counts,
-    };
-
-    ToolResult::ok_json_typed_serializable(
-        "todo list snapshot",
-        "application/vnd.hh.todo+json",
-        &output,
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Settings;
+    use crate::core::agent::runner::is_cancellation_error;
+    use crate::core::{ProviderRequest, Role, ToolCall};
     use crate::permission::PermissionMatcher;
     use crate::provider::ProviderResponse;
-    use crate::session::SessionStore;
+    use crate::session::{SessionEvent, SessionStore};
     use crate::tool::registry::ToolRegistry;
     use async_trait::async_trait;
     use serde_json::json;
     use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
     use tempfile::tempdir;
+    use tokio::sync::watch;
+    use tokio::time::{Duration, sleep, timeout};
 
     #[derive(Clone)]
     struct TestProvider {
@@ -781,34 +325,56 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
-    struct TestQueuedEvents {
-        queued: Arc<Mutex<VecDeque<crate::core::QueuedUserMessage>>>,
-        consumed: Arc<Mutex<Vec<Vec<crate::core::QueuedUserMessage>>>>,
-        enqueue_after_tool_end: Option<crate::core::QueuedUserMessage>,
+    struct HangingProvider;
+
+    #[async_trait]
+    impl Provider for HangingProvider {
+        async fn complete(&self, _req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
+            sleep(Duration::from_secs(30)).await;
+            Ok(ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "late".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                tool_calls: Vec::new(),
+                done: true,
+                thinking: None,
+                context_tokens: None,
+            })
+        }
     }
 
-    impl AgentEvents for TestQueuedEvents {
-        fn on_tool_end(&self, _name: &str, _result: &crate::tool::ToolResult) {
-            if let Some(message) = self.enqueue_after_tool_end.clone()
-                && let Ok(mut queued) = self.queued.lock()
-                && queued.is_empty()
-            {
-                queued.push_back(message);
-            }
+    struct BurstStreamProvider {
+        response: ProviderResponse,
+        bursts: usize,
+    }
+
+    #[async_trait]
+    impl Provider for BurstStreamProvider {
+        async fn complete(&self, _req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
+            Ok(self.response.clone())
         }
 
-        fn drain_queued_user_messages(&self) -> Vec<crate::core::QueuedUserMessage> {
-            let Ok(mut queued) = self.queued.lock() else {
-                return Vec::new();
-            };
-            queued.drain(..).collect()
-        }
-
-        fn on_queued_user_messages_consumed(&self, messages: &[crate::core::QueuedUserMessage]) {
-            if let Ok(mut consumed) = self.consumed.lock() {
-                consumed.push(messages.to_vec());
+        async fn complete_stream<F>(
+            &self,
+            req: ProviderRequest,
+            mut on_event: F,
+        ) -> anyhow::Result<ProviderResponse>
+        where
+            F: FnMut(crate::core::ProviderStreamEvent) + Send,
+        {
+            for _ in 0..self.bursts {
+                on_event(crate::core::ProviderStreamEvent::ThinkingDelta(
+                    "t".to_string(),
+                ));
+                on_event(crate::core::ProviderStreamEvent::AssistantDelta(
+                    "a".to_string(),
+                ));
             }
+            self.complete(req).await
         }
     }
 
@@ -893,7 +459,7 @@ mod tests {
             captured_requests: Arc::new(Mutex::new(Vec::new())),
         };
 
-        let agent = AgentLoop {
+        let agent = AgentCore {
             provider,
             tools,
             approvals,
@@ -901,7 +467,6 @@ mod tests {
             model: "test".to_string(),
             system_prompt: String::new(),
             session: session.clone(),
-            events: NoopEvents,
         };
 
         let approval_count = Arc::new(Mutex::new(0usize));
@@ -1018,7 +583,7 @@ mod tests {
             captured_requests: Arc::new(Mutex::new(Vec::new())),
         };
 
-        let agent = AgentLoop {
+        let agent = AgentCore {
             provider,
             tools,
             approvals,
@@ -1026,7 +591,6 @@ mod tests {
             model: "test".to_string(),
             system_prompt: String::new(),
             session: session.clone(),
-            events: NoopEvents,
         };
 
         let approval_count = Arc::new(Mutex::new(0usize));
@@ -1123,23 +687,20 @@ mod tests {
             captured_requests: Arc::clone(&captured_requests),
         };
 
-        let consumed = Arc::new(Mutex::new(Vec::new()));
-        let queued_events = TestQueuedEvents {
-            queued: Arc::new(Mutex::new(VecDeque::new())),
-            consumed: Arc::clone(&consumed),
-            enqueue_after_tool_end: Some(crate::core::QueuedUserMessage {
-                message: Message {
-                    role: Role::User,
-                    content: "queued follow-up".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                },
-                message_index: Some(7),
-            }),
+        let queued = Arc::new(Mutex::new(VecDeque::new()));
+        let consumed = Arc::new(Mutex::new(Vec::<Vec<crate::core::QueuedUserMessage>>::new()));
+        let enqueue_after_tool_end = crate::core::QueuedUserMessage {
+            message: Message {
+                role: Role::User,
+                content: "queued follow-up".to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+            },
+            message_index: Some(7),
         };
 
-        let agent = AgentLoop {
+        let agent = AgentCore {
             provider,
             tools,
             approvals,
@@ -1147,11 +708,15 @@ mod tests {
             model: "test".to_string(),
             system_prompt: String::new(),
             session,
-            events: queued_events,
+        };
+
+        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
+        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
+            anyhow::bail!("question tool should not be called in this test")
         };
 
         let result = agent
-            .run(
+            .run_with_runner_output_sink_cancellable(
                 Message {
                     role: Role::User,
                     content: "initial prompt".to_string(),
@@ -1159,7 +724,32 @@ mod tests {
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                 },
-                |_request| async { Ok(ApprovalChoice::AllowOnce) },
+                &mut approve,
+                &mut ask_question,
+                &mut || std::future::pending::<()>(),
+                &mut |output| {
+                    if matches!(output, RunnerOutput::ToolEnd { .. })
+                        && let Ok(mut queue) = queued.lock()
+                        && queue.is_empty()
+                    {
+                        queue.push_back(enqueue_after_tool_end.clone());
+                    }
+                    Ok(())
+                },
+                &mut || {
+                    let drained = {
+                        let Ok(mut queue) = queued.lock() else {
+                            return Vec::new();
+                        };
+                        queue.drain(..).collect::<Vec<_>>()
+                    };
+                    if !drained.is_empty()
+                        && let Ok(mut seen) = consumed.lock()
+                    {
+                        seen.push(drained.clone());
+                    }
+                    drained.into_iter().map(|queued| queued.message).collect()
+                },
             )
             .await;
 
@@ -1176,5 +766,521 @@ mod tests {
         assert_eq!(consumed[0].len(), 1);
         assert_eq!(consumed[0][0].message.content, "queued follow-up");
         assert_eq!(consumed[0][0].message_index, Some(7));
+    }
+
+    #[tokio::test]
+    async fn resume_prefers_runner_snapshot_for_todo_state_in_llm_context() {
+        let temp = tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let mut settings = Settings::default();
+        settings.session.root = temp.path().join("sessions");
+
+        let tools = ToolRegistry::new(&settings, &workspace);
+        let approvals = PermissionMatcher::new(settings.clone(), &tools.schemas(), &workspace);
+        let session = SessionStore::new(
+            &settings.session.root,
+            &workspace,
+            None,
+            Some("snapshot resume".to_string()),
+        )
+        .expect("session store");
+
+        session
+            .save_runner_state_snapshot(&RunnerState {
+                todo_items: vec![crate::core::TodoItem {
+                    content: "from snapshot".to_string(),
+                    status: crate::core::TodoStatus::Pending,
+                    priority: crate::core::TodoPriority::Medium,
+                }],
+                context_tokens: 42,
+            })
+            .expect("save snapshot");
+
+        let captured_requests = Arc::new(Mutex::new(Vec::new()));
+        let provider = TestProvider {
+            responses: Arc::new(Mutex::new(VecDeque::from(vec![ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "done".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                tool_calls: Vec::new(),
+                done: true,
+                thinking: None,
+                context_tokens: Some(100),
+            }]))),
+            captured_requests: Arc::clone(&captured_requests),
+        };
+
+        let agent = AgentCore {
+            provider,
+            tools,
+            approvals,
+            max_steps: 5,
+            model: "test".to_string(),
+            system_prompt: String::new(),
+            session: session.clone(),
+        };
+
+        let result = agent
+            .run(
+                Message {
+                    role: Role::User,
+                    content: "resume".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                |_request| async { Ok(ApprovalChoice::AllowOnce) },
+            )
+            .await;
+
+        assert!(result.is_ok());
+
+        let requests = captured_requests.lock().expect("captured requests");
+        assert_eq!(requests.len(), 1);
+        let has_snapshot_message = requests[0].messages.iter().any(|message| {
+            message.role == Role::System
+                && message
+                    .content
+                    .contains("Runtime TODO state: use this as the canonical plan snapshot.")
+                && message.content.contains("from snapshot")
+        });
+        assert!(has_snapshot_message);
+
+        let saved = session
+            .load_runner_state_snapshot()
+            .expect("load snapshot")
+            .expect("snapshot present");
+        assert_eq!(saved.context_tokens, 100);
+        assert_eq!(saved.todo_items.len(), 1);
+        assert_eq!(saved.todo_items[0].content, "from snapshot");
+    }
+
+    #[tokio::test]
+    async fn runner_outputs_persist_tool_call_and_result_events_via_loop_adapter() {
+        let temp = tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let mut settings = Settings::default();
+        settings.session.root = temp.path().join("sessions");
+
+        let tools = ToolRegistry::new(&settings, &workspace);
+        let approvals = PermissionMatcher::new(settings.clone(), &tools.schemas(), &workspace);
+        let session = SessionStore::new(
+            &settings.session.root,
+            &workspace,
+            None,
+            Some("tool event persistence".to_string()),
+        )
+        .expect("session store");
+
+        let provider = TestProvider {
+            responses: Arc::new(Mutex::new(VecDeque::from(vec![
+                ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: String::new(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: vec![ToolCall {
+                            id: "call-1".to_string(),
+                            name: "todo_read".to_string(),
+                            arguments: json!({}),
+                        }],
+                    },
+                    tool_calls: vec![ToolCall {
+                        id: "call-1".to_string(),
+                        name: "todo_read".to_string(),
+                        arguments: json!({}),
+                    }],
+                    done: false,
+                    thinking: None,
+                    context_tokens: None,
+                },
+                ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: "done".to_string(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    tool_calls: Vec::new(),
+                    done: true,
+                    thinking: None,
+                    context_tokens: None,
+                },
+            ]))),
+            captured_requests: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let agent = AgentCore {
+            provider,
+            tools,
+            approvals,
+            max_steps: 5,
+            model: "test".to_string(),
+            system_prompt: String::new(),
+            session: session.clone(),
+        };
+
+        let result = agent
+            .run(
+                Message {
+                    role: Role::User,
+                    content: "run todo read".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                |_request| async { Ok(ApprovalChoice::AllowOnce) },
+            )
+            .await;
+
+        assert!(result.is_ok());
+
+        let events = session.replay_events().expect("replay events");
+        let tool_call_ids = events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::ToolCall { call } => Some(call.id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let tool_result_ids = events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::ToolResult { id, result, .. } if result.is_some() => Some(id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(tool_call_ids, vec!["call-1".to_string()]);
+        assert_eq!(tool_result_ids, vec!["call-1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn runner_state_snapshot_round_trips_todo_state_across_runs() {
+        let temp = tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let mut settings = Settings::default();
+        settings.session.root = temp.path().join("sessions");
+
+        let tools = ToolRegistry::new(&settings, &workspace);
+        let approvals = PermissionMatcher::new(settings.clone(), &tools.schemas(), &workspace);
+        let session = SessionStore::new(
+            &settings.session.root,
+            &workspace,
+            None,
+            Some("snapshot roundtrip".to_string()),
+        )
+        .expect("session store");
+
+        let first_provider = TestProvider {
+            responses: Arc::new(Mutex::new(VecDeque::from(vec![
+                ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: String::new(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: vec![ToolCall {
+                            id: "call-1".to_string(),
+                            name: "todo_write".to_string(),
+                            arguments: json!({
+                                "todos": [{
+                                    "content": "from first run",
+                                    "status": "pending",
+                                    "priority": "high"
+                                }]
+                            }),
+                        }],
+                    },
+                    tool_calls: vec![ToolCall {
+                        id: "call-1".to_string(),
+                        name: "todo_write".to_string(),
+                        arguments: json!({
+                            "todos": [{
+                                "content": "from first run",
+                                "status": "pending",
+                                "priority": "high"
+                            }]
+                        }),
+                    }],
+                    done: false,
+                    thinking: None,
+                    context_tokens: Some(21),
+                },
+                ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: "first done".to_string(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    tool_calls: Vec::new(),
+                    done: true,
+                    thinking: None,
+                    context_tokens: Some(34),
+                },
+            ]))),
+            captured_requests: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let first_agent = AgentCore {
+            provider: first_provider,
+            tools: ToolRegistry::new(&settings, &workspace),
+            approvals: PermissionMatcher::new(settings.clone(), &tools.schemas(), &workspace),
+            max_steps: 5,
+            model: "test".to_string(),
+            system_prompt: String::new(),
+            session: session.clone(),
+        };
+
+        let first_result = first_agent
+            .run(
+                Message {
+                    role: Role::User,
+                    content: "seed todo state".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                |_request| async { Ok(ApprovalChoice::AllowOnce) },
+            )
+            .await;
+        assert!(first_result.is_ok());
+
+        let saved_snapshot = session
+            .load_runner_state_snapshot()
+            .expect("load snapshot")
+            .expect("snapshot present");
+        assert_eq!(saved_snapshot.context_tokens, 34);
+        assert_eq!(saved_snapshot.todo_items.len(), 1);
+        assert_eq!(saved_snapshot.todo_items[0].content, "from first run");
+
+        let second_captured_requests = Arc::new(Mutex::new(Vec::new()));
+        let second_provider = TestProvider {
+            responses: Arc::new(Mutex::new(VecDeque::from(vec![ProviderResponse {
+                assistant_message: Message {
+                    role: Role::Assistant,
+                    content: "second done".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                tool_calls: Vec::new(),
+                done: true,
+                thinking: None,
+                context_tokens: Some(55),
+            }]))),
+            captured_requests: Arc::clone(&second_captured_requests),
+        };
+
+        let second_agent = AgentCore {
+            provider: second_provider,
+            tools: ToolRegistry::new(&settings, &workspace),
+            approvals,
+            max_steps: 5,
+            model: "test".to_string(),
+            system_prompt: String::new(),
+            session: session.clone(),
+        };
+
+        let second_result = second_agent
+            .run(
+                Message {
+                    role: Role::User,
+                    content: "resume and continue".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                |_request| async { Ok(ApprovalChoice::AllowOnce) },
+            )
+            .await;
+        assert!(second_result.is_ok());
+
+        let second_requests = second_captured_requests.lock().expect("captured requests");
+        assert_eq!(second_requests.len(), 1);
+        let has_snapshot_message = second_requests[0].messages.iter().any(|message| {
+            message.role == Role::System
+                && message
+                    .content
+                    .contains("Runtime TODO state: use this as the canonical plan snapshot.")
+                && message.content.contains("from first run")
+        });
+        assert!(has_snapshot_message);
+    }
+
+    #[tokio::test]
+    async fn cancellation_emits_single_cancelled_event_from_runner_output_path() {
+        let temp = tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let mut settings = Settings::default();
+        settings.session.root = temp.path().join("sessions");
+
+        let tools = ToolRegistry::new(&settings, &workspace);
+        let approvals = PermissionMatcher::new(settings.clone(), &tools.schemas(), &workspace);
+        let session = SessionStore::new(
+            &settings.session.root,
+            &workspace,
+            None,
+            Some("cancelled event".to_string()),
+        )
+        .expect("session store");
+
+        let cancelled_count = Arc::new(AtomicUsize::new(0));
+
+        let agent = AgentCore {
+            provider: HangingProvider,
+            tools,
+            approvals,
+            max_steps: 5,
+            model: "test".to_string(),
+            system_prompt: String::new(),
+            session,
+        };
+
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(25)).await;
+            let _ = cancel_tx.send(true);
+        });
+
+        let mut cancel = {
+            let cancel_rx = cancel_rx.clone();
+            move || {
+                let mut cancel_rx = cancel_rx.clone();
+                async move {
+                    if *cancel_rx.borrow() {
+                        return;
+                    }
+                    let _ = cancel_rx.changed().await;
+                }
+            }
+        };
+
+        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
+        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
+            anyhow::bail!("question tool should not be called in this test")
+        };
+
+        let result = timeout(
+            Duration::from_millis(250),
+            agent.run_with_runner_output_sink_cancellable(
+                Message {
+                    role: Role::User,
+                    content: "cancel this run".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                &mut approve,
+                &mut ask_question,
+                &mut cancel,
+                &mut |output| {
+                    if matches!(output, RunnerOutput::Cancelled) {
+                        cancelled_count.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Ok(())
+                },
+                &mut Vec::new,
+            ),
+        )
+        .await
+        .expect("agent cancellation should resolve quickly");
+
+        let err = result.expect_err("run should be cancelled");
+        assert!(is_cancellation_error(&err));
+        assert_eq!(cancelled_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn bounded_output_channel_keeps_turn_complete_under_delta_burst() {
+        let temp = tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let mut settings = Settings::default();
+        settings.session.root = temp.path().join("sessions");
+
+        let tools = ToolRegistry::new(&settings, &workspace);
+        let approvals = PermissionMatcher::new(settings.clone(), &tools.schemas(), &workspace);
+        let session = SessionStore::new(
+            &settings.session.root,
+            &workspace,
+            None,
+            Some("burst output".to_string()),
+        )
+        .expect("session store");
+
+        let done_count = Arc::new(AtomicUsize::new(0));
+
+        let agent = AgentCore {
+            provider: BurstStreamProvider {
+                response: ProviderResponse {
+                    assistant_message: Message {
+                        role: Role::Assistant,
+                        content: "done".to_string(),
+                        attachments: Vec::new(),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                    },
+                    tool_calls: Vec::new(),
+                    done: true,
+                    thinking: None,
+                    context_tokens: Some(12),
+                },
+                bursts: 200,
+            },
+            tools,
+            approvals,
+            max_steps: 5,
+            model: "test".to_string(),
+            system_prompt: String::new(),
+            session,
+        };
+
+        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
+        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
+            anyhow::bail!("question tool should not be called in this test")
+        };
+
+        let result = agent
+            .run_with_runner_output_sink_cancellable(
+                Message {
+                    role: Role::User,
+                    content: "burst".to_string(),
+                    attachments: Vec::new(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                },
+                &mut approve,
+                &mut ask_question,
+                &mut || std::future::pending::<()>(),
+                &mut |output| {
+                    if matches!(output, RunnerOutput::TurnComplete) {
+                        done_count.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Ok(())
+                },
+                &mut Vec::new,
+            )
+            .await;
+
+        assert_eq!(result.expect("run result"), "a".repeat(200));
+        assert_eq!(done_count.load(Ordering::SeqCst), 1);
     }
 }

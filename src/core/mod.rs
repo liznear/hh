@@ -3,10 +3,10 @@ pub mod system_prompt;
 pub mod traits;
 pub mod types;
 
-pub use agent::AgentLoop;
+pub use agent::{AgentCore, RunnerOutputObserver};
 pub use traits::{
-    AgentEvents, ApprovalChoice, ApprovalDecision, ApprovalPolicy, ApprovalRequest, NoopEvents,
-    Provider, QueuedUserMessage, SessionReader, SessionSink, ToolExecutor,
+    ApprovalChoice, ApprovalDecision, ApprovalPolicy, ApprovalRequest, Provider, QueuedUserMessage,
+    SessionReader, SessionSink, ToolExecutor,
 };
 pub use types::{
     Message, MessageAttachment, ProviderRequest, ProviderResponse, ProviderStreamEvent,

@@ -297,6 +297,13 @@ impl SessionSink for SessionStore {
     fn append(&self, event: &SessionEvent) -> anyhow::Result<()> {
         self.append(event)
     }
+
+    fn save_runner_state_snapshot(
+        &self,
+        snapshot: &crate::core::agent::RunnerState,
+    ) -> anyhow::Result<()> {
+        self.save_runner_state_snapshot(snapshot)
+    }
 }
 
 impl SessionReader for SessionStore {
@@ -306,6 +313,12 @@ impl SessionReader for SessionStore {
 
     fn replay_events(&self) -> anyhow::Result<Vec<SessionEvent>> {
         self.replay_events()
+    }
+
+    fn load_runner_state_snapshot(
+        &self,
+    ) -> anyhow::Result<Option<crate::core::agent::RunnerState>> {
+        self.load_runner_state_snapshot()
     }
 }
 

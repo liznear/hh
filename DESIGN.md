@@ -7,13 +7,13 @@ This document explains the runtime architecture of `hh`, how major modules inter
 ### High-level flow
 
 1. CLI entry (`hh chat`, `hh run`) builds `Settings` and chooses mode.
-2. Chat layer (`src/cli/chat.rs` + `src/cli/chat/*`) constructs an `AgentLoop` with:
+2. Chat layer (`src/cli/chat.rs` + `src/cli/chat/*`) constructs an `AgentCore` with:
    - provider adapter
    - tool registry
    - approval policy matcher
    - session store
    - event sink (TUI or noop)
-3. `AgentLoop` (`src/core/agent/mod.rs`) runs turn-by-turn:
+3. `AgentCore` (`src/core/agent/mod.rs`) runs turn-by-turn:
    - loads/replays session history
    - sends provider request
    - streams thinking/assistant deltas to events
@@ -28,12 +28,13 @@ This document explains the runtime architecture of `hh`, how major modules inter
   - Provider-agnostic and persistence-friendly.
 
 - `src/core/traits.rs`
-  - Integration contracts: `Provider`, `ToolExecutor`, `ApprovalPolicy`, `SessionSink`, `SessionReader`, `AgentEvents`.
+  - Integration contracts: `Provider`, `ToolExecutor`, `ApprovalPolicy`, `SessionSink`, `SessionReader`.
   - The agent loop depends on traits, not concrete adapters.
 
 - `src/core/agent/mod.rs`
   - Orchestrates the agent runtime loop.
   - Handles replay, step progression, approval requests, blocking/non-blocking tool execution, and event emission.
+  - Defines `RunnerOutputObserver`, the adapter contract used by UI/render layers.
 
 - `src/provider/openai_compatible.rs`
   - Provider adapter between wire format and core types.

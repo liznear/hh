@@ -5,7 +5,6 @@ pub mod render;
 pub mod tui;
 
 use crate::cli::commands::{Cli, Commands, ConfigCommand};
-use crate::cli::render::LiveRender;
 use crate::config::{load_settings, write_default_project_config};
 use clap::Parser;
 
@@ -29,9 +28,7 @@ pub async fn run() -> anyhow::Result<()> {
         } => {
             let settings = load_settings(&cwd, agent)?;
             let settings = apply_max_turns(settings, max_turns);
-            let render = LiveRender::new();
-            render.begin_turn();
-            chat::run_single_prompt_with_events(settings, &cwd, prompt, render).await?;
+            chat::run_single_prompt(settings, &cwd, prompt).await?;
             Ok(())
         }
         Commands::Tools => {

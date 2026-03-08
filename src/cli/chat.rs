@@ -9,7 +9,6 @@ use crate::cli::agent_init;
 use crate::cli::tui::SubmittedInput;
 use crate::cli::tui::{self, ChatApp, ModelOptionView, ScopedTuiEvent, TuiEvent, TuiEventSender};
 use crate::config::Settings;
-use crate::core::agent::{AgentEvents, NoopEvents};
 #[cfg(test)]
 use crate::session::SessionStore;
 
@@ -327,19 +326,7 @@ pub async fn run_single_prompt(
     cwd: &std::path::Path,
     prompt: String,
 ) -> anyhow::Result<String> {
-    run_single_prompt_with_events(settings, cwd, prompt, NoopEvents).await
-}
-
-pub async fn run_single_prompt_with_events<E>(
-    settings: Settings,
-    cwd: &std::path::Path,
-    prompt: String,
-    events: E,
-) -> anyhow::Result<String>
-where
-    E: AgentEvents,
-{
-    agent_run::run_single_prompt_with_events(settings, cwd, prompt, events).await
+    agent_run::run_single_prompt(settings, cwd, prompt).await
 }
 
 #[cfg(test)]

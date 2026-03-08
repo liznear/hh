@@ -3,16 +3,18 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use crate::agent::{AgentLoader, AgentMode, AgentRegistry};
-use crate::cli::chat::agent_run::{AgentLoopOptions, create_agent_loop};
+use crate::cli::chat::agent_run::{AgentLoopOptions, create_agent_core};
 use crate::cli::tui;
 use crate::config::Settings;
-use crate::core::agent::NoopEvents;
+use crate::core::SessionSink;
+use crate::core::agent::RunnerOutput;
 use crate::core::agent::subagent_manager::{
     SubagentExecutionRequest, SubagentExecutionResult, SubagentExecutor, SubagentManager,
     SubagentStatus,
 };
 use crate::core::{Message, Role};
 use crate::session::types::SubAgentFailureReason;
+use crate::session::{SessionEvent, event_id};
 
 static GLOBAL_SUBAGENT_MANAGER: OnceLock<Arc<SubagentManager>> = OnceLock::new();
 
@@ -103,11 +105,10 @@ async fn run_subagent_execution(
     let task_id = request.task_id.clone();
     let child_session_id = request.child_session_id.clone();
 
-    let loop_runner = match create_agent_loop(
+    let loop_runner = match create_agent_core(
         child_settings,
         &cwd,
         &model_ref,
-        NoopEvents,
         AgentLoopOptions {
             subagent_manager: Some(current_subagent_manager(&settings, &cwd)),
             parent_task_id: Some(request.task_id.clone()),
@@ -129,7 +130,7 @@ async fn run_subagent_execution(
     };
 
     match loop_runner
-        .run_with_question_tool(
+        .run_with_runner_output_sink_cancellable(
             Message {
                 role: Role::User,
                 content: request.prompt,
@@ -137,14 +138,17 @@ async fn run_subagent_execution(
                 tool_call_id: None,
                 tool_calls: Vec::new(),
             },
-            |_request| async {
+            &mut |_request| async {
                 Ok::<crate::core::ApprovalChoice, anyhow::Error>(
                     crate::core::ApprovalChoice::AllowSession,
                 )
             },
-            |_questions| async {
+            &mut |_questions| async {
                 anyhow::bail!("question tool is not available in sub-agent mode")
             },
+            &mut || std::future::pending::<()>(),
+            &mut |output| apply_runner_output_to_subagent_session(&loop_runner.session, output),
+            &mut Vec::new,
         )
         .await
     {
@@ -156,6 +160,67 @@ async fn run_subagent_execution(
             failure_reason: Some(SubAgentFailureReason::RuntimeError),
         },
     }
+}
+
+fn apply_runner_output_to_subagent_session(
+    session: &impl SessionSink,
+    output: RunnerOutput,
+) -> anyhow::Result<()> {
+    match output {
+        RunnerOutput::ThinkingRecorded(content) => {
+            session.append(&SessionEvent::Thinking {
+                id: event_id(),
+                content,
+            })?;
+        }
+        RunnerOutput::ToolCallRecorded(call) => {
+            session.append(&SessionEvent::ToolCall { call })?;
+        }
+        RunnerOutput::ToolEnd {
+            call_id, result, ..
+        } => {
+            session.append(&SessionEvent::ToolResult {
+                id: call_id,
+                is_error: result.is_error,
+                output: result.output.clone(),
+                result: Some(result),
+            })?;
+        }
+        RunnerOutput::SnapshotUpdated(snapshot) => {
+            session.save_runner_state_snapshot(&snapshot)?;
+        }
+        RunnerOutput::ApprovalRecorded {
+            tool_name,
+            approved,
+            action,
+            choice,
+        } => {
+            session.append(&SessionEvent::Approval {
+                id: event_id(),
+                tool_name,
+                approved,
+                action,
+                choice,
+            })?;
+        }
+        RunnerOutput::MessageAdded(message) => {
+            session.append(&SessionEvent::Message {
+                id: event_id(),
+                message,
+            })?;
+        }
+        RunnerOutput::ThinkingDelta(_)
+        | RunnerOutput::AssistantDelta(_)
+        | RunnerOutput::StateUpdated(_)
+        | RunnerOutput::ApprovalRequired { .. }
+        | RunnerOutput::QuestionRequired { .. }
+        | RunnerOutput::ToolStart { .. }
+        | RunnerOutput::Cancelled
+        | RunnerOutput::TurnComplete
+        | RunnerOutput::Error(_) => {}
+    }
+
+    Ok(())
 }
 
 fn completed_subagent_result(

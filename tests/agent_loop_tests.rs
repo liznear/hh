@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use hh_cli::config::settings::Settings;
-use hh_cli::core::agent::{AgentEvents, AgentLoop, NoopEvents};
+use hh_cli::core::RunnerOutputObserver;
+use hh_cli::core::agent::{AgentCore, apply_runner_output_to_observer};
 use hh_cli::permission::PermissionMatcher;
 use hh_cli::provider::{
     Message, Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role, ToolCall,
@@ -54,7 +55,7 @@ impl RecordingEvents {
     }
 }
 
-impl AgentEvents for RecordingEvents {
+impl RunnerOutputObserver for RecordingEvents {
     fn on_thinking(&self, text: &str) {
         self.log
             .lock()
@@ -115,7 +116,7 @@ async fn agent_loop_stops_on_final_answer() {
     let tools = ToolRegistry::new(&settings, &cwd);
     let schemas = tools.schemas();
 
-    let agent = AgentLoop {
+    let agent = AgentCore {
         provider,
         tools,
         approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
@@ -123,7 +124,6 @@ async fn agent_loop_stops_on_final_answer() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session,
-        events: NoopEvents,
     };
 
     let out = agent
@@ -200,7 +200,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
     let tools = ToolRegistry::new(&settings, &cwd);
     let schemas = tools.schemas();
 
-    let agent = AgentLoop {
+    let agent = AgentCore {
         provider,
         tools,
         approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
@@ -208,11 +208,11 @@ async fn agent_loop_emits_stream_and_tool_events() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session,
-        events: events.clone(),
     };
 
+    let mut last_emitted_todo_items = Vec::new();
     let _ = agent
-        .run(
+        .run_with_runner_output_sink_cancellable(
             Message {
                 role: Role::User,
                 content: "hello".to_string(),
@@ -220,11 +220,24 @@ async fn agent_loop_emits_stream_and_tool_events() {
                 tool_call_id: None,
                 tool_calls: Vec::new(),
             },
-            |_request| async {
+            &mut |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
                     hh_cli::core::ApprovalChoice::AllowSession,
                 )
             },
+            &mut |_questions| async {
+                anyhow::bail!("question tool should not be called in this test")
+            },
+            &mut || std::future::pending::<()>(),
+            &mut |output| {
+                apply_runner_output_to_observer(
+                    &events,
+                    &agent.session,
+                    output,
+                    &mut last_emitted_todo_items,
+                )
+            },
+            &mut Vec::new,
         )
         .await
         .expect("run");
@@ -272,7 +285,7 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
     let tools = ToolRegistry::new(&settings, &cwd);
     let schemas = tools.schemas();
 
-    let agent = AgentLoop {
+    let agent = AgentCore {
         provider,
         tools,
         approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
@@ -280,7 +293,6 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session,
-        events: NoopEvents,
     };
 
     let _ = agent
@@ -371,7 +383,7 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
     let tools = ToolRegistry::new(&settings, &cwd);
     let schemas = tools.schemas();
 
-    let agent = AgentLoop {
+    let agent = AgentCore {
         provider,
         tools,
         approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
@@ -379,7 +391,6 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session,
-        events: NoopEvents,
     };
 
     let out = agent
@@ -432,7 +443,7 @@ async fn agent_loop_respects_max_steps_when_set() {
     let tools = ToolRegistry::new(&settings, &cwd);
     let schemas = tools.schemas();
 
-    let agent = AgentLoop {
+    let agent = AgentCore {
         provider,
         tools,
         approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
@@ -440,7 +451,6 @@ async fn agent_loop_respects_max_steps_when_set() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session,
-        events: NoopEvents,
     };
 
     let err = agent
@@ -517,7 +527,7 @@ async fn agent_loop_injects_runtime_todo_state_message() {
     let tools = ToolRegistry::new(&settings, &cwd);
     let schemas = tools.schemas();
 
-    let agent = AgentLoop {
+    let agent = AgentCore {
         provider,
         tools,
         approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
@@ -525,7 +535,6 @@ async fn agent_loop_injects_runtime_todo_state_message() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session,
-        events: NoopEvents,
     };
 
     let out = agent
@@ -628,7 +637,7 @@ async fn agent_loop_todo_read_returns_current_runtime_snapshot() {
     let tools = ToolRegistry::new(&settings, &cwd);
     let schemas = tools.schemas();
 
-    let agent = AgentLoop {
+    let agent = AgentCore {
         provider,
         tools,
         approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
@@ -636,7 +645,6 @@ async fn agent_loop_todo_read_returns_current_runtime_snapshot() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session,
-        events: NoopEvents,
     };
 
     let out = agent
@@ -736,7 +744,7 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
     let tools = ToolRegistry::new(&settings, &cwd);
     let schemas = tools.schemas();
 
-    let agent = AgentLoop {
+    let agent = AgentCore {
         provider,
         tools,
         approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
@@ -744,11 +752,11 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session,
-        events: NoopEvents,
     };
 
+    let mut last_emitted_todo_items = Vec::new();
     let out = agent
-        .run_with_question_tool(
+        .run_with_runner_output_sink_cancellable(
             Message {
                 role: Role::User,
                 content: "ask me".to_string(),
@@ -756,12 +764,22 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
                 tool_call_id: None,
                 tool_calls: Vec::new(),
             },
-            |_request| async {
+            &mut |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
                     hh_cli::core::ApprovalChoice::AllowSession,
                 )
             },
-            |_questions| async { Ok(vec![vec!["B".to_string()]]) },
+            &mut |_questions| async { Ok(vec![vec!["B".to_string()]]) },
+            &mut || std::future::pending::<()>(),
+            &mut |output| {
+                apply_runner_output_to_observer(
+                    &(),
+                    &agent.session,
+                    output,
+                    &mut last_emitted_todo_items,
+                )
+            },
+            &mut Vec::new,
         )
         .await
         .expect("run");
@@ -839,7 +857,7 @@ async fn allow_session_choice_is_remembered_for_ask_policy_tools() {
     let tools = ToolRegistry::new(&settings, &cwd);
     let schemas = tools.schemas();
 
-    let agent = AgentLoop {
+    let agent = AgentCore {
         provider,
         tools,
         approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
@@ -847,7 +865,6 @@ async fn allow_session_choice_is_remembered_for_ask_policy_tools() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session,
-        events: NoopEvents,
     };
 
     let approval_count = Arc::new(Mutex::new(0usize));
@@ -942,7 +959,7 @@ async fn allow_always_choice_is_remembered_for_current_session() {
     let tools = ToolRegistry::new(&settings, &cwd);
     let schemas = tools.schemas();
 
-    let agent = AgentLoop {
+    let agent = AgentCore {
         provider,
         tools,
         approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
@@ -950,7 +967,6 @@ async fn allow_always_choice_is_remembered_for_current_session() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session,
-        events: NoopEvents,
     };
 
     let approval_count = Arc::new(Mutex::new(0usize));
@@ -1027,7 +1043,7 @@ async fn bash_approval_request_includes_llm_stated_purpose() {
     let tools = ToolRegistry::new(&settings, &cwd);
     let schemas = tools.schemas();
 
-    let agent = AgentLoop {
+    let agent = AgentCore {
         provider,
         tools,
         approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
@@ -1035,7 +1051,6 @@ async fn bash_approval_request_includes_llm_stated_purpose() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session,
-        events: NoopEvents,
     };
 
     let captured = Arc::new(Mutex::new(String::new()));
@@ -1113,7 +1128,7 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
         SessionStore::new(temp.path(), &cwd, Some("persist-tools"), None).expect("session1");
     let tools1 = ToolRegistry::new(&settings, &cwd);
     let schemas1 = tools1.schemas();
-    let agent1 = AgentLoop {
+    let agent1 = AgentCore {
         provider: provider1,
         tools: tools1,
         approvals: PermissionMatcher::new(settings.clone(), &schemas1, &cwd),
@@ -1121,7 +1136,6 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session: session1,
-        events: NoopEvents,
     };
 
     let first_prompt_count = Arc::new(Mutex::new(0usize));
@@ -1189,7 +1203,7 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
         SessionStore::new(temp.path(), &cwd, Some("persist-tools"), None).expect("session2");
     let tools2 = ToolRegistry::new(&settings, &cwd);
     let schemas2 = tools2.schemas();
-    let agent2 = AgentLoop {
+    let agent2 = AgentCore {
         provider: provider2,
         tools: tools2,
         approvals: PermissionMatcher::new(settings.clone(), &schemas2, &cwd),
@@ -1197,7 +1211,6 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session: session2,
-        events: NoopEvents,
     };
 
     let second_prompt_count = Arc::new(Mutex::new(0usize));
@@ -1288,7 +1301,7 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
         SessionStore::new(temp.path(), &cwd, Some("persist-folder"), None).expect("session1");
     let tools1 = ToolRegistry::new(&settings, &cwd);
     let schemas1 = tools1.schemas();
-    let agent1 = AgentLoop {
+    let agent1 = AgentCore {
         provider: provider1,
         tools: tools1,
         approvals: PermissionMatcher::new(settings.clone(), &schemas1, &cwd),
@@ -1296,7 +1309,6 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session: session1,
-        events: NoopEvents,
     };
 
     let first_prompt_count = Arc::new(Mutex::new(0usize));
@@ -1364,7 +1376,7 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
         SessionStore::new(temp.path(), &cwd, Some("persist-folder"), None).expect("session2");
     let tools2 = ToolRegistry::new(&settings, &cwd);
     let schemas2 = tools2.schemas();
-    let agent2 = AgentLoop {
+    let agent2 = AgentCore {
         provider: provider2,
         tools: tools2,
         approvals: PermissionMatcher::new(settings.clone(), &schemas2, &cwd),
@@ -1372,7 +1384,6 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
         system_prompt: settings.agent.resolved_system_prompt(),
         model: settings.selected_model_ref().to_string(),
         session: session2,
-        events: NoopEvents,
     };
 
     let second_prompt_count = Arc::new(Mutex::new(0usize));

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -12,8 +13,9 @@ use crate::cli::chat::subagent::{current_subagent_manager, map_subagent_node_eve
 use crate::cli::render;
 use crate::cli::tui::{ChatApp, SubmittedInput, TuiEvent, TuiEventSender};
 use crate::config::{Settings, upsert_local_permission_rule};
+use crate::core::agent::runner::is_cancellation_error;
 use crate::core::agent::subagent_manager::SubagentManager;
-use crate::core::agent::{AgentEvents, AgentLoop};
+use crate::core::agent::{AgentCore, apply_runner_output_to_observer};
 use crate::core::{Message, Role};
 use crate::permission::PermissionMatcher;
 use crate::provider::openai_compatible::OpenAiCompatibleProvider;
@@ -37,6 +39,13 @@ pub(super) struct AgentLoopOptions {
     pub(super) session_parent_id: Option<String>,
 }
 
+struct AgentRunContext {
+    events: TuiEventSender,
+    subagent_manager: Arc<SubagentManager>,
+    options: AgentRunOptions,
+    cancel_rx: watch::Receiver<bool>,
+}
+
 pub(super) fn spawn_agent_task(
     settings: &Settings,
     cwd: &Path,
@@ -45,25 +54,30 @@ pub(super) fn spawn_agent_task(
     event_sender: &TuiEventSender,
     subagent_manager: Arc<SubagentManager>,
     run_options: AgentRunOptions,
-) -> tokio::task::JoinHandle<()> {
+) -> (tokio::task::JoinHandle<()>, watch::Sender<bool>) {
     let settings = settings.clone();
     let cwd = cwd.to_path_buf();
     let sender = event_sender.clone();
-    tokio::spawn(async move {
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let handle = tokio::spawn(async move {
         if let Err(e) = run_agent(
             settings,
             &cwd,
             input,
             model_ref,
-            sender.clone(),
-            subagent_manager,
-            run_options,
+            AgentRunContext {
+                events: sender.clone(),
+                subagent_manager,
+                options: run_options,
+                cancel_rx,
+            },
         )
         .await
         {
             sender.send(TuiEvent::Error(e.to_string()));
         }
-    })
+    });
+    (handle, cancel_tx)
 }
 
 async fn run_agent(
@@ -71,10 +85,14 @@ async fn run_agent(
     cwd: &Path,
     prompt: Message,
     model_ref: String,
-    events: TuiEventSender,
-    subagent_manager: Arc<SubagentManager>,
-    options: AgentRunOptions,
+    context: AgentRunContext,
 ) -> anyhow::Result<()> {
+    let AgentRunContext {
+        events,
+        subagent_manager,
+        options,
+        cancel_rx,
+    } = context;
     validate_image_input_model_support(&settings, &model_ref, &prompt)?;
 
     let event_sender = events.clone();
@@ -89,11 +107,10 @@ async fn run_agent(
             session_id.clone(),
         )
     });
-    let loop_runner = create_agent_loop(
+    let loop_runner = create_agent_core(
         settings,
         cwd,
         &model_ref,
-        events,
         AgentLoopOptions {
             subagent_manager: Some(Arc::clone(&subagent_manager)),
             parent_task_id: None,
@@ -103,10 +120,16 @@ async fn run_agent(
             session_parent_id: None,
         },
     )?;
-    loop_runner
-        .run_with_question_tool(
+
+    let initial_runner_state = loop_runner
+        .session
+        .load_runner_state_snapshot()?
+        .unwrap_or_default();
+    let mut last_emitted_todo_items = initial_runner_state.todo_items;
+    let result = loop_runner
+        .run_with_runner_output_sink_cancellable(
             prompt,
-            move |request| {
+            &mut move |request| {
                 let event_sender = approval_event_sender.clone();
                 let cwd = cwd.to_path_buf();
                 async move {
@@ -127,7 +150,7 @@ async fn run_agent(
                     Ok(choice)
                 }
             },
-            move |questions| {
+            &mut move |questions| {
                 let event_sender = question_event_sender.clone();
                 async move {
                     if !allow_questions {
@@ -142,8 +165,45 @@ async fn run_agent(
                         .unwrap_or_else(|_| Err(anyhow::anyhow!("question prompt was cancelled")))
                 }
             },
+            &mut {
+                let cancel_rx = cancel_rx.clone();
+                move || {
+                    let mut cancel_rx = cancel_rx.clone();
+                    async move {
+                        if *cancel_rx.borrow() {
+                            return;
+                        }
+                        let _ = cancel_rx.changed().await;
+                    }
+                }
+            },
+            &mut |output| {
+                apply_runner_output_to_observer(
+                    &event_sender,
+                    &loop_runner.session,
+                    output,
+                    &mut last_emitted_todo_items,
+                )
+            },
+            &mut || {
+                let queued = event_sender.drain_queued_user_messages();
+                if !queued.is_empty() {
+                    event_sender.on_queued_user_messages_consumed(&queued);
+                }
+                queued
+                    .into_iter()
+                    .map(|queued| queued.message)
+                    .collect::<Vec<_>>()
+            },
         )
-        .await?;
+        .await;
+
+    if let Err(err) = result {
+        if is_cancellation_error(&err) {
+            return Ok(());
+        }
+        return Err(err);
+    }
 
     if let Some((stop_tx, handle)) = subagent_poller.take() {
         let _ = stop_tx.send(());
@@ -333,18 +393,14 @@ pub(super) fn persist_approval_choice_if_needed(
     }
 }
 
-pub(super) fn create_agent_loop<E>(
+pub(super) fn create_agent_core(
     settings: Settings,
     cwd: &Path,
     model_ref: &str,
-    events: E,
     options: AgentLoopOptions,
 ) -> anyhow::Result<
-    AgentLoop<OpenAiCompatibleProvider, E, ToolRegistry, PermissionMatcher, SessionStore>,
->
-where
-    E: AgentEvents,
-{
+    AgentCore<OpenAiCompatibleProvider, ToolRegistry, PermissionMatcher, SessionStore>,
+> {
     let AgentLoopOptions {
         subagent_manager,
         parent_task_id,
@@ -399,7 +455,7 @@ where
     let tool_schemas = tool_registry.schemas();
     let permissions = PermissionMatcher::new(settings.clone(), &tool_schemas, cwd);
 
-    Ok(AgentLoop {
+    Ok(AgentCore {
         provider,
         tools: tool_registry,
         approvals: permissions,
@@ -407,7 +463,6 @@ where
         model: selected.model.id.clone(),
         system_prompt: settings.agent.resolved_system_prompt(),
         session,
-        events,
     })
 }
 
@@ -462,7 +517,7 @@ pub(super) fn handle_chat_message(
         };
 
         let subagent_manager = current_subagent_manager(settings, cwd);
-        let handle = spawn_agent_task(
+        let (handle, cancel_tx) = spawn_agent_task(
             settings,
             cwd,
             message,
@@ -475,21 +530,17 @@ pub(super) fn handle_chat_message(
                 allow_questions: true,
             },
         );
-        app.set_agent_task(handle);
+        app.set_agent_task_with_cancel(handle, cancel_tx);
     } else {
         app.set_processing(false);
     }
 }
 
-pub(super) async fn run_single_prompt_with_events<E>(
+pub(super) async fn run_single_prompt(
     settings: Settings,
     cwd: &Path,
     prompt: String,
-    events: E,
-) -> anyhow::Result<String>
-where
-    E: AgentEvents,
-{
+) -> anyhow::Result<String> {
     let default_model_ref = settings.selected_model_ref().to_string();
     let session_id = Uuid::new_v4().to_string();
     let fallback_title = fallback_session_title(&prompt);
@@ -520,11 +571,13 @@ where
         });
     }
 
-    let loop_runner = create_agent_loop(
+    let render = render::LiveRender::new();
+    render.begin_turn();
+
+    let loop_runner = create_agent_core(
         settings.clone(),
         cwd,
         &default_model_ref,
-        events,
         AgentLoopOptions {
             subagent_manager: Some(current_subagent_manager(&settings, cwd)),
             parent_task_id: None,
@@ -535,8 +588,14 @@ where
         },
     )?;
 
+    let initial_runner_state = loop_runner
+        .session
+        .load_runner_state_snapshot()?
+        .unwrap_or_default();
+    let mut last_emitted_todo_items = initial_runner_state.todo_items;
+
     loop_runner
-        .run_with_question_tool(
+        .run_with_runner_output_sink_cancellable(
             Message {
                 role: Role::User,
                 content: prompt,
@@ -544,7 +603,7 @@ where
                 tool_call_id: None,
                 tool_calls: Vec::new(),
             },
-            |request| {
+            &mut |request| {
                 let cwd = cwd.to_path_buf();
                 async move {
                     let question = approval_request_to_question_prompt(&request);
@@ -555,7 +614,17 @@ where
                     Ok::<crate::core::ApprovalChoice, anyhow::Error>(choice)
                 }
             },
-            |questions| async move { Ok(render::ask_questions(&questions)?) },
+            &mut |questions| async move { Ok(render::ask_questions(&questions)?) },
+            &mut || std::future::pending::<()>(),
+            &mut |output| {
+                apply_runner_output_to_observer(
+                    &render,
+                    &loop_runner.session,
+                    output,
+                    &mut last_emitted_todo_items,
+                )
+            },
+            &mut Vec::new,
         )
         .await
 }

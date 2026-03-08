@@ -1,5 +1,5 @@
 use hh_cli::cli::render::{LiveRender, ThinkingMode, format_args_preview, truncate_text};
-use hh_cli::core::agent::AgentEvents;
+use hh_cli::core::RunnerOutputObserver;
 use serde_json::json;
 
 #[test]

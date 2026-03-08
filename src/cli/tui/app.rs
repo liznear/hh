@@ -7,7 +7,12 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::text::Line;
 use serde::Deserialize;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
+
+struct RunningAgentTask {
+    handle: tokio::task::JoinHandle<()>,
+    cancel_tx: watch::Sender<bool>,
+}
 
 type QuestionResponder = std::sync::Arc<
     std::sync::Mutex<Option<oneshot::Sender<anyhow::Result<crate::core::QuestionAnswers>>>>,
@@ -318,7 +323,7 @@ pub struct ChatApp {
     pub available_agents: Vec<AgentOptionView>,
     subagent_session_stack: Vec<SubagentSessionView>,
     // Running agent task handle (for cancellation)
-    agent_task: Option<tokio::task::JoinHandle<()>>,
+    agent_task: Option<RunningAgentTask>,
     esc_interrupt_pending: bool,
     // Footer state for completed agent runs
     last_run_duration: Option<String>,
@@ -664,17 +669,6 @@ impl ChatApp {
                 }
                 self.mark_dirty();
             }
-            TuiEvent::TodoItemsChanged(items) => {
-                self.todo_items = items
-                    .iter()
-                    .map(|item| TodoItemView {
-                        content: item.content.clone(),
-                        status: TodoStatus::from_core(item.status.clone()),
-                        priority: TodoPriority::from_core(item.priority.clone()),
-                    })
-                    .collect();
-                self.mark_dirty();
-            }
             TuiEvent::AssistantDelta(delta) => {
                 if let Some(ChatMessage::Assistant(existing)) = self.messages.last_mut() {
                     existing.push_str(delta);
@@ -684,9 +678,18 @@ impl ChatApp {
                 self.messages.push(ChatMessage::Assistant(delta.clone()));
                 self.mark_message_dirty();
             }
-            TuiEvent::ContextUsage(tokens) => {
-                self.last_context_tokens = Some(*tokens);
-                self.mark_sidebar_dirty();
+            TuiEvent::RunnerStateUpdated(state) => {
+                self.last_context_tokens = Some(state.context_tokens);
+                self.todo_items = state
+                    .todo_items
+                    .iter()
+                    .map(|item| TodoItemView {
+                        content: item.content.clone(),
+                        status: TodoStatus::from_core(item.status.clone()),
+                        priority: TodoPriority::from_core(item.priority.clone()),
+                    })
+                    .collect();
+                self.mark_dirty();
             }
             TuiEvent::AssistantDone => {
                 self.set_processing(false);
@@ -722,6 +725,51 @@ impl ChatApp {
                     // Reset interrupted flag
                     self.last_run_interrupted = false;
                 }
+            }
+            TuiEvent::Cancelled => {
+                self.set_processing(false);
+
+                if let (Some(duration), Some(agent)) = (
+                    self.last_run_duration.take(),
+                    self.selected_agent().cloned(),
+                ) {
+                    let provider_name = self
+                        .available_models
+                        .iter()
+                        .find(|model| model.full_id == self.selected_model_ref())
+                        .map(|model| model.provider_name.clone())
+                        .unwrap_or_default();
+                    let model_name = self
+                        .available_models
+                        .iter()
+                        .find(|model| model.full_id == self.selected_model_ref())
+                        .map(|model| model.model_name.clone())
+                        .unwrap_or_default();
+
+                    self.messages.push(ChatMessage::Footer {
+                        agent_display_name: agent.display_name.clone(),
+                        provider_name,
+                        model_name,
+                        duration: duration.clone(),
+                        interrupted: true,
+                    });
+                    self.mark_dirty();
+                    self.last_run_interrupted = false;
+                }
+            }
+            TuiEvent::ApprovalRequired { call_id, request } => {
+                self.messages.push(ChatMessage::Thinking(format!(
+                    "approval required ({call_id}): {}",
+                    request.body
+                )));
+                self.mark_message_dirty();
+            }
+            TuiEvent::QuestionRequired { call_id, prompts } => {
+                self.messages.push(ChatMessage::Thinking(format!(
+                    "question required ({call_id}): {} prompt(s)",
+                    prompts.len()
+                )));
+                self.mark_message_dirty();
             }
             TuiEvent::QueuedMessagesConsumed(indexes) => {
                 self.clear_queued_user_messages(indexes);
@@ -1435,18 +1483,37 @@ impl ChatApp {
 
     /// Cancel any running agent task
     pub fn cancel_agent_task(&mut self) {
-        if let Some(handle) = self.agent_task.take() {
+        if let Some(task) = self.agent_task.take() {
             self.bump_run_epoch();
-            handle.abort();
+            let _ = task.cancel_tx.send(true);
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    if !task.handle.is_finished() {
+                        task.handle.abort();
+                    }
+                });
+            } else if !task.handle.is_finished() {
+                task.handle.abort();
+            }
         }
         self.clear_pending_esc_interrupt();
     }
 
     /// Set the agent task handle
     pub fn set_agent_task(&mut self, handle: tokio::task::JoinHandle<()>) {
+        let (cancel_tx, _cancel_rx) = watch::channel(false);
+        self.set_agent_task_with_cancel(handle, cancel_tx);
+    }
+
+    pub fn set_agent_task_with_cancel(
+        &mut self,
+        handle: tokio::task::JoinHandle<()>,
+        cancel_tx: watch::Sender<bool>,
+    ) {
         // Cancel any existing task first
         self.cancel_agent_task();
-        self.agent_task = Some(handle);
+        self.agent_task = Some(RunningAgentTask { handle, cancel_tx });
     }
 
     pub fn arm_esc_interrupt(&mut self) {

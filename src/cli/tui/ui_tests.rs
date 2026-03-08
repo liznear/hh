@@ -228,7 +228,12 @@ fn context_usage_uses_provider_reported_tokens_when_available() {
     app.messages
         .push(ChatMessage::Assistant("local estimate".to_string()));
 
-    app.handle_event(&TuiEvent::ContextUsage(4321));
+    app.handle_event(&TuiEvent::RunnerStateUpdated(
+        crate::core::agent::RunnerState {
+            todo_items: Vec::new(),
+            context_tokens: 4321,
+        },
+    ));
 
     let (used, _) = app.context_usage();
     assert_eq!(used, 4321);

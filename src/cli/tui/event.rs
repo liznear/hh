@@ -5,7 +5,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use crate::core::agent::AgentEvents;
+use crate::core::RunnerOutputObserver;
 
 #[derive(Debug, Clone)]
 pub struct SubagentEventItem {
@@ -44,10 +44,18 @@ pub enum TuiEvent {
         name: String,
         result: crate::tool::ToolResult,
     },
-    TodoItemsChanged(Vec<crate::core::TodoItem>),
     AssistantDelta(String),
-    ContextUsage(usize),
+    RunnerStateUpdated(crate::core::agent::RunnerState),
     AssistantDone,
+    Cancelled,
+    ApprovalRequired {
+        call_id: String,
+        request: crate::core::ApprovalRequest,
+    },
+    QuestionRequired {
+        call_id: String,
+        prompts: Vec<crate::core::QuestionPrompt>,
+    },
     QueuedMessagesConsumed(Vec<usize>),
     SessionTitle(String),
     CompactionStart,
@@ -103,9 +111,26 @@ impl TuiEventSender {
             queued.push_back(message);
         }
     }
+
+    pub fn drain_queued_user_messages(&self) -> Vec<crate::core::QueuedUserMessage> {
+        let Ok(mut queued) = self.queued_user_messages.lock() else {
+            return Vec::new();
+        };
+        queued.drain(..).collect()
+    }
+
+    pub fn on_queued_user_messages_consumed(&self, messages: &[crate::core::QueuedUserMessage]) {
+        let consumed_indexes = messages
+            .iter()
+            .filter_map(|message| message.message_index)
+            .collect::<Vec<_>>();
+        if !consumed_indexes.is_empty() {
+            self.send(TuiEvent::QueuedMessagesConsumed(consumed_indexes));
+        }
+    }
 }
 
-impl AgentEvents for TuiEventSender {
+impl RunnerOutputObserver for TuiEventSender {
     fn on_thinking(&self, text: &str) {
         self.send(TuiEvent::Thinking(text.to_string()));
     }
@@ -124,36 +149,37 @@ impl AgentEvents for TuiEventSender {
         });
     }
 
-    fn on_todo_items_changed(&self, items: &[crate::core::TodoItem]) {
-        self.send(TuiEvent::TodoItemsChanged(items.to_vec()));
-    }
-
     fn on_assistant_delta(&self, delta: &str) {
         self.send(TuiEvent::AssistantDelta(delta.to_string()));
     }
 
-    fn on_context_usage(&self, tokens: usize) {
-        self.send(TuiEvent::ContextUsage(tokens));
+    fn on_runner_state_updated(&self, state: &crate::core::agent::RunnerState) {
+        self.send(TuiEvent::RunnerStateUpdated(state.clone()));
     }
 
     fn on_assistant_done(&self) {
         self.send(TuiEvent::AssistantDone);
     }
 
-    fn drain_queued_user_messages(&self) -> Vec<crate::core::QueuedUserMessage> {
-        let Ok(mut queued) = self.queued_user_messages.lock() else {
-            return Vec::new();
-        };
-        queued.drain(..).collect()
+    fn on_error(&self, message: &str) {
+        self.send(TuiEvent::Error(message.to_string()));
     }
 
-    fn on_queued_user_messages_consumed(&self, messages: &[crate::core::QueuedUserMessage]) {
-        let consumed_indexes = messages
-            .iter()
-            .filter_map(|message| message.message_index)
-            .collect::<Vec<_>>();
-        if !consumed_indexes.is_empty() {
-            self.send(TuiEvent::QueuedMessagesConsumed(consumed_indexes));
-        }
+    fn on_approval_required(&self, call_id: &str, request: &crate::core::ApprovalRequest) {
+        self.send(TuiEvent::ApprovalRequired {
+            call_id: call_id.to_string(),
+            request: request.clone(),
+        });
+    }
+
+    fn on_question_required(&self, call_id: &str, prompts: &[crate::core::QuestionPrompt]) {
+        self.send(TuiEvent::QuestionRequired {
+            call_id: call_id.to_string(),
+            prompts: prompts.to_vec(),
+        });
+    }
+
+    fn on_cancelled(&self) {
+        self.send(TuiEvent::Cancelled);
     }
 }

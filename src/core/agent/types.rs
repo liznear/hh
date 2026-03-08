@@ -1,6 +1,4 @@
-use crate::core::{
-    ApprovalChoice, ApprovalRequest, Message, QuestionAnswers, QuestionPrompt, TodoItem, ToolCall,
-};
+use crate::core::{ApprovalChoice, ApprovalRequest, Message, QuestionPrompt, TodoItem, ToolCall};
 use crate::tool::ToolResult;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -68,7 +66,6 @@ pub struct ErrorPayload {
 
 #[derive(Debug, Clone)]
 pub enum CoreInput {
-    Message(Message),
     ToolResult {
         call_id: String,
         name: String,
@@ -92,28 +89,29 @@ pub enum CoreOutput {
 #[derive(Debug, Clone)]
 pub enum RunnerInput {
     Message(Message),
-    ApprovalDecision {
-        call_id: String,
-        choice: ApprovalChoice,
-    },
-    QuestionAnswered {
-        call_id: String,
-        answers: QuestionAnswers,
-    },
     Cancel,
 }
 
 #[derive(Debug, Clone)]
 pub enum RunnerOutput {
     ThinkingDelta(String),
+    ThinkingRecorded(String),
     AssistantDelta(String),
     MessageAdded(Message),
+
+    ToolCallRecorded(ToolCall),
 
     StateUpdated(RunnerState),
 
     ApprovalRequired {
         call_id: String,
         request: ApprovalRequest,
+    },
+    ApprovalRecorded {
+        tool_name: String,
+        approved: bool,
+        action: Option<Value>,
+        choice: Option<ApprovalChoice>,
     },
     QuestionRequired {
         call_id: String,
@@ -131,6 +129,8 @@ pub enum RunnerOutput {
         result: ToolResult,
     },
 
+    SnapshotUpdated(RunnerState),
+    Cancelled,
     TurnComplete,
     Error(ErrorPayload),
 }

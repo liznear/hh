@@ -32,25 +32,6 @@ pub struct QueuedUserMessage {
     pub message_index: Option<usize>,
 }
 
-pub trait AgentEvents: Send + Sync {
-    fn on_thinking(&self, _text: &str) {}
-    fn on_tool_start(&self, _name: &str, _args: &Value) {}
-    fn on_tool_end(&self, _name: &str, _result: &crate::tool::ToolResult) {}
-    fn on_todo_items_changed(&self, _items: &[crate::core::TodoItem]) {}
-    fn on_assistant_delta(&self, _delta: &str) {}
-    fn on_context_usage(&self, _tokens: usize) {}
-    fn on_assistant_done(&self) {}
-    fn drain_queued_user_messages(&self) -> Vec<QueuedUserMessage> {
-        Vec::new()
-    }
-    fn on_queued_user_messages_consumed(&self, _messages: &[QueuedUserMessage]) {}
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NoopEvents;
-
-impl AgentEvents for NoopEvents {}
-
 #[async_trait]
 pub trait Provider: Send + Sync {
     async fn complete(&self, req: ProviderRequest) -> anyhow::Result<ProviderResponse>;
@@ -98,9 +79,22 @@ pub trait ApprovalPolicy: Send + Sync {
 
 pub trait SessionSink: Send + Sync {
     fn append(&self, event: &crate::session::SessionEvent) -> anyhow::Result<()>;
+
+    fn save_runner_state_snapshot(
+        &self,
+        _snapshot: &crate::core::agent::RunnerState,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 pub trait SessionReader: Send + Sync {
     fn replay_messages(&self) -> anyhow::Result<Vec<Message>>;
     fn replay_events(&self) -> anyhow::Result<Vec<crate::session::SessionEvent>>;
+
+    fn load_runner_state_snapshot(
+        &self,
+    ) -> anyhow::Result<Option<crate::core::agent::RunnerState>> {
+        Ok(None)
+    }
 }
