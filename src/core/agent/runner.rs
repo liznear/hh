@@ -75,53 +75,6 @@ where
         }
     }
 
-    pub fn restore_session_approvals(
-        &mut self,
-        replayed_events: &[SessionEvent],
-    ) -> anyhow::Result<()> {
-        for event in replayed_events {
-            let SessionEvent::Approval {
-                approved: true,
-                action: Some(action),
-                choice: Some(choice),
-                ..
-            } = event
-            else {
-                continue;
-            };
-
-            if !matches!(
-                choice,
-                ApprovalChoice::AllowSession | ApprovalChoice::AllowAlways
-            ) {
-                continue;
-            }
-
-            if action
-                .get("operation")
-                .and_then(|value| value.as_str())
-                .is_some_and(|value| value == "tool_execution")
-            {
-                if let Some(tool_name) = action.get("tool_name").and_then(|value| value.as_str()) {
-                    self.session_allowed_actions
-                        .insert(session_approval_key(tool_name, action));
-                    if *choice == ApprovalChoice::AllowAlways
-                        && let Some(rule) = bash_permission_rule_from_action(action)
-                    {
-                        self.session_allowed_bash_rules.insert(rule.to_string());
-                    }
-                }
-                continue;
-            }
-
-            let _ = self
-                .tools
-                .apply_approval_decision(action, ApprovalChoice::AllowSession)?;
-        }
-
-        Ok(())
-    }
-
     pub fn hydrate_state_from_replayed_tool_results(
         &mut self,
         replayed_events: &[SessionEvent],

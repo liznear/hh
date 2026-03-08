@@ -131,7 +131,6 @@ where
                 context_tokens: runner_snapshot.context_tokens,
             },
         );
-        runner.restore_session_approvals(&replayed_events)?;
         runner
             .hydrate_state_from_replayed_tool_results(&replayed_events, loaded_snapshot.is_some());
 
