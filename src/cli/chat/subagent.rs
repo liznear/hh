@@ -131,13 +131,13 @@ async fn run_subagent_execution(
 
     match loop_runner
         .run_with_runner_output_sink_cancellable(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: request.prompt,
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             &mut |_request| async {
                 Ok::<crate::core::ApprovalChoice, anyhow::Error>(
                     crate::core::ApprovalChoice::AllowSession,

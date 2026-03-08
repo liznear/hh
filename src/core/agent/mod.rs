@@ -61,7 +61,11 @@ where
     A: ApprovalPolicy,
     S: SessionSink + SessionReader,
 {
-    pub async fn run<AP, APFut>(&self, prompt: Message, mut approve: AP) -> anyhow::Result<String>
+    pub async fn run<AP, APFut>(
+        &self,
+        initial_messages: Vec<Message>,
+        mut approve: AP,
+    ) -> anyhow::Result<String>
     where
         AP: FnMut(ApprovalRequest) -> APFut,
         APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
@@ -75,7 +79,7 @@ where
             .unwrap_or_default();
         let mut last_emitted_todo_items = initial_runner_state.todo_items;
         self.run_with_runner_output_sink_cancellable(
-            prompt,
+            initial_messages,
             &mut approve,
             &mut ask_question,
             &mut || std::future::pending::<()>(),
@@ -94,7 +98,7 @@ where
 
     pub async fn run_with_runner_output_sink_cancellable<AP, APFut, Q, QFut, C, CFut, O, D>(
         &self,
-        prompt: Message,
+        initial_messages: Vec<Message>,
         approve: &mut AP,
         ask_question: &mut Q,
         cancel: &mut C,
@@ -143,9 +147,11 @@ where
         }
 
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(64);
-        input_tx
-            .try_send(RunnerInput::Message(prompt))
-            .map_err(|_| anyhow::anyhow!("failed to enqueue initial runner input"))?;
+        for message in initial_messages {
+            input_tx
+                .try_send(RunnerInput::Message(message))
+                .map_err(|_| anyhow::anyhow!("failed to enqueue initial runner input"))?;
+        }
 
         let request_queue = RunnerOutputQueue::default();
         let request_notify = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -569,13 +575,13 @@ mod tests {
 
         let result = agent
             .run(
-                Message {
+                vec![Message {
                     role: Role::User,
                     content: "run checks".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
-                },
+                }],
                 move |_request| {
                     let approval_count = approval_count_for_closure.clone();
                     async move {
@@ -693,13 +699,13 @@ mod tests {
 
         let result = agent
             .run(
-                Message {
+                vec![Message {
                     role: Role::User,
                     content: "run bash commands".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
-                },
+                }],
                 move |_request| {
                     let approval_count = approval_count_for_closure.clone();
                     async move {
@@ -812,13 +818,13 @@ mod tests {
 
         let result = agent
             .run_with_runner_output_sink_cancellable(
-                Message {
+                vec![Message {
                     role: Role::User,
                     content: "initial prompt".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
-                },
+                }],
                 &mut approve,
                 &mut ask_question,
                 &mut || std::future::pending::<()>(),
@@ -923,13 +929,13 @@ mod tests {
 
         let result = agent
             .run(
-                Message {
+                vec![Message {
                     role: Role::User,
                     content: "resume".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
-                },
+                }],
                 |_request| async { Ok(ApprovalChoice::AllowOnce) },
             )
             .await;
@@ -1027,13 +1033,13 @@ mod tests {
 
         let result = agent
             .run(
-                Message {
+                vec![Message {
                     role: Role::User,
                     content: "run todo read".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
-                },
+                }],
                 |_request| async { Ok(ApprovalChoice::AllowOnce) },
             )
             .await;
@@ -1143,13 +1149,13 @@ mod tests {
 
         let first_result = first_agent
             .run(
-                Message {
+                vec![Message {
                     role: Role::User,
                     content: "seed todo state".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
-                },
+                }],
                 |_request| async { Ok(ApprovalChoice::AllowOnce) },
             )
             .await;
@@ -1193,13 +1199,13 @@ mod tests {
 
         let second_result = second_agent
             .run(
-                Message {
+                vec![Message {
                     role: Role::User,
                     content: "resume and continue".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
-                },
+                }],
                 |_request| async { Ok(ApprovalChoice::AllowOnce) },
             )
             .await;
@@ -1275,13 +1281,13 @@ mod tests {
         let result = timeout(
             Duration::from_millis(250),
             agent.run_with_runner_output_sink_cancellable(
-                Message {
+                vec![Message {
                     role: Role::User,
                     content: "cancel this run".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
-                },
+                }],
                 &mut approve,
                 &mut ask_question,
                 &mut cancel,
@@ -1355,13 +1361,13 @@ mod tests {
 
         let result = agent
             .run_with_runner_output_sink_cancellable(
-                Message {
+                vec![Message {
                     role: Role::User,
                     content: "burst".to_string(),
                     attachments: Vec::new(),
                     tool_call_id: None,
                     tool_calls: Vec::new(),
-                },
+                }],
                 &mut approve,
                 &mut ask_question,
                 &mut || std::future::pending::<()>(),

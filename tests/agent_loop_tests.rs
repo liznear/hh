@@ -213,7 +213,7 @@ async fn agent_loop_stops_on_final_answer() {
     let agent = context.make_agent(provider, 3);
 
     let out = agent
-        .run(TestData::user_message("hello"), |_request| async {
+        .run(vec![TestData::user_message("hello")], |_request| async {
             Ok::<ApprovalChoice, anyhow::Error>(ApprovalChoice::AllowSession)
         })
         .await
@@ -252,7 +252,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
     let mut last_emitted_todo_items = Vec::new();
     let _ = agent
         .run_with_runner_output_sink_cancellable(
-            TestData::user_message("hello"),
+            vec![TestData::user_message("hello")],
             &mut |_request| async {
                 Ok::<ApprovalChoice, anyhow::Error>(ApprovalChoice::AllowSession)
             },
@@ -328,13 +328,13 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
 
     let _ = agent
         .run(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: "hello".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
                     hh_cli::core::ApprovalChoice::AllowSession,
@@ -426,13 +426,13 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
 
     let out = agent
         .run(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: "hello".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
                     hh_cli::core::ApprovalChoice::AllowSession,
@@ -486,13 +486,13 @@ async fn agent_loop_respects_max_steps_when_set() {
 
     let err = agent
         .run(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: "hello".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
                     hh_cli::core::ApprovalChoice::AllowSession,
@@ -570,13 +570,13 @@ async fn agent_loop_injects_runtime_todo_state_message() {
 
     let out = agent
         .run(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: "plan and execute".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
                     hh_cli::core::ApprovalChoice::AllowSession,
@@ -680,13 +680,13 @@ async fn agent_loop_todo_read_returns_current_runtime_snapshot() {
 
     let out = agent
         .run(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: "manage todos".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
                     hh_cli::core::ApprovalChoice::AllowSession,
@@ -788,13 +788,13 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
     let mut last_emitted_todo_items = Vec::new();
     let out = agent
         .run_with_runner_output_sink_cancellable(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: "ask me".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             &mut |_request| async {
                 Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
                     hh_cli::core::ApprovalChoice::AllowSession,
@@ -868,13 +868,16 @@ async fn approval_choice_is_remembered_for_repeated_ask_policy_tool_calls() {
         let approval_count_for_handler = Arc::clone(&approval_count);
 
         let out = agent
-            .run(TestData::user_message("write two files"), move |_request| {
-                let approval_count = Arc::clone(&approval_count_for_handler);
-                async move {
-                    *approval_count.lock().expect("approval count") += 1;
-                    Ok::<ApprovalChoice, anyhow::Error>(approval_choice)
-                }
-            })
+            .run(
+                vec![TestData::user_message("write two files")],
+                move |_request| {
+                    let approval_count = Arc::clone(&approval_count_for_handler);
+                    async move {
+                        *approval_count.lock().expect("approval count") += 1;
+                        Ok::<ApprovalChoice, anyhow::Error>(approval_choice)
+                    }
+                },
+            )
             .await
             .expect("run");
 
@@ -940,13 +943,13 @@ async fn bash_approval_request_includes_llm_stated_purpose() {
     let captured_for_handler = Arc::clone(&captured);
     let _ = agent
         .run(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: "show changed files".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             move |request| {
                 let captured_for_handler = Arc::clone(&captured_for_handler);
                 async move {
@@ -1025,13 +1028,13 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
     let first_prompt_count_handler = Arc::clone(&first_prompt_count);
     agent1
         .run(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: "first".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             move |_request| {
                 let first_prompt_count = Arc::clone(&first_prompt_count_handler);
                 async move {
@@ -1100,13 +1103,13 @@ async fn allow_session_for_tool_is_restored_across_new_agent_loops() {
     let second_prompt_count_handler = Arc::clone(&second_prompt_count);
     agent2
         .run(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: "second".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             move |_request| {
                 let second_prompt_count = Arc::clone(&second_prompt_count_handler);
                 async move {
@@ -1198,13 +1201,13 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
     let first_prompt_count_handler = Arc::clone(&first_prompt_count);
     agent1
         .run(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: "first".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             move |_request| {
                 let first_prompt_count = Arc::clone(&first_prompt_count_handler);
                 async move {
@@ -1273,13 +1276,13 @@ async fn allow_session_for_folder_is_restored_across_new_agent_loops() {
     let second_prompt_count_handler = Arc::clone(&second_prompt_count);
     agent2
         .run(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: "second".to_string(),
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             move |_request| {
                 let second_prompt_count = Arc::clone(&second_prompt_count_handler);
                 async move {

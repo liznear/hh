@@ -128,7 +128,7 @@ async fn run_agent(
     let mut last_emitted_todo_items = initial_runner_state.todo_items;
     let result = loop_runner
         .run_with_runner_output_sink_cancellable(
-            prompt,
+            vec![prompt],
             &mut move |request| {
                 let event_sender = approval_event_sender.clone();
                 let cwd = cwd.to_path_buf();
@@ -596,13 +596,13 @@ pub(super) async fn run_single_prompt(
 
     loop_runner
         .run_with_runner_output_sink_cancellable(
-            Message {
+            vec![Message {
                 role: Role::User,
                 content: prompt,
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
-            },
+            }],
             &mut |request| {
                 let cwd = cwd.to_path_buf();
                 async move {
