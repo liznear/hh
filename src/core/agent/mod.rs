@@ -10,7 +10,7 @@ pub use types::{
 };
 
 use self::core::AgentCore as EngineCore;
-use self::runner::{AgentRunner, is_cancellation_error};
+use self::runner::AgentRunner;
 use crate::core::{
     ApprovalChoice, ApprovalPolicy, ApprovalRequest, Message, Provider, QuestionAnswers,
     QuestionPrompt, SessionReader, SessionSink, ToolExecutor,
@@ -18,6 +18,10 @@ use crate::core::{
 use crate::session::{SessionEvent, event_id};
 use std::collections::VecDeque;
 use std::future::Future;
+
+type RunnerOutputQueue = std::sync::Arc<std::sync::Mutex<VecDeque<RunnerOutput>>>;
+type EmitErrorSlot = std::sync::Arc<std::sync::Mutex<Option<String>>>;
+type RunnerInputSender = tokio::sync::mpsc::Sender<RunnerInput>;
 
 pub trait RunnerOutputObserver: Send + Sync {
     fn on_thinking(&self, _text: &str) {}
@@ -144,13 +148,31 @@ where
             .try_send(RunnerInput::Message(prompt))
             .map_err(|_| anyhow::anyhow!("failed to enqueue initial runner input"))?;
 
-        let output_queue =
-            std::sync::Arc::new(std::sync::Mutex::new(VecDeque::<RunnerOutput>::new()));
-        let output_notify = std::sync::Arc::new(tokio::sync::Notify::new());
-        let queue_for_emit = output_queue.clone();
-        let notify_for_emit = output_notify.clone();
-        let mut emit_wrapped = move |output| {
-            if let Ok(mut queue) = queue_for_emit.lock() {
+        let request_queue = RunnerOutputQueue::default();
+        let request_notify = std::sync::Arc::new(tokio::sync::Notify::new());
+        let emit_error = EmitErrorSlot::default();
+        let queue_for_emit = request_queue.clone();
+        let notify_for_emit = request_notify.clone();
+        let emit_error_for_emit = emit_error.clone();
+        let mut emit_wrapped = move |output: RunnerOutput| {
+            let requires_follow_up = matches!(
+                output,
+                RunnerOutput::ApprovalRequired { .. } | RunnerOutput::QuestionRequired { .. }
+            );
+
+            if let Err(err) = emit_output(output.clone()) {
+                if let Ok(mut slot) = emit_error_for_emit.lock()
+                    && slot.is_none()
+                {
+                    *slot = Some(err.to_string());
+                }
+                notify_for_emit.notify_one();
+                return;
+            }
+
+            if requires_follow_up
+                && let Ok(mut queue) = queue_for_emit.lock()
+            {
                 queue.push_back(output);
                 notify_for_emit.notify_one();
             }
@@ -175,59 +197,104 @@ where
 
         let mut cancel_sent = false;
         let run_result = loop {
-            while let Some(output) = {
-                let Ok(mut queue) = output_queue.lock() else {
-                    return Err(anyhow::anyhow!("runner output queue poisoned"));
-                };
-                queue.pop_front()
-            } {
-                emit_output(output.clone())?;
-
-                match output {
-                    RunnerOutput::ApprovalRequired { call_id, request } => {
-                        let choice = approve(request).await?;
-                        input_tx
-                            .send(RunnerInput::ApprovalDecision { call_id, choice })
-                            .await
-                            .map_err(|_| anyhow::anyhow!("runner input channel closed"))?;
-                    }
-                    RunnerOutput::QuestionRequired { call_id, prompts } => {
-                        let answers = ask_question(prompts).await?;
-                        input_tx
-                            .send(RunnerInput::QuestionAnswered { call_id, answers })
-                            .await
-                            .map_err(|_| anyhow::anyhow!("runner input channel closed"))?;
-                    }
-                    _ => {}
-                }
+            if let Some(err) = take_emit_error(&emit_error) {
+                let _ = input_tx.send(RunnerInput::Cancel).await;
+                return Err(anyhow::anyhow!(err));
             }
 
+            drain_follow_up_requests(&request_queue, &input_tx, approve, ask_question).await?;
+
             tokio::select! {
-                result = &mut run_future => break result,
+                biased;
+                _ = request_notify.notified() => {}
                 _ = cancel(), if !cancel_sent => {
                     cancel_sent = true;
                     let _ = input_tx.send(RunnerInput::Cancel).await;
                 }
-                _ = output_notify.notified() => {}
+                result = &mut run_future => break result,
             }
         };
 
-        while let Some(output) = {
-            let Ok(mut queue) = output_queue.lock() else {
-                return Err(anyhow::anyhow!("runner output queue poisoned"));
-            };
-            queue.pop_front()
-        } {
-            emit_output(output)?;
+        if let Some(err) = take_emit_error(&emit_error) {
+            return Err(anyhow::anyhow!(err));
         }
+
+        drain_follow_up_requests(&request_queue, &input_tx, approve, ask_question).await?;
 
         match run_result {
             Ok(Some(final_answer)) => Ok(final_answer),
             Ok(None) => anyhow::bail!("runner input loop ended without final answer"),
-            Err(err) if is_cancellation_error(&err) => Err(err),
             Err(err) => Err(err),
         }
     }
+}
+
+fn pop_output_queue(
+    output_queue: &RunnerOutputQueue,
+) -> anyhow::Result<Option<RunnerOutput>> {
+    let Ok(mut queue) = output_queue.lock() else {
+        return Err(anyhow::anyhow!("runner output queue poisoned"));
+    };
+    Ok(queue.pop_front())
+}
+
+fn take_emit_error(emit_error: &EmitErrorSlot) -> Option<String> {
+    let Ok(mut slot) = emit_error.lock() else {
+        return Some("runner emit error slot poisoned".to_string());
+    };
+    slot.take()
+}
+
+async fn drain_follow_up_requests<AP, APFut, Q, QFut>(
+    request_queue: &RunnerOutputQueue,
+    input_tx: &RunnerInputSender,
+    approve: &mut AP,
+    ask_question: &mut Q,
+) -> anyhow::Result<()>
+where
+    AP: FnMut(ApprovalRequest) -> APFut,
+    APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
+    Q: FnMut(Vec<QuestionPrompt>) -> QFut,
+    QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
+{
+    while let Some(output) = pop_output_queue(request_queue)? {
+        handle_follow_up_request(output, input_tx, approve, ask_question).await?;
+    }
+
+    Ok(())
+}
+
+async fn handle_follow_up_request<AP, APFut, Q, QFut>(
+    output: RunnerOutput,
+    input_tx: &RunnerInputSender,
+    approve: &mut AP,
+    ask_question: &mut Q,
+) -> anyhow::Result<()>
+where
+    AP: FnMut(ApprovalRequest) -> APFut,
+    APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
+    Q: FnMut(Vec<QuestionPrompt>) -> QFut,
+    QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
+{
+    match output {
+        RunnerOutput::ApprovalRequired { call_id, request } => {
+            let choice = approve(request).await?;
+            input_tx
+                .send(RunnerInput::ApprovalDecision { call_id, choice })
+                .await
+                .map_err(|_| anyhow::anyhow!("runner input channel closed"))?;
+        }
+        RunnerOutput::QuestionRequired { call_id, prompts } => {
+            let answers = ask_question(prompts).await?;
+            input_tx
+                .send(RunnerInput::QuestionAnswered { call_id, answers })
+                .await
+                .map_err(|_| anyhow::anyhow!("runner input channel closed"))?;
+        }
+        _ => {}
+    }
+
+    Ok(())
 }
 
 fn push_message_and_record<S: SessionSink>(

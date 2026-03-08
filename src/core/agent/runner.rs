@@ -642,30 +642,14 @@ where
                 outcome = handle_call => outcome?
             } {
                 CallHandlingOutcome::Handled { message, changed } => {
-                    for output in lifecycle_outputs
-                        .into_inner()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    {
-                        emit_output(output);
-                    }
-                    let message_for_output = message.clone();
-                    messages.push(message.clone());
-                    emit_output(RunnerOutput::MessageAdded(message_for_output));
-                    emit_output(RunnerOutput::SnapshotUpdated(self.state.clone()));
-                    if changed {
-                        emit_output(RunnerOutput::StateUpdated(self.state.clone()));
-                    }
+                    emit_lifecycle_outputs(emit_output, lifecycle_outputs);
+                    emit_tool_message_outputs(messages, message, &self.state, changed, emit_output);
                 }
                 CallHandlingOutcome::NonBlocking {
                     call,
                     execution_args,
                 } => {
-                    for output in lifecycle_outputs
-                        .into_inner()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    {
-                        emit_output(output);
-                    }
+                    emit_lifecycle_outputs(emit_output, lifecycle_outputs);
                     let tools = self.tools;
                     pending_non_blocking.push(async move {
                         execute_non_blocking_tool(tools, call, execution_args).await
@@ -694,13 +678,7 @@ where
                 result: result.result.clone(),
             });
             let (message, changed) = self.record_tool_result(&call, result.result, result.patch)?;
-            let message_for_output = message.clone();
-            messages.push(message);
-            emit_output(RunnerOutput::MessageAdded(message_for_output));
-            emit_output(RunnerOutput::SnapshotUpdated(self.state.clone()));
-            if changed {
-                emit_output(RunnerOutput::StateUpdated(self.state.clone()));
-            }
+            emit_tool_message_outputs(messages, message, &self.state, changed, emit_output);
         }
 
         if self.has_pending_tool_calls() {
@@ -831,16 +809,15 @@ where
             match input_rx.recv().await {
                 Some(RunnerInput::Message(message)) => first_message = Some(message),
                 Some(RunnerInput::ApprovalDecision { call_id, choice }) => {
-                    if let Ok(mut queued) = pending_approvals.lock() {
-                        queued.push_back((call_id, choice));
-                        pending_approvals_notify.notify_one();
-                    }
+                    enqueue_approval(
+                        &pending_approvals,
+                        &pending_approvals_notify,
+                        call_id,
+                        choice,
+                    );
                 }
                 Some(RunnerInput::QuestionAnswered { call_id, answers }) => {
-                    if let Ok(mut queued) = pending_answers.lock() {
-                        queued.push_back((call_id, answers));
-                        pending_answers_notify.notify_one();
-                    }
+                    enqueue_answer(&pending_answers, &pending_answers_notify, call_id, answers);
                 }
                 Some(RunnerInput::Cancel) => {
                     let _ = cancel_tx.send(true);
@@ -892,6 +869,10 @@ where
             tokio::pin!(turn_future);
 
             let maybe_answer = loop {
+                for message in drain_pending_messages() {
+                    pending_messages.push_back(message);
+                }
+
                 tokio::select! {
                     turn_result = &mut turn_future => {
                         break turn_result?;
@@ -902,16 +883,20 @@ where
                                 pending_messages.push_back(message);
                             }
                             Some(RunnerInput::ApprovalDecision { call_id, choice }) => {
-                                if let Ok(mut queued) = pending_approvals.lock() {
-                                    queued.push_back((call_id, choice));
-                                    pending_approvals_notify.notify_one();
-                                }
+                                enqueue_approval(
+                                    &pending_approvals,
+                                    &pending_approvals_notify,
+                                    call_id,
+                                    choice,
+                                );
                             }
                             Some(RunnerInput::QuestionAnswered { call_id, answers }) => {
-                                if let Ok(mut queued) = pending_answers.lock() {
-                                    queued.push_back((call_id, answers));
-                                    pending_answers_notify.notify_one();
-                                }
+                                enqueue_answer(
+                                    &pending_answers,
+                                    &pending_answers_notify,
+                                    call_id,
+                                    answers,
+                                );
                             }
                             Some(RunnerInput::Cancel) => {
                                 let _ = cancel_tx.send(true);
@@ -1319,6 +1304,58 @@ pub async fn execute_non_blocking_tool<T: ToolExecutor>(
     let mut result = tools.execute(&call.name, execution_args).await;
     result.result.output = sanitize_tool_output(&result.result.output);
     (call, result)
+}
+
+fn emit_lifecycle_outputs(
+    emit_output: &mut (impl FnMut(RunnerOutput) + Send),
+    lifecycle_outputs: std::sync::Mutex<Vec<RunnerOutput>>,
+) {
+    for output in lifecycle_outputs
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    {
+        emit_output(output);
+    }
+}
+
+fn emit_tool_message_outputs(
+    messages: &mut Vec<Message>,
+    message: Message,
+    state: &RunnerState,
+    changed: bool,
+    emit_output: &mut (impl FnMut(RunnerOutput) + Send),
+) {
+    let message_for_output = message.clone();
+    messages.push(message);
+    emit_output(RunnerOutput::MessageAdded(message_for_output));
+    emit_output(RunnerOutput::SnapshotUpdated(state.clone()));
+    if changed {
+        emit_output(RunnerOutput::StateUpdated(state.clone()));
+    }
+}
+
+fn enqueue_approval(
+    pending_approvals: &std::sync::Arc<std::sync::Mutex<VecDeque<(String, ApprovalChoice)>>>,
+    notify: &std::sync::Arc<tokio::sync::Notify>,
+    call_id: String,
+    choice: ApprovalChoice,
+) {
+    if let Ok(mut queued) = pending_approvals.lock() {
+        queued.push_back((call_id, choice));
+        notify.notify_one();
+    }
+}
+
+fn enqueue_answer(
+    pending_answers: &std::sync::Arc<std::sync::Mutex<VecDeque<(String, QuestionAnswers)>>>,
+    notify: &std::sync::Arc<tokio::sync::Notify>,
+    call_id: String,
+    answers: QuestionAnswers,
+) {
+    if let Ok(mut queued) = pending_answers.lock() {
+        queued.push_back((call_id, answers));
+        notify.notify_one();
+    }
 }
 
 async fn wait_for_cancel(mut cancel_rx: watch::Receiver<bool>) {
