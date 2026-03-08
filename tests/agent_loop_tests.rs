@@ -2,13 +2,15 @@ use async_trait::async_trait;
 use hh_cli::config::settings::Settings;
 use hh_cli::core::RunnerOutputObserver;
 use hh_cli::core::agent::{AgentCore, apply_runner_output_to_observer};
+use hh_cli::core::{ApprovalChoice, Message, Role};
 use hh_cli::permission::PermissionMatcher;
 use hh_cli::provider::{
-    Message, Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent, Role, ToolCall,
+    Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent, ToolCall,
 };
 use hh_cli::session::{SessionEvent, SessionStore};
 use hh_cli::tool::registry::ToolRegistry;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -86,61 +88,134 @@ impl RunnerOutputObserver for RecordingEvents {
     }
 }
 
+struct TestContext {
+    _temp_dir: tempfile::TempDir,
+    workspace_dir: PathBuf,
+    settings: Settings,
+    session: SessionStore,
+}
+
+impl TestContext {
+    fn new() -> Self {
+        Self::with_settings(Settings::default())
+    }
+
+    fn with_settings(settings: Settings) -> Self {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let workspace_dir = temp_dir.path().join("ws");
+        std::fs::create_dir_all(&workspace_dir).expect("mkdir");
+        let session =
+            SessionStore::new(temp_dir.path(), &workspace_dir, None, None).expect("session");
+        Self {
+            _temp_dir: temp_dir,
+            workspace_dir,
+            settings,
+            session,
+        }
+    }
+
+    fn seed_workspace_file(&self, relative_path: &str, content: &str) {
+        std::fs::write(self.workspace_dir.join(relative_path), content)
+            .expect("seed workspace file");
+    }
+
+    fn make_agent(
+        &self,
+        provider: MockProvider,
+        max_steps: usize,
+    ) -> AgentCore<MockProvider, ToolRegistry, PermissionMatcher, SessionStore> {
+        let tools = ToolRegistry::new(&self.settings, &self.workspace_dir);
+        let schemas = tools.schemas();
+        AgentCore {
+            provider,
+            tools,
+            approvals: PermissionMatcher::new(self.settings.clone(), &schemas, &self.workspace_dir),
+            max_steps,
+            system_prompt: self.settings.agent.resolved_system_prompt(),
+            model: self.settings.selected_model_ref().to_string(),
+            session: self.session.clone(),
+        }
+    }
+}
+
+struct TestData;
+
+impl TestData {
+    fn user_message(content: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: content.to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }
+    }
+
+    fn assistant_message(content: &str, tool_calls: Vec<ToolCall>) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: content.to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls,
+        }
+    }
+
+    fn provider_response(
+        content: &str,
+        tool_calls: Vec<ToolCall>,
+        done: bool,
+        thinking: Option<&str>,
+    ) -> ProviderResponse {
+        ProviderResponse {
+            assistant_message: Self::assistant_message(content, tool_calls.clone()),
+            tool_calls,
+            done,
+            thinking: thinking.map(str::to_string),
+            context_tokens: None,
+        }
+    }
+}
+
+fn mock_provider_with_responses(responses: Vec<ProviderResponse>) -> MockProvider {
+    MockProvider {
+        responses: Arc::new(Mutex::new(responses)),
+        stream_events: Vec::new(),
+        requests: Arc::new(Mutex::new(Vec::new())),
+    }
+}
+
+fn mock_provider_with_responses_and_stream(
+    responses: Vec<ProviderResponse>,
+    stream_events: Vec<ProviderStreamEvent>,
+) -> MockProvider {
+    MockProvider {
+        responses: Arc::new(Mutex::new(responses)),
+        stream_events,
+        requests: Arc::new(Mutex::new(Vec::new())),
+    }
+}
+
+fn test_assert_file_content(path: &Path, expected: &str) {
+    assert_eq!(std::fs::read_to_string(path).expect("read file"), expected);
+}
+
 #[tokio::test]
 async fn agent_loop_stops_on_final_answer() {
-    let provider = MockProvider {
-        responses: Arc::new(Mutex::new(vec![ProviderResponse {
-            assistant_message: Message {
-                role: Role::Assistant,
-                content: "done".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            },
-            tool_calls: vec![],
-            done: true,
-            thinking: None,
-            context_tokens: None,
-        }])),
-        stream_events: vec![],
-        requests: Arc::new(Mutex::new(Vec::new())),
-    };
-
-    let temp = tempfile::tempdir().expect("tempdir");
-    let cwd = temp.path().join("ws");
-    std::fs::create_dir_all(&cwd).expect("mkdir");
-    std::fs::write(cwd.join("Cargo.toml"), "[package]\nname='ws'\n").expect("seed workspace file");
-
-    let settings = Settings::default();
-    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
-    let tools = ToolRegistry::new(&settings, &cwd);
-    let schemas = tools.schemas();
-
-    let agent = AgentCore {
-        provider,
-        tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
-        max_steps: 3,
-        system_prompt: settings.agent.resolved_system_prompt(),
-        model: settings.selected_model_ref().to_string(),
-        session,
-    };
+    let provider = mock_provider_with_responses(vec![TestData::provider_response(
+        "done",
+        vec![],
+        true,
+        None,
+    )]);
+    let context = TestContext::new();
+    context.seed_workspace_file("Cargo.toml", "[package]\nname='ws'\n");
+    let agent = context.make_agent(provider, 3);
 
     let out = agent
-        .run(
-            Message {
-                role: Role::User,
-                content: "hello".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            },
-            |_request| async {
-                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
-                    hh_cli::core::ApprovalChoice::AllowSession,
-                )
-            },
-        )
+        .run(TestData::user_message("hello"), |_request| async {
+            Ok::<ApprovalChoice, anyhow::Error>(ApprovalChoice::AllowSession)
+        })
         .await
         .expect("run");
 
@@ -149,81 +224,37 @@ async fn agent_loop_stops_on_final_answer() {
 
 #[tokio::test]
 async fn agent_loop_emits_stream_and_tool_events() {
-    let provider = MockProvider {
-        responses: Arc::new(Mutex::new(vec![
-            ProviderResponse {
-                assistant_message: Message {
-                    role: Role::Assistant,
-                    content: "hello world".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                },
-                tool_calls: vec![ToolCall {
+    let provider = mock_provider_with_responses_and_stream(
+        vec![
+            TestData::provider_response(
+                "hello world",
+                vec![ToolCall {
                     id: "call-1".to_string(),
                     name: "read".to_string(),
                     arguments: json!({"path":"Cargo.toml"}),
                 }],
-                done: false,
-                thinking: Some("considering".to_string()),
-                context_tokens: None,
-            },
-            ProviderResponse {
-                assistant_message: Message {
-                    role: Role::Assistant,
-                    content: "final".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                },
-                tool_calls: vec![],
-                done: true,
-                thinking: None,
-                context_tokens: None,
-            },
-        ])),
-        stream_events: vec![
+                false,
+                Some("considering"),
+            ),
+            TestData::provider_response("final", vec![], true, None),
+        ],
+        vec![
             ProviderStreamEvent::ThinkingDelta("thinking ".to_string()),
             ProviderStreamEvent::AssistantDelta("hello ".to_string()),
             ProviderStreamEvent::AssistantDelta("world".to_string()),
         ],
-        requests: Arc::new(Mutex::new(Vec::new())),
-    };
+    );
 
-    let temp = tempfile::tempdir().expect("tempdir");
-    let cwd = temp.path().join("ws");
-    std::fs::create_dir_all(&cwd).expect("mkdir");
-
-    let settings = Settings::default();
-    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
+    let context = TestContext::new();
     let events = RecordingEvents::default();
-    let tools = ToolRegistry::new(&settings, &cwd);
-    let schemas = tools.schemas();
-
-    let agent = AgentCore {
-        provider,
-        tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
-        max_steps: 4,
-        system_prompt: settings.agent.resolved_system_prompt(),
-        model: settings.selected_model_ref().to_string(),
-        session,
-    };
+    let agent = context.make_agent(provider, 4);
 
     let mut last_emitted_todo_items = Vec::new();
     let _ = agent
         .run_with_runner_output_sink_cancellable(
-            Message {
-                role: Role::User,
-                content: "hello".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            },
+            TestData::user_message("hello"),
             &mut |_request| async {
-                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
-                    hh_cli::core::ApprovalChoice::AllowSession,
-                )
+                Ok::<ApprovalChoice, anyhow::Error>(ApprovalChoice::AllowSession)
             },
             &mut |_questions| async {
                 anyhow::bail!("question tool should not be called in this test")
@@ -803,18 +834,17 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
 }
 
 #[tokio::test]
-async fn allow_session_choice_is_remembered_for_ask_policy_tools() {
-    let provider = MockProvider {
-        responses: Arc::new(Mutex::new(vec![
-            ProviderResponse {
-                assistant_message: Message {
-                    role: Role::Assistant,
-                    content: "writing files".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                },
-                tool_calls: vec![
+async fn approval_choice_is_remembered_for_repeated_ask_policy_tool_calls() {
+    let cases = [
+        ("allow-session", ApprovalChoice::AllowSession),
+        ("allow-always", ApprovalChoice::AllowAlways),
+    ];
+
+    for (case_name, approval_choice) in cases {
+        let provider = mock_provider_with_responses(vec![
+            TestData::provider_response(
+                "writing files",
+                vec![
                     ToolCall {
                         id: "call-1".to_string(),
                         name: "write".to_string(),
@@ -826,184 +856,37 @@ async fn allow_session_choice_is_remembered_for_ask_policy_tools() {
                         arguments: json!({"path":"b.txt","content":"two"}),
                     },
                 ],
-                done: false,
-                thinking: None,
-                context_tokens: None,
-            },
-            ProviderResponse {
-                assistant_message: Message {
-                    role: Role::Assistant,
-                    content: "done".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                },
-                tool_calls: vec![],
-                done: true,
-                thinking: None,
-                context_tokens: None,
-            },
-        ])),
-        stream_events: vec![],
-        requests: Arc::new(Mutex::new(Vec::new())),
-    };
+                false,
+                None,
+            ),
+            TestData::provider_response("done", vec![], true, None),
+        ]);
+        let context = TestContext::new();
+        let agent = context.make_agent(provider, 4);
 
-    let temp = tempfile::tempdir().expect("tempdir");
-    let cwd = temp.path().join("ws");
-    std::fs::create_dir_all(&cwd).expect("mkdir");
+        let approval_count = Arc::new(Mutex::new(0usize));
+        let approval_count_for_handler = Arc::clone(&approval_count);
 
-    let settings = Settings::default();
-    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
-    let tools = ToolRegistry::new(&settings, &cwd);
-    let schemas = tools.schemas();
-
-    let agent = AgentCore {
-        provider,
-        tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
-        max_steps: 4,
-        system_prompt: settings.agent.resolved_system_prompt(),
-        model: settings.selected_model_ref().to_string(),
-        session,
-    };
-
-    let approval_count = Arc::new(Mutex::new(0usize));
-    let approval_count_for_handler = Arc::clone(&approval_count);
-
-    let out = agent
-        .run(
-            Message {
-                role: Role::User,
-                content: "write two files".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            },
-            move |_request| {
+        let out = agent
+            .run(TestData::user_message("write two files"), move |_request| {
                 let approval_count = Arc::clone(&approval_count_for_handler);
                 async move {
                     *approval_count.lock().expect("approval count") += 1;
-                    Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
-                        hh_cli::core::ApprovalChoice::AllowSession,
-                    )
+                    Ok::<ApprovalChoice, anyhow::Error>(approval_choice)
                 }
-            },
-        )
-        .await
-        .expect("run");
+            })
+            .await
+            .expect("run");
 
-    assert_eq!(out, "done");
-    assert_eq!(*approval_count.lock().expect("approval count"), 1);
-    assert_eq!(
-        std::fs::read_to_string(cwd.join("a.txt")).expect("read a.txt"),
-        "one"
-    );
-    assert_eq!(
-        std::fs::read_to_string(cwd.join("b.txt")).expect("read b.txt"),
-        "two"
-    );
-}
-
-#[tokio::test]
-async fn allow_always_choice_is_remembered_for_current_session() {
-    let provider = MockProvider {
-        responses: Arc::new(Mutex::new(vec![
-            ProviderResponse {
-                assistant_message: Message {
-                    role: Role::Assistant,
-                    content: "writing files".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                },
-                tool_calls: vec![
-                    ToolCall {
-                        id: "call-1".to_string(),
-                        name: "write".to_string(),
-                        arguments: json!({"path":"a.txt","content":"one"}),
-                    },
-                    ToolCall {
-                        id: "call-2".to_string(),
-                        name: "write".to_string(),
-                        arguments: json!({"path":"b.txt","content":"two"}),
-                    },
-                ],
-                done: false,
-                thinking: None,
-                context_tokens: None,
-            },
-            ProviderResponse {
-                assistant_message: Message {
-                    role: Role::Assistant,
-                    content: "done".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                },
-                tool_calls: vec![],
-                done: true,
-                thinking: None,
-                context_tokens: None,
-            },
-        ])),
-        stream_events: vec![],
-        requests: Arc::new(Mutex::new(Vec::new())),
-    };
-
-    let temp = tempfile::tempdir().expect("tempdir");
-    let cwd = temp.path().join("ws");
-    std::fs::create_dir_all(&cwd).expect("mkdir");
-
-    let settings = Settings::default();
-    let session = SessionStore::new(temp.path(), &cwd, None, None).expect("session");
-    let tools = ToolRegistry::new(&settings, &cwd);
-    let schemas = tools.schemas();
-
-    let agent = AgentCore {
-        provider,
-        tools,
-        approvals: PermissionMatcher::new(settings.clone(), &schemas, &cwd),
-        max_steps: 4,
-        system_prompt: settings.agent.resolved_system_prompt(),
-        model: settings.selected_model_ref().to_string(),
-        session,
-    };
-
-    let approval_count = Arc::new(Mutex::new(0usize));
-    let approval_count_for_handler = Arc::clone(&approval_count);
-
-    let out = agent
-        .run(
-            Message {
-                role: Role::User,
-                content: "write two files".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            },
-            move |_request| {
-                let approval_count = Arc::clone(&approval_count_for_handler);
-                async move {
-                    *approval_count.lock().expect("approval count") += 1;
-                    Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
-                        hh_cli::core::ApprovalChoice::AllowAlways,
-                    )
-                }
-            },
-        )
-        .await
-        .expect("run");
-
-    assert_eq!(out, "done");
-    assert_eq!(*approval_count.lock().expect("approval count"), 1);
-    assert_eq!(
-        std::fs::read_to_string(cwd.join("a.txt")).expect("read a.txt"),
-        "one"
-    );
-    assert_eq!(
-        std::fs::read_to_string(cwd.join("b.txt")).expect("read b.txt"),
-        "two"
-    );
+        assert_eq!(out, "done", "{case_name}");
+        assert_eq!(
+            *approval_count.lock().expect("approval count"),
+            1,
+            "{case_name}"
+        );
+        test_assert_file_content(&context.workspace_dir.join("a.txt"), "one");
+        test_assert_file_content(&context.workspace_dir.join("b.txt"), "two");
+    }
 }
 
 #[tokio::test]

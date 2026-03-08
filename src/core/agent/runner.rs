@@ -1576,6 +1576,88 @@ mod tests {
         }
     }
 
+    struct TestData;
+
+    impl TestData {
+        fn user_message(content: &str) -> Message {
+            Message {
+                role: Role::User,
+                content: content.to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+            }
+        }
+
+        fn assistant_message(content: &str, tool_calls: Vec<ToolCall>) -> Message {
+            Message {
+                role: Role::Assistant,
+                content: content.to_string(),
+                attachments: Vec::new(),
+                tool_call_id: None,
+                tool_calls,
+            }
+        }
+
+        fn tool_call(id: &str, name: &str, arguments: Value) -> ToolCall {
+            ToolCall {
+                id: id.to_string(),
+                name: name.to_string(),
+                arguments,
+            }
+        }
+
+        fn provider_response(
+            content: &str,
+            tool_calls: Vec<ToolCall>,
+            done: bool,
+            context_tokens: Option<usize>,
+        ) -> ProviderResponse {
+            ProviderResponse {
+                assistant_message: Self::assistant_message(content, tool_calls.clone()),
+                tool_calls,
+                done,
+                thinking: None,
+                context_tokens,
+            }
+        }
+    }
+
+    fn mock_provider_with_responses(responses: Vec<ProviderResponse>) -> TestProvider {
+        TestProvider {
+            responses: Mutex::new(VecDeque::from(responses)),
+        }
+    }
+
+    fn test_turn_state_with_user(content: &str) -> TurnState {
+        TurnState {
+            messages: vec![TestData::user_message(content)],
+            ..Default::default()
+        }
+    }
+
+    async fn test_ask_question_not_expected(
+        _questions: Vec<QuestionPrompt>,
+    ) -> anyhow::Result<Vec<Vec<String>>> {
+        anyhow::bail!("question tool should not be called in this test")
+    }
+
+    fn test_spawn_cancel_after(delay: Duration) -> watch::Receiver<bool> {
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        tokio::spawn(async move {
+            sleep(delay).await;
+            let _ = cancel_tx.send(true);
+        });
+        cancel_rx
+    }
+
+    async fn test_wait_for_cancel_signal(mut cancel_rx: watch::Receiver<bool>) {
+        if *cancel_rx.borrow() {
+            return;
+        }
+        let _ = cancel_rx.changed().await;
+    }
+
     #[test]
     fn apply_tool_outcome_updates_todos_from_patch() {
         let mut state = RunnerState::default();
@@ -1622,58 +1704,22 @@ mod tests {
 
     #[tokio::test]
     async fn process_tool_calls_correlates_out_of_order_non_blocking_results_by_call_id() {
-        let provider = TestProvider {
-            responses: Mutex::new(VecDeque::from(vec![ProviderResponse {
-                assistant_message: Message {
-                    role: Role::Assistant,
-                    content: String::new(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: vec![
-                        ToolCall {
-                            id: "call-slow".to_string(),
-                            name: "slow_tool".to_string(),
-                            arguments: json!({}),
-                        },
-                        ToolCall {
-                            id: "call-fast".to_string(),
-                            name: "fast_tool".to_string(),
-                            arguments: json!({}),
-                        },
-                    ],
-                },
-                tool_calls: vec![
-                    ToolCall {
-                        id: "call-slow".to_string(),
-                        name: "slow_tool".to_string(),
-                        arguments: json!({}),
-                    },
-                    ToolCall {
-                        id: "call-fast".to_string(),
-                        name: "fast_tool".to_string(),
-                        arguments: json!({}),
-                    },
-                ],
-                done: false,
-                thinking: None,
-                context_tokens: None,
-            }])),
-        };
+        let tool_calls = vec![
+            TestData::tool_call("call-slow", "slow_tool", json!({})),
+            TestData::tool_call("call-fast", "fast_tool", json!({})),
+        ];
+        let provider = mock_provider_with_responses(vec![TestData::provider_response(
+            "",
+            tool_calls.clone(),
+            false,
+            None,
+        )]);
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
         let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
         let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
 
-        let mut state = TurnState {
-            messages: vec![Message {
-                role: Role::User,
-                content: "run tools".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            ..Default::default()
-        };
+        let mut state = test_turn_state_with_user("run tools");
 
         let turn = runner
             .complete_turn(&state.messages, |_output| {})
@@ -1683,9 +1729,7 @@ mod tests {
 
         let mut outputs = Vec::new();
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
 
         runner
             .process_tool_calls(
@@ -1749,29 +1793,12 @@ mod tests {
     #[tokio::test]
     async fn execute_turn_cancellation_stops_inflight_non_blocking_tools_and_clears_pending_calls()
     {
-        let provider = TestProvider {
-            responses: Mutex::new(VecDeque::from(vec![ProviderResponse {
-                assistant_message: Message {
-                    role: Role::Assistant,
-                    content: String::new(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: vec![ToolCall {
-                        id: "call-slow".to_string(),
-                        name: "slow_tool".to_string(),
-                        arguments: json!({}),
-                    }],
-                },
-                tool_calls: vec![ToolCall {
-                    id: "call-slow".to_string(),
-                    name: "slow_tool".to_string(),
-                    arguments: json!({}),
-                }],
-                done: false,
-                thinking: None,
-                context_tokens: None,
-            }])),
-        };
+        let provider = mock_provider_with_responses(vec![TestData::provider_response(
+            "",
+            vec![TestData::tool_call("call-slow", "slow_tool", json!({}))],
+            false,
+            None,
+        )]);
         let dropped = Arc::new(AtomicBool::new(false));
         let tools = HangingNonBlockingTools {
             dropped: Arc::clone(&dropped),
@@ -1780,40 +1807,20 @@ mod tests {
         let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
         let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
 
-        let mut state = TurnState {
-            messages: vec![Message {
-                role: Role::User,
-                content: "run slow tool".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            ..Default::default()
-        };
+        let mut state = test_turn_state_with_user("run slow tool");
 
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        tokio::spawn(async move {
-            sleep(Duration::from_millis(25)).await;
-            let _ = cancel_tx.send(true);
-        });
+        let cancel_rx = test_spawn_cancel_after(Duration::from_millis(25));
 
         let mut cancel = {
             let cancel_rx = cancel_rx.clone();
             move || {
-                let mut cancel_rx = cancel_rx.clone();
-                async move {
-                    if *cancel_rx.borrow() {
-                        return;
-                    }
-                    let _ = cancel_rx.changed().await;
-                }
+                let cancel_rx = cancel_rx.clone();
+                async move { test_wait_for_cancel_signal(cancel_rx).await }
             }
         };
 
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
 
         let result = timeout(
             Duration::from_millis(250),
@@ -1847,40 +1854,20 @@ mod tests {
         let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
         let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
 
-        let mut state = TurnState {
-            messages: vec![Message {
-                role: Role::User,
-                content: "hang provider".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            ..Default::default()
-        };
+        let mut state = test_turn_state_with_user("hang provider");
 
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        tokio::spawn(async move {
-            sleep(Duration::from_millis(25)).await;
-            let _ = cancel_tx.send(true);
-        });
+        let cancel_rx = test_spawn_cancel_after(Duration::from_millis(25));
 
         let mut cancel = {
             let cancel_rx = cancel_rx.clone();
             move || {
-                let mut cancel_rx = cancel_rx.clone();
-                async move {
-                    if *cancel_rx.borrow() {
-                        return;
-                    }
-                    let _ = cancel_rx.changed().await;
-                }
+                let cancel_rx = cancel_rx.clone();
+                async move { test_wait_for_cancel_signal(cancel_rx).await }
             }
         };
 
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
 
         let result = timeout(
             Duration::from_millis(250),
@@ -1913,40 +1900,20 @@ mod tests {
         let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
         let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
 
-        let mut state = TurnState {
-            messages: vec![Message {
-                role: Role::User,
-                content: "hang provider stream".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            ..Default::default()
-        };
+        let mut state = test_turn_state_with_user("hang provider stream");
 
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        tokio::spawn(async move {
-            sleep(Duration::from_millis(25)).await;
-            let _ = cancel_tx.send(true);
-        });
+        let cancel_rx = test_spawn_cancel_after(Duration::from_millis(25));
 
         let mut cancel = {
             let cancel_rx = cancel_rx.clone();
             move || {
-                let mut cancel_rx = cancel_rx.clone();
-                async move {
-                    if *cancel_rx.borrow() {
-                        return;
-                    }
-                    let _ = cancel_rx.changed().await;
-                }
+                let cancel_rx = cancel_rx.clone();
+                async move { test_wait_for_cancel_signal(cancel_rx).await }
             }
         };
 
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
 
         let result = timeout(
             Duration::from_millis(250),
@@ -1970,43 +1937,26 @@ mod tests {
 
     #[tokio::test]
     async fn run_input_loop_processes_message_and_returns_final_answer() {
-        let provider = TestProvider {
-            responses: Mutex::new(VecDeque::from(vec![ProviderResponse {
-                assistant_message: Message {
-                    role: Role::Assistant,
-                    content: "final answer".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                },
-                tool_calls: Vec::new(),
-                done: true,
-                thinking: None,
-                context_tokens: None,
-            }])),
-        };
+        let provider = mock_provider_with_responses(vec![TestData::provider_response(
+            "final answer",
+            Vec::new(),
+            true,
+            None,
+        )]);
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
         let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
         let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
 
         let (tx, rx) = mpsc::channel(8);
-        tx.send(RunnerInput::Message(Message {
-            role: Role::User,
-            content: "hello".to_string(),
-            attachments: Vec::new(),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-        }))
-        .await
-        .expect("send message");
+        tx.send(RunnerInput::Message(TestData::user_message("hello")))
+            .await
+            .expect("send message");
 
         let mut outputs = Vec::new();
         let mut state = TurnState::default();
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
 
         let answer = runner
             .run_input_loop(
@@ -2040,15 +1990,9 @@ mod tests {
         let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
 
         let (tx, rx) = mpsc::channel(8);
-        tx.send(RunnerInput::Message(Message {
-            role: Role::User,
-            content: "hello".to_string(),
-            attachments: Vec::new(),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-        }))
-        .await
-        .expect("send message");
+        tx.send(RunnerInput::Message(TestData::user_message("hello")))
+            .await
+            .expect("send message");
         tokio::spawn(async move {
             sleep(Duration::from_millis(25)).await;
             let _ = tx.send(RunnerInput::Cancel).await;
@@ -2056,9 +2000,7 @@ mod tests {
 
         let mut state = TurnState::default();
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
 
         let result = timeout(
             Duration::from_millis(250),
@@ -2082,9 +2024,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_input_loop_cancel_before_first_message_returns_cancelled() {
-        let provider = TestProvider {
-            responses: Mutex::new(VecDeque::new()),
-        };
+        let provider = mock_provider_with_responses(Vec::new());
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
         let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
@@ -2095,9 +2035,7 @@ mod tests {
 
         let mut state = TurnState::default();
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
 
         let result = runner
             .run_input_loop(
@@ -2116,9 +2054,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_input_loop_returns_none_when_input_channel_closes_without_message() {
-        let provider = TestProvider {
-            responses: Mutex::new(VecDeque::new()),
-        };
+        let provider = mock_provider_with_responses(Vec::new());
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
         let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
@@ -2129,9 +2065,7 @@ mod tests {
 
         let mut state = TurnState::default();
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
 
         let result = runner
             .run_input_loop(
@@ -2150,30 +2084,20 @@ mod tests {
 
     #[tokio::test]
     async fn run_input_loop_emits_error_output_on_provider_failure() {
-        let provider = TestProvider {
-            responses: Mutex::new(VecDeque::new()),
-        };
+        let provider = mock_provider_with_responses(Vec::new());
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
         let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
         let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
 
         let (tx, rx) = mpsc::channel(8);
-        tx.send(RunnerInput::Message(Message {
-            role: Role::User,
-            content: "start".to_string(),
-            attachments: Vec::new(),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-        }))
-        .await
-        .expect("send message");
+        tx.send(RunnerInput::Message(TestData::user_message("start")))
+            .await
+            .expect("send message");
 
         let mut state = TurnState::default();
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
         let mut outputs = Vec::new();
 
         let result = runner
@@ -2197,29 +2121,12 @@ mod tests {
 
     #[tokio::test]
     async fn run_input_loop_cancel_clears_pending_tool_calls() {
-        let provider = TestProvider {
-            responses: Mutex::new(VecDeque::from(vec![ProviderResponse {
-                assistant_message: Message {
-                    role: Role::Assistant,
-                    content: String::new(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: vec![ToolCall {
-                        id: "call-1".to_string(),
-                        name: "slow_tool".to_string(),
-                        arguments: json!({}),
-                    }],
-                },
-                tool_calls: vec![ToolCall {
-                    id: "call-1".to_string(),
-                    name: "slow_tool".to_string(),
-                    arguments: json!({}),
-                }],
-                done: false,
-                thinking: None,
-                context_tokens: None,
-            }])),
-        };
+        let provider = mock_provider_with_responses(vec![TestData::provider_response(
+            "",
+            vec![TestData::tool_call("call-1", "slow_tool", json!({}))],
+            false,
+            None,
+        )]);
         let tools = HangingNonBlockingTools {
             dropped: Arc::new(AtomicBool::new(false)),
         };
@@ -2228,15 +2135,9 @@ mod tests {
         let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
 
         let (tx, rx) = mpsc::channel(8);
-        tx.send(RunnerInput::Message(Message {
-            role: Role::User,
-            content: "start".to_string(),
-            attachments: Vec::new(),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-        }))
-        .await
-        .expect("send message");
+        tx.send(RunnerInput::Message(TestData::user_message("start")))
+            .await
+            .expect("send message");
         tokio::spawn(async move {
             sleep(Duration::from_millis(25)).await;
             let _ = tx.send(RunnerInput::Cancel).await;
@@ -2244,9 +2145,7 @@ mod tests {
 
         let mut state = TurnState::default();
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
 
         let result = timeout(
             Duration::from_millis(250),
@@ -2272,40 +2171,13 @@ mod tests {
         let captured_requests = Arc::new(Mutex::new(Vec::new()));
         let provider = CapturingProvider {
             responses: Mutex::new(VecDeque::from(vec![
-                ProviderResponse {
-                    assistant_message: Message {
-                        role: Role::Assistant,
-                        content: String::new(),
-                        attachments: Vec::new(),
-                        tool_call_id: None,
-                        tool_calls: vec![ToolCall {
-                            id: "call-1".to_string(),
-                            name: "todo_read".to_string(),
-                            arguments: json!({}),
-                        }],
-                    },
-                    tool_calls: vec![ToolCall {
-                        id: "call-1".to_string(),
-                        name: "todo_read".to_string(),
-                        arguments: json!({}),
-                    }],
-                    done: false,
-                    thinking: None,
-                    context_tokens: None,
-                },
-                ProviderResponse {
-                    assistant_message: Message {
-                        role: Role::Assistant,
-                        content: "done".to_string(),
-                        attachments: Vec::new(),
-                        tool_call_id: None,
-                        tool_calls: Vec::new(),
-                    },
-                    tool_calls: Vec::new(),
-                    done: true,
-                    thinking: None,
-                    context_tokens: None,
-                },
+                TestData::provider_response(
+                    "",
+                    vec![TestData::tool_call("call-1", "todo_read", json!({}))],
+                    false,
+                    None,
+                ),
+                TestData::provider_response("done", Vec::new(), true, None),
             ])),
             requests: Arc::clone(&captured_requests),
         };
@@ -2316,21 +2188,13 @@ mod tests {
         let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
 
         let (tx, rx) = mpsc::channel(8);
-        tx.send(RunnerInput::Message(Message {
-            role: Role::User,
-            content: "initial".to_string(),
-            attachments: Vec::new(),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-        }))
-        .await
-        .expect("send initial message");
+        tx.send(RunnerInput::Message(TestData::user_message("initial")))
+            .await
+            .expect("send initial message");
 
         let mut state = TurnState::default();
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
         let drain_call_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         let answer = runner
@@ -2349,13 +2213,7 @@ mod tests {
                             return Vec::new();
                         }
 
-                        vec![Message {
-                            role: Role::User,
-                            content: "follow up".to_string(),
-                            attachments: Vec::new(),
-                            tool_call_id: None,
-                            tool_calls: Vec::new(),
-                        }]
+                        vec![TestData::user_message("follow up")]
                     }
                 },
             )
@@ -2376,44 +2234,18 @@ mod tests {
 
     #[tokio::test]
     async fn process_tool_calls_emits_snapshot_updated_after_tool_result() {
-        let provider = TestProvider {
-            responses: Mutex::new(VecDeque::from(vec![ProviderResponse {
-                assistant_message: Message {
-                    role: Role::Assistant,
-                    content: String::new(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: vec![ToolCall {
-                        id: "call-1".to_string(),
-                        name: "todo_read".to_string(),
-                        arguments: json!({}),
-                    }],
-                },
-                tool_calls: vec![ToolCall {
-                    id: "call-1".to_string(),
-                    name: "todo_read".to_string(),
-                    arguments: json!({}),
-                }],
-                done: false,
-                thinking: None,
-                context_tokens: None,
-            }])),
-        };
+        let provider = mock_provider_with_responses(vec![TestData::provider_response(
+            "",
+            vec![TestData::tool_call("call-1", "todo_read", json!({}))],
+            false,
+            None,
+        )]);
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
         let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
         let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
 
-        let mut state = TurnState {
-            messages: vec![Message {
-                role: Role::User,
-                content: "run".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            ..Default::default()
-        };
+        let mut state = test_turn_state_with_user("run");
 
         let turn = runner
             .complete_turn(&state.messages, |_output| {})
@@ -2422,9 +2254,7 @@ mod tests {
 
         let mut outputs = Vec::new();
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
 
         runner
             .process_tool_calls(
@@ -2446,41 +2276,21 @@ mod tests {
 
     #[tokio::test]
     async fn execute_turn_emits_snapshot_updated_before_turn_complete() {
-        let provider = TestProvider {
-            responses: Mutex::new(VecDeque::from(vec![ProviderResponse {
-                assistant_message: Message {
-                    role: Role::Assistant,
-                    content: "done".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                },
-                tool_calls: Vec::new(),
-                done: true,
-                thinking: None,
-                context_tokens: Some(5),
-            }])),
-        };
+        let provider = mock_provider_with_responses(vec![TestData::provider_response(
+            "done",
+            Vec::new(),
+            true,
+            Some(5),
+        )]);
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
         let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
         let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
 
-        let mut state = TurnState {
-            messages: vec![Message {
-                role: Role::User,
-                content: "run".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            ..Default::default()
-        };
+        let mut state = test_turn_state_with_user("run");
 
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let mut ask_question = test_ask_question_not_expected;
 
         let (answer, outputs) = runner
             .execute_turn_with_outputs(

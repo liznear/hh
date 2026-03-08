@@ -170,9 +170,7 @@ where
                 return;
             }
 
-            if requires_follow_up
-                && let Ok(mut queue) = queue_for_emit.lock()
-            {
+            if requires_follow_up && let Ok(mut queue) = queue_for_emit.lock() {
                 queue.push_back(output);
                 notify_for_emit.notify_one();
             }
@@ -229,9 +227,7 @@ where
     }
 }
 
-fn pop_output_queue(
-    output_queue: &RunnerOutputQueue,
-) -> anyhow::Result<Option<RunnerOutput>> {
+fn pop_output_queue(output_queue: &RunnerOutputQueue) -> anyhow::Result<Option<RunnerOutput>> {
     let Ok(mut queue) = output_queue.lock() else {
         return Err(anyhow::anyhow!("runner output queue poisoned"));
     };
