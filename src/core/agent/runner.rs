@@ -694,20 +694,14 @@ where
         Ok((result, outputs))
     }
 
-    pub async fn run_input_loop<AP, APFut, Q, QFut, D>(
+    pub async fn run_input_loop<D>(
         &mut self,
         messages: &mut Vec<Message>,
         mut input_rx: mpsc::Receiver<RunnerInput>,
-        approve: &mut AP,
-        ask_question: &mut Q,
         emit_output: &mut (impl FnMut(RunnerOutput) + Send),
         mut drain_pending_messages: D,
     ) -> anyhow::Result<Option<String>>
     where
-        AP: FnMut(ApprovalRequest) -> APFut,
-        APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
-        Q: FnMut(Vec<QuestionPrompt>) -> QFut,
-        QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
         D: FnMut() -> Vec<Message>,
     {
         let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -723,8 +717,6 @@ where
         )>::new()));
         let pending_answers_notify = std::sync::Arc::new(tokio::sync::Notify::new());
         let mut step = 0usize;
-        let _ = approve;
-        let _ = ask_question;
 
         let mut approve_from_input = |_request: ApprovalRequest| {
             let pending_approvals = pending_approvals.clone();
@@ -1908,15 +1900,11 @@ mod tests {
 
         let mut outputs = Vec::new();
         let mut state = TurnState::default();
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
 
         let answer = runner
             .run_input_loop(
                 &mut state.messages,
                 rx,
-                &mut approve,
-                &mut ask_question,
                 &mut |output| outputs.push(output),
                 Vec::new,
             )
@@ -1952,16 +1940,12 @@ mod tests {
         });
 
         let mut state = TurnState::default();
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
 
         let result = timeout(
             Duration::from_millis(250),
             runner.run_input_loop(
                 &mut state.messages,
                 rx,
-                &mut approve,
-                &mut ask_question,
                 &mut |_output| {},
                 Vec::new,
             ),
@@ -1987,15 +1971,11 @@ mod tests {
         tx.send(RunnerInput::Cancel).await.expect("send cancel");
 
         let mut state = TurnState::default();
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
 
         let result = runner
             .run_input_loop(
                 &mut state.messages,
                 rx,
-                &mut approve,
-                &mut ask_question,
                 &mut |_output| {},
                 Vec::new,
             )
@@ -2017,15 +1997,11 @@ mod tests {
         drop(tx);
 
         let mut state = TurnState::default();
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
 
         let result = runner
             .run_input_loop(
                 &mut state.messages,
                 rx,
-                &mut approve,
-                &mut ask_question,
                 &mut |_output| {},
                 Vec::new,
             )
@@ -2049,16 +2025,12 @@ mod tests {
             .expect("send message");
 
         let mut state = TurnState::default();
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
         let mut outputs = Vec::new();
 
         let result = runner
             .run_input_loop(
                 &mut state.messages,
                 rx,
-                &mut approve,
-                &mut ask_question,
                 &mut |output| outputs.push(output),
                 Vec::new,
             )
@@ -2097,16 +2069,12 @@ mod tests {
         });
 
         let mut state = TurnState::default();
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
 
         let result = timeout(
             Duration::from_millis(250),
             runner.run_input_loop(
                 &mut state.messages,
                 rx,
-                &mut approve,
-                &mut ask_question,
                 &mut |_output| {},
                 Vec::new,
             ),
@@ -2146,16 +2114,12 @@ mod tests {
             .expect("send initial message");
 
         let mut state = TurnState::default();
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
         let drain_call_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         let answer = runner
             .run_input_loop(
                 &mut state.messages,
                 rx,
-                &mut approve,
-                &mut ask_question,
                 &mut |_output| {},
                 {
                     let drain_call_count = Arc::clone(&drain_call_count);

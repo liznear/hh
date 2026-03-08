@@ -181,18 +181,9 @@ where
             }
         };
 
-        let mut runner_approve = |_request: ApprovalRequest| async {
-            anyhow::bail!("runner approval callback is disabled; use RunnerInput::ApprovalDecision")
-        };
-        let mut runner_ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("runner question callback is disabled; use RunnerInput::QuestionAnswered")
-        };
-
         let run_future = runner.run_input_loop(
             &mut messages,
             input_rx,
-            &mut runner_approve,
-            &mut runner_ask_question,
             &mut emit_wrapped,
             drain_pending_messages,
         );
