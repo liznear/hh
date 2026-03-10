@@ -1,59 +1,59 @@
 # TUI Architecture Design
 
 ## Overview
-The terminal user interface (TUI) of `hh` is built using the `ratatui` library. To manage the inherent complexity of terminal interfaces—such as concurrent background LLM tasks, keystroke parsing, complex layouts, and dynamic state—the UI layer is built on the **Elm Architecture** (or Model-View-Update pattern).
+The terminal user interface (TUI) of `hh` is built using the `ratatui` library. To manage the inherent complexity of terminal interfaces-such as concurrent background LLM tasks, keystroke parsing, complex layouts, and dynamic state-the UI layer is built on the **Elm Architecture** (Model-View-Update).
 
-This design ensures strict separation of concerns, eliminating "God Object" anti-patterns and the need for awkward interior mutability (`RefCell`) when rendering cached views.
+This design enforces strict separation of concerns, eliminating "God Object" anti-patterns and avoiding awkward interior mutability (`RefCell`) in rendering paths.
 
 ## Core Abstractions
 
 ### 1. The `Component` Trait
-Every distinct visual region in the application (Input Box, Sidebar, Message List) is an isolated component.
+Every distinct visual region in the application (input box, sidebar, message list) is an isolated component.
 
 ```rust
 pub trait Component {
-    /// React to an application-wide message. 
-    /// Optionally emit a new Action to be processed by the root App.
+    /// React to an application-wide action.
+    /// Optionally emit a follow-up action for cross-component behavior.
     fn update(&mut self, action: &AppAction) -> Option<AppAction> { None }
-    
-    /// Handle a normalized terminal event (key press, mouse click).
-    /// Translate it into a semantic AppAction if it requires global context,
-    /// or handle it internally (e.g., updating a cursor position).
+
+    /// Handle normalized terminal input.
+    /// Return an AppAction when global coordination is needed.
     fn handle_event(&mut self, event: &InputEvent) -> Option<AppAction> { None }
-    
-    /// Draw the component's state to the terminal screen.
+
+    /// Draw the component state.
     fn render(&self, f: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect);
 }
 ```
 
+**Guideline**:
+- Local-only effects stay local (`update`/`handle_event` mutates component state and returns `None`).
+- Return `Some(AppAction)` only when other components, handlers, or root state must react.
+
 ### 2. Message Passing: `AppAction`
-To satisfy Rust's borrow checker and enforce decoupling, components **never mutate global state or other components directly**. Instead, cross-component communication happens via the `AppAction` enum.
+Components never mutate global state or other components directly. Cross-component communication and orchestration are done via `AppAction`.
 
 ```rust
 pub enum AppAction {
-    // UI Lifecycle
+    // UI lifecycle
     Quit,
     Redraw,
-    
-    // User Intent
+
+    // User intent
     SubmitInput(String, Vec<MessageAttachment>),
     RunSlashCommand(SlashCommand, String),
     CancelExecution,
-    
-    // Agent Callbacks
+
+    // Agent callbacks (boundary event wrapped for dispatch)
     AgentEvent(TuiEvent),
-    
+
     // Navigation
     ScrollMessages(i32),
     SelectSession(String),
 }
 ```
-*Flow*: The Input component detects an "Enter" key press -> Returns `AppAction::SubmitInput` -> The root `App` dispatches this to the `ExecutionManager` -> The `ExecutionManager` spawns a background task.
 
-### 3. Normalizing Events: `InputEvent`
-Raw terminal events from `crossterm` contain a lot of noise (such as key releases) and require deep pattern matching (e.g. for mouse actions). 
-
-Before events ever reach a `Component`, the main application loop parses them into an `InputEvent`. This application-specific abstraction makes handling user input cleaner and less repetitive across components.
+### 3. Normalizing Input: `InputEvent`
+Raw `crossterm` input includes noise (for example key release events). The main loop first normalizes raw input into `InputEvent` before routing it to components.
 
 ```rust
 pub enum InputEvent {
@@ -66,31 +66,69 @@ pub enum InputEvent {
 }
 ```
 
+### 4. Render Context vs Mutable App State
+- `SessionContext`: read-only snapshot passed to components during `render`.
+- `AppState` (owned by root `App`): mutable source of truth used by reducers/orchestrator and handlers.
+
+Components can mutate only their own local state.
+
+## Event Pipeline (End-to-End)
+
+### A) Runner output -> UI
+1. TUI-side adapter implements `RunnerOutputObserver`.
+2. Observer callbacks convert runner outputs into boundary events (`TuiEvent`) and send them over channel.
+3. Main loop receives `TuiEvent` and wraps it as `AppAction::AgentEvent(TuiEvent)`.
+4. `app.dispatch(...)` processes the action (root reducer -> handlers -> component `update()`).
+
+### B) User input -> UI / runner
+1. Terminal event is normalized to `InputEvent`.
+2. Focused component receives `handle_event(&InputEvent)`.
+3. Component may emit semantic `AppAction` (for example `SubmitInput`, `ScrollMessages`).
+4. `app.dispatch(...)` processes the action.
+5. If runner interaction is needed, handler/orchestrator maps action to `RunnerInput` and sends it to runner.
+
+**Important boundary rule**: components do not send `RunnerInput` directly.
+
+## Dispatch Contract and Safety
+- `App::dispatch` is queue-based (`VecDeque<AppAction>`), not recursive.
+- For each dequeued action:
+  1. Apply root reducer/orchestrator state changes.
+  2. Run handlers (side effects, runtime, DB, subprocesses).
+  3. Broadcast to component `update()`.
+- Follow-up actions are appended to the queue.
+- Enforce `MAX_ACTIONS_PER_TICK` as a convergence guard.
+- On overflow: log an error, enqueue a visible user-facing error state/event, and drop remaining queued actions for that tick.
+
 ## Application Structure
 
-The codebase is split into three primary layers according to MVU:
+The codebase is split into three layers:
 
-### Layer 1: The Visual Identity (`src/theme/`)
-Pure functions and constants defining the look and feel. Independent of state.
-* `colors.rs`: Constants like `ACCENT`, `TEXT_MUTED`.
-* `markdown.rs`: Translating raw markdown strings into stylized `ratatui::Line` objects using `syntect`.
+### Layer 1: Visual Identity (`src/theme/`)
+Pure functions and constants defining look-and-feel, independent of app state.
+- `colors.rs`: constants like `ACCENT`, `TEXT_MUTED`
+- `markdown.rs`: markdown -> styled `ratatui::Line`
 
-### Layer 2: The UI Views (`src/app/components/`)
-Stateful chunks of the interface that implement `Component`.
-* `sidebar.rs`: Holds its own fold state, scroll offsets, and cached layout lines.
-* `messages.rs`: Manages text selection and viewport caching.
-* `input.rs`: Handles cursor calculations and the pending question prompt overlay.
+### Layer 2: UI Views (`src/app/components/`)
+Stateful interface chunks implementing `Component`.
+- `sidebar.rs`: fold state, scroll offsets, local caches
+- `messages.rs`: text selection, viewport caching
+- `input.rs`: cursor behavior, pending question overlays
 
-### Layer 3: The Controllers (`src/app/handlers/`)
-Background logic that manipulates application-level data.
-* `runner.rs`: Connects the `core::agent` to the UI via `mpsc` channels.
-* `session.rs`: Handles loading, saving, and compacting DB histories.
+### Layer 3: Handlers (`src/app/handlers/`)
+Controllers for side effects and domain operations.
+- `runner.rs`: runtime integration and channel plumbing
+- `session.rs`: loading/saving/compacting session history
 
-### The Root Orchestrator (`src/app/state.rs` & `mod.rs`)
-The `App` struct is the source of truth that binds the components together. It holds global read-only variables inside `SessionContext` (which is passed down to components during `render`), and it implements the `dispatch` function which broadcasts `AppAction`s to all components. 
+Handler boundaries:
+- Handlers receive explicit inputs from `App`.
+- Handlers do not mutate UI state directly and do not read component internals.
+- Handlers emit outcomes as actions/events; `App::dispatch` maps outcomes to state/UI updates.
 
-The main loop simply ticks:
+### Root Orchestrator (`src/app/state.rs` and `mod.rs`)
+`App` binds components + handlers and owns dispatch.
+
+Main loop shape:
 1. `terminal.draw()`
-2. `tokio::select!` on User Inputs vs. Background Agent Events.
-3. Pass inputs to focused components.
-4. Route resulting actions via `app.dispatch()`.
+2. `tokio::select!` on normalized user input vs boundary runner events
+3. Route to components or wrap as actions
+4. `app.dispatch(...)`
