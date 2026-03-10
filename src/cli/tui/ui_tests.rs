@@ -377,6 +377,43 @@ fn assistant_list_items_render_during_streaming() {
 }
 
 #[test]
+fn assistant_nested_list_preserves_leading_spaces() {
+    let mut app = ChatApp::default();
+    app.messages.push(ChatMessage::Assistant(
+        "- parent\n  - child\n    - grandchild".to_string(),
+    ));
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+    let combined = rendered.join("\n");
+
+    assert!(combined.contains("- parent"));
+    assert!(combined.contains("  - child"));
+    assert!(combined.contains("    - grandchild"));
+}
+
+#[test]
+fn submitted_user_message_preserves_leading_spaces() {
+    let mut app = ChatApp::default();
+    app.messages.push(ChatMessage::User {
+        text: "- parent\n  - child\n    - grandchild".to_string(),
+        queued: false,
+    });
+
+    let rendered: Vec<String> = build_message_lines(&app, 120)
+        .iter()
+        .map(line_text)
+        .collect();
+    let combined = rendered.join("\n");
+
+    assert!(combined.contains("- parent"));
+    assert!(combined.contains("  - child"));
+    assert!(combined.contains("    - grandchild"));
+}
+
+#[test]
 fn thinking_message_is_not_truncated() {
     let mut app = ChatApp::default();
     let tail = "TAIL_SEGMENT";

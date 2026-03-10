@@ -780,27 +780,28 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
 
     let mut result = Vec::new();
-    for line in text.lines() {
+    for line in text.split('\n') {
         if line.is_empty() {
             result.push(String::new());
             continue;
         }
-        let mut current = String::new();
-        for word in line.split_whitespace() {
-            if current.is_empty() {
-                current = word.to_string();
-            } else if current.len() + 1 + word.len() <= width {
-                current.push(' ');
-                current.push_str(word);
-            } else {
-                result.push(current);
-                current = word.to_string();
+
+        let mut chunk = String::new();
+        let mut chunk_len = 0usize;
+        for ch in line.chars() {
+            if chunk_len >= width {
+                result.push(std::mem::take(&mut chunk));
+                chunk_len = 0;
             }
+            chunk.push(ch);
+            chunk_len += 1;
         }
-        if !current.is_empty() {
-            result.push(current);
+
+        if !chunk.is_empty() {
+            result.push(chunk);
         }
     }
+
     if result.is_empty() {
         result.push(String::new());
     }

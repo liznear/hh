@@ -648,35 +648,21 @@ fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> 
         return vec![spans.to_vec()];
     }
 
-    let mut lines = Vec::new();
-    let mut current_line = Vec::new();
+    let mut lines: Vec<Vec<Span<'static>>> = vec![Vec::new()];
     let mut current_line_len = 0;
 
     for span in spans {
         let span_style = span.style;
-        let span_text = span.content.as_ref();
-
-        for word in span_text.split_whitespace() {
-            let word_len = word.chars().count();
-            let space_needed = if current_line_len > 0 { 1 } else { 0 };
-
-            if current_line_len + space_needed + word_len > width && !current_line.is_empty() {
-                lines.push(std::mem::take(&mut current_line));
-                current_line_len = 0;
-            }
-
-            if current_line_len > 0 {
-                current_line.push(Span::raw(" "));
-                current_line_len += 1;
-            }
-
-            current_line.push(Span::styled(word.to_string(), span_style));
-            current_line_len += word_len;
+        for (token, is_whitespace) in split_whitespace_runs(span.content.as_ref()) {
+            push_wrapped_token(
+                &mut lines,
+                &mut current_line_len,
+                token,
+                is_whitespace,
+                span_style,
+                width,
+            );
         }
-    }
-
-    if !current_line.is_empty() {
-        lines.push(current_line);
     }
 
     if lines.is_empty() {
@@ -684,6 +670,84 @@ fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> 
     }
 
     lines
+}
+
+fn split_whitespace_runs(text: &str) -> Vec<(&str, bool)> {
+    let mut runs = Vec::new();
+    let mut start = 0usize;
+    let mut run_is_whitespace: Option<bool> = None;
+
+    for (idx, ch) in text.char_indices() {
+        let is_whitespace = ch.is_whitespace();
+        match run_is_whitespace {
+            None => run_is_whitespace = Some(is_whitespace),
+            Some(current) if current != is_whitespace => {
+                runs.push((&text[start..idx], current));
+                start = idx;
+                run_is_whitespace = Some(is_whitespace);
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(is_whitespace) = run_is_whitespace {
+        runs.push((&text[start..], is_whitespace));
+    }
+
+    runs
+}
+
+fn push_wrapped_token(
+    lines: &mut Vec<Vec<Span<'static>>>,
+    current_line_len: &mut usize,
+    token: &str,
+    _is_whitespace: bool,
+    style: Style,
+    width: usize,
+) {
+    let token_len = token.chars().count();
+    if token_len == 0 {
+        return;
+    }
+
+    if token_len > width {
+        for ch in token.chars() {
+            if *current_line_len >= width {
+                lines.push(Vec::new());
+                *current_line_len = 0;
+            }
+            push_wrapped_text(
+                lines.last_mut().expect("line exists"),
+                &ch.to_string(),
+                style,
+            );
+            *current_line_len += 1;
+        }
+        return;
+    }
+
+    if *current_line_len > 0 && *current_line_len + token_len > width {
+        lines.push(Vec::new());
+        *current_line_len = 0;
+    }
+
+    push_wrapped_text(lines.last_mut().expect("line exists"), token, style);
+    *current_line_len += token_len;
+}
+
+fn push_wrapped_text(line: &mut Vec<Span<'static>>, text: &str, style: Style) {
+    if text.is_empty() {
+        return;
+    }
+
+    if let Some(last) = line.last_mut()
+        && last.style == style
+    {
+        last.content.to_mut().push_str(text);
+        return;
+    }
+
+    line.push(Span::styled(text.to_string(), style));
 }
 
 #[cfg(test)]
