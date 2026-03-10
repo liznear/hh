@@ -126,64 +126,107 @@ async fn run_agent(
         .load_runner_state_snapshot()?
         .unwrap_or_default();
     let mut last_emitted_todo_items = initial_runner_state.todo_items;
+    let (input_tx, input_rx) = tokio::sync::mpsc::channel(64);
+    let _ = input_tx.try_send(crate::core::agent::RunnerInput::Message(prompt));
+
+    let cancel_input_tx = input_tx.clone();
+    let mut cancel_rx_watch = cancel_rx.clone();
+    tokio::spawn(async move {
+        if *cancel_rx_watch.borrow() {
+            let _ = cancel_input_tx
+                .send(crate::core::agent::RunnerInput::Cancel)
+                .await;
+            return;
+        }
+        if cancel_rx_watch.changed().await.is_ok() && *cancel_rx_watch.borrow() {
+            let _ = cancel_input_tx
+                .send(crate::core::agent::RunnerInput::Cancel)
+                .await;
+        }
+    });
+
     let result = loop_runner
         .run_with_runner_output_sink_cancellable(
-            vec![prompt],
-            &mut move |request| {
-                let event_sender = approval_event_sender.clone();
-                let cwd = cwd.to_path_buf();
-                async move {
-                    let question = approval_request_to_question_prompt(&request);
-                    let (tx, rx) = oneshot::channel();
-                    event_sender.send(TuiEvent::QuestionPrompt {
-                        questions: vec![question],
-                        responder: std::sync::Arc::new(std::sync::Mutex::new(Some(tx))),
-                    });
+            input_rx,
+            &mut |output| {
+                if let crate::core::agent::RunnerOutput::ApprovalRequired { call_id, request } =
+                    &output
+                {
+                    let event_sender = approval_event_sender.clone();
+                    let cwd = cwd.to_path_buf();
+                    let tx = input_tx.clone();
+                    let request_clone = request.clone();
+                    let call_id = call_id.clone();
+                    tokio::spawn(async move {
+                        let question = approval_request_to_question_prompt(&request_clone);
+                        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                        event_sender.send(crate::cli::tui::TuiEvent::QuestionPrompt {
+                            questions: vec![question],
+                            responder: std::sync::Arc::new(std::sync::Mutex::new(Some(reply_tx))),
+                        });
 
-                    let answers = rx.await.unwrap_or_else(|_| {
-                        Err(anyhow::anyhow!("approval prompt was cancelled"))
-                    })?;
+                        let answers = reply_rx.await.unwrap_or_else(|_| {
+                            Err(anyhow::anyhow!("approval prompt was cancelled"))
+                        });
 
-                    let choice = parse_approval_choice(&request, &answers)
-                        .unwrap_or(crate::core::ApprovalChoice::Deny);
-                    persist_approval_choice_if_needed(&cwd, &request, choice)?;
-                    Ok(choice)
-                }
-            },
-            &mut move |questions| {
-                let event_sender = question_event_sender.clone();
-                async move {
-                    if !allow_questions {
-                        anyhow::bail!("question tool is not available in this mode")
-                    }
-                    let (tx, rx) = oneshot::channel();
-                    event_sender.send(TuiEvent::QuestionPrompt {
-                        questions,
-                        responder: std::sync::Arc::new(std::sync::Mutex::new(Some(tx))),
+                        let choice = match answers {
+                            Ok(answers) => {
+                                let choice = parse_approval_choice(&request_clone, &answers)
+                                    .unwrap_or(crate::core::ApprovalChoice::Deny);
+                                let _ =
+                                    persist_approval_choice_if_needed(&cwd, &request_clone, choice);
+                                choice
+                            }
+                            Err(_) => crate::core::ApprovalChoice::Deny,
+                        };
+                        let _ = tx
+                            .send(crate::core::agent::RunnerInput::ApprovalDecision {
+                                call_id,
+                                choice,
+                            })
+                            .await;
                     });
-                    rx.await
-                        .unwrap_or_else(|_| Err(anyhow::anyhow!("question prompt was cancelled")))
-                }
-            },
-            &mut {
-                let cancel_rx = cancel_rx.clone();
-                move || {
-                    let mut cancel_rx = cancel_rx.clone();
-                    async move {
-                        if *cancel_rx.borrow() {
+                } else if let crate::core::agent::RunnerOutput::QuestionRequired {
+                    call_id,
+                    prompts,
+                } = &output
+                {
+                    let event_sender = question_event_sender.clone();
+                    let tx = input_tx.clone();
+                    let call_id = call_id.clone();
+                    let prompts = prompts.clone();
+                    tokio::spawn(async move {
+                        if !allow_questions {
                             return;
                         }
-                        let _ = cancel_rx.changed().await;
-                    }
+                        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                        event_sender.send(crate::cli::tui::TuiEvent::QuestionPrompt {
+                            questions: prompts,
+                            responder: std::sync::Arc::new(std::sync::Mutex::new(Some(reply_tx))),
+                        });
+                        if let Ok(Ok(answers)) = reply_rx.await {
+                            let _ = tx
+                                .send(crate::core::agent::RunnerInput::QuestionAnswered {
+                                    call_id,
+                                    answers,
+                                })
+                                .await;
+                        }
+                    });
                 }
-            },
-            &mut |output| {
-                apply_runner_output_to_observer(
+
+                if let Err(e) = crate::core::agent::apply_runner_output_to_observer(
                     &event_sender,
                     &loop_runner.session,
                     output,
                     &mut last_emitted_todo_items,
-                )
+                ) {
+                    event_sender.send(crate::cli::tui::TuiEvent::Error(format!(
+                        "Failed to apply runner output: {}",
+                        e
+                    )));
+                }
+                Ok(())
             },
             &mut || {
                 let queued = event_sender.drain_queued_user_messages();
@@ -594,35 +637,74 @@ pub(super) async fn run_single_prompt(
         .unwrap_or_default();
     let mut last_emitted_todo_items = initial_runner_state.todo_items;
 
+    let (input_tx, input_rx) = tokio::sync::mpsc::channel(64);
+    let _ = input_tx.try_send(crate::core::agent::RunnerInput::Message(Message {
+        role: Role::User,
+        content: prompt,
+        attachments: Vec::new(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    }));
+
     loop_runner
         .run_with_runner_output_sink_cancellable(
-            vec![Message {
-                role: Role::User,
-                content: prompt,
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            &mut |request| {
-                let cwd = cwd.to_path_buf();
-                async move {
-                    let question = approval_request_to_question_prompt(&request);
-                    let answers = render::ask_questions(&[question])?;
-                    let choice = parse_approval_choice(&request, &answers)
-                        .unwrap_or(crate::core::ApprovalChoice::Deny);
-                    persist_approval_choice_if_needed(&cwd, &request, choice)?;
-                    Ok::<crate::core::ApprovalChoice, anyhow::Error>(choice)
-                }
-            },
-            &mut |questions| async move { Ok(render::ask_questions(&questions)?) },
-            &mut || std::future::pending::<()>(),
+            input_rx,
             &mut |output| {
-                apply_runner_output_to_observer(
+                if let crate::core::agent::RunnerOutput::ApprovalRequired { call_id, request } =
+                    &output
+                {
+                    let cwd = cwd.to_path_buf();
+                    let tx = input_tx.clone();
+                    let request_clone = request.clone();
+                    let call_id = call_id.clone();
+                    tokio::spawn(async move {
+                        let question = approval_request_to_question_prompt(&request_clone);
+                        if let Ok(answers) = render::ask_questions(&[question]) {
+                            let choice = parse_approval_choice(&request_clone, &answers)
+                                .unwrap_or(crate::core::ApprovalChoice::Deny);
+                            let _ = persist_approval_choice_if_needed(&cwd, &request_clone, choice);
+                            let _ = tx
+                                .send(crate::core::agent::RunnerInput::ApprovalDecision {
+                                    call_id,
+                                    choice,
+                                })
+                                .await;
+                        } else {
+                            let _ = tx
+                                .send(crate::core::agent::RunnerInput::ApprovalDecision {
+                                    call_id,
+                                    choice: crate::core::ApprovalChoice::Deny,
+                                })
+                                .await;
+                        }
+                    });
+                } else if let crate::core::agent::RunnerOutput::QuestionRequired {
+                    call_id,
+                    prompts,
+                } = &output
+                {
+                    let tx = input_tx.clone();
+                    let call_id = call_id.clone();
+                    let prompts = prompts.clone();
+                    tokio::spawn(async move {
+                        if let Ok(answers) = render::ask_questions(&prompts) {
+                            let _ = tx
+                                .send(crate::core::agent::RunnerInput::QuestionAnswered {
+                                    call_id,
+                                    answers,
+                                })
+                                .await;
+                        }
+                    });
+                }
+
+                let _ = apply_runner_output_to_observer(
                     &render,
                     &loop_runner.session,
                     output,
                     &mut last_emitted_todo_items,
-                )
+                );
+                Ok(())
             },
             &mut Vec::new,
         )

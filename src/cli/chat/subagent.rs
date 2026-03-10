@@ -129,25 +129,37 @@ async fn run_subagent_execution(
         }
     };
 
+    let (input_tx, input_rx) = tokio::sync::mpsc::channel(64);
+    let _ = input_tx.try_send(crate::core::agent::RunnerInput::Message(Message {
+        role: Role::User,
+        content: request.prompt,
+        attachments: Vec::new(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    }));
+
     match loop_runner
         .run_with_runner_output_sink_cancellable(
-            vec![Message {
-                role: Role::User,
-                content: request.prompt,
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            &mut |_request| async {
-                Ok::<crate::core::ApprovalChoice, anyhow::Error>(
-                    crate::core::ApprovalChoice::AllowSession,
-                )
+            input_rx,
+            &mut |output| {
+                if let crate::core::agent::RunnerOutput::ApprovalRequired {
+                    call_id,
+                    request: _,
+                } = &output
+                {
+                    let tx = input_tx.clone();
+                    let call_id = call_id.clone();
+                    tokio::spawn(async move {
+                        let _ = tx
+                            .send(crate::core::agent::RunnerInput::ApprovalDecision {
+                                call_id,
+                                choice: crate::core::ApprovalChoice::AllowSession,
+                            })
+                            .await;
+                    });
+                }
+                apply_runner_output_to_subagent_session(&loop_runner.session, output)
             },
-            &mut |_questions| async {
-                anyhow::bail!("question tool is not available in sub-agent mode")
-            },
-            &mut || std::future::pending::<()>(),
-            &mut |output| apply_runner_output_to_subagent_session(&loop_runner.session, output),
             &mut Vec::new,
         )
         .await

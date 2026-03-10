@@ -1943,12 +1943,7 @@ mod tests {
 
         let result = timeout(
             Duration::from_millis(250),
-            runner.run_input_loop(
-                &mut state.messages,
-                rx,
-                &mut |_output| {},
-                Vec::new,
-            ),
+            runner.run_input_loop(&mut state.messages, rx, &mut |_output| {}, Vec::new),
         )
         .await
         .expect("run loop should resolve quickly");
@@ -1973,12 +1968,7 @@ mod tests {
         let mut state = TurnState::default();
 
         let result = runner
-            .run_input_loop(
-                &mut state.messages,
-                rx,
-                &mut |_output| {},
-                Vec::new,
-            )
+            .run_input_loop(&mut state.messages, rx, &mut |_output| {}, Vec::new)
             .await;
 
         let err = result.expect_err("run should be cancelled");
@@ -1999,12 +1989,7 @@ mod tests {
         let mut state = TurnState::default();
 
         let result = runner
-            .run_input_loop(
-                &mut state.messages,
-                rx,
-                &mut |_output| {},
-                Vec::new,
-            )
+            .run_input_loop(&mut state.messages, rx, &mut |_output| {}, Vec::new)
             .await
             .expect("run input loop");
 
@@ -2072,12 +2057,7 @@ mod tests {
 
         let result = timeout(
             Duration::from_millis(250),
-            runner.run_input_loop(
-                &mut state.messages,
-                rx,
-                &mut |_output| {},
-                Vec::new,
-            ),
+            runner.run_input_loop(&mut state.messages, rx, &mut |_output| {}, Vec::new),
         )
         .await
         .expect("run loop should resolve quickly");
@@ -2117,23 +2097,18 @@ mod tests {
         let drain_call_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         let answer = runner
-            .run_input_loop(
-                &mut state.messages,
-                rx,
-                &mut |_output| {},
-                {
-                    let drain_call_count = Arc::clone(&drain_call_count);
-                    move || {
-                        let call_index =
-                            drain_call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        if call_index == 0 {
-                            return Vec::new();
-                        }
-
-                        vec![TestData::user_message("follow up")]
+            .run_input_loop(&mut state.messages, rx, &mut |_output| {}, {
+                let drain_call_count = Arc::clone(&drain_call_count);
+                move || {
+                    let call_index =
+                        drain_call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if call_index == 0 {
+                        return Vec::new();
                     }
-                },
-            )
+
+                    vec![TestData::user_message("follow up")]
+                }
+            })
             .await
             .expect("run input loop");
 

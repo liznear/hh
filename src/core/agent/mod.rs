@@ -11,17 +11,10 @@ pub use types::{
 
 use self::core::AgentCore as EngineCore;
 use self::runner::AgentRunner;
-use crate::core::{
-    ApprovalChoice, ApprovalPolicy, ApprovalRequest, Message, Provider, QuestionAnswers,
-    QuestionPrompt, SessionReader, SessionSink, ToolExecutor,
-};
+use crate::core::{ApprovalPolicy, Message, Provider, SessionReader, SessionSink, ToolExecutor};
 use crate::session::{SessionEvent, event_id};
-use std::collections::VecDeque;
-use std::future::Future;
 
-type RunnerOutputQueue = std::sync::Arc<std::sync::Mutex<VecDeque<RunnerOutput>>>;
 type EmitErrorSlot = std::sync::Arc<std::sync::Mutex<Option<String>>>;
-type RunnerInputSender = tokio::sync::mpsc::Sender<RunnerInput>;
 
 pub trait RunnerOutputObserver: Send + Sync {
     fn on_thinking(&self, _text: &str) {}
@@ -61,28 +54,17 @@ where
     A: ApprovalPolicy,
     S: SessionSink + SessionReader,
 {
-    pub async fn run<AP, APFut>(
+    pub async fn run(
         &self,
-        initial_messages: Vec<Message>,
-        mut approve: AP,
-    ) -> anyhow::Result<String>
-    where
-        AP: FnMut(ApprovalRequest) -> APFut,
-        APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
-    {
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool is unavailable in this mode; provide a question handler")
-        };
+        input_rx: tokio::sync::mpsc::Receiver<RunnerInput>,
+    ) -> anyhow::Result<String> {
         let initial_runner_state = self
             .session
             .load_runner_state_snapshot()?
             .unwrap_or_default();
         let mut last_emitted_todo_items = initial_runner_state.todo_items;
         self.run_with_runner_output_sink_cancellable(
-            initial_messages,
-            &mut approve,
-            &mut ask_question,
-            &mut || std::future::pending::<()>(),
+            input_rx,
             &mut |output| {
                 apply_runner_output_to_observer(
                     &(),
@@ -96,22 +78,13 @@ where
         .await
     }
 
-    pub async fn run_with_runner_output_sink_cancellable<AP, APFut, Q, QFut, C, CFut, O, D>(
+    pub async fn run_with_runner_output_sink_cancellable<O, D>(
         &self,
-        initial_messages: Vec<Message>,
-        approve: &mut AP,
-        ask_question: &mut Q,
-        cancel: &mut C,
+        input_rx: tokio::sync::mpsc::Receiver<RunnerInput>,
         emit_output: &mut O,
         drain_pending_messages: &mut D,
     ) -> anyhow::Result<String>
     where
-        AP: FnMut(ApprovalRequest) -> APFut,
-        APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
-        Q: FnMut(Vec<QuestionPrompt>) -> QFut,
-        QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
-        C: FnMut() -> CFut,
-        CFut: Future<Output = ()> + Send,
         O: FnMut(RunnerOutput) -> anyhow::Result<()> + Send,
         D: FnMut() -> Vec<Message>,
     {
@@ -146,38 +119,17 @@ where
             )?;
         }
 
-        let (input_tx, input_rx) = tokio::sync::mpsc::channel(64);
-        for message in initial_messages {
-            input_tx
-                .try_send(RunnerInput::Message(message))
-                .map_err(|_| anyhow::anyhow!("failed to enqueue initial runner input"))?;
-        }
-
-        let request_queue = RunnerOutputQueue::default();
-        let request_notify = std::sync::Arc::new(tokio::sync::Notify::new());
         let emit_error = EmitErrorSlot::default();
-        let queue_for_emit = request_queue.clone();
-        let notify_for_emit = request_notify.clone();
         let emit_error_for_emit = emit_error.clone();
+        let error_notify = std::sync::Arc::new(tokio::sync::Notify::new());
+        let error_notify_for_emit = error_notify.clone();
         let mut emit_wrapped = move |output: RunnerOutput| {
-            let requires_follow_up = matches!(
-                output,
-                RunnerOutput::ApprovalRequired { .. } | RunnerOutput::QuestionRequired { .. }
-            );
-
-            if let Err(err) = emit_output(output.clone()) {
-                if let Ok(mut slot) = emit_error_for_emit.lock()
-                    && slot.is_none()
-                {
-                    *slot = Some(err.to_string());
-                }
-                notify_for_emit.notify_one();
-                return;
-            }
-
-            if requires_follow_up && let Ok(mut queue) = queue_for_emit.lock() {
-                queue.push_back(output);
-                notify_for_emit.notify_one();
+            if let Err(err) = emit_output(output)
+                && let Ok(mut slot) = emit_error_for_emit.lock()
+                && slot.is_none()
+            {
+                *slot = Some(err.to_string());
+                error_notify_for_emit.notify_one();
             }
         };
 
@@ -189,31 +141,17 @@ where
         );
         tokio::pin!(run_future);
 
-        let mut cancel_sent = false;
-        let run_result = loop {
-            if let Some(err) = take_emit_error(&emit_error) {
-                let _ = input_tx.send(RunnerInput::Cancel).await;
-                return Err(anyhow::anyhow!(err));
+        let run_result = tokio::select! {
+            biased;
+            _ = error_notify.notified() => {
+                Err(anyhow::anyhow!(take_emit_error(&emit_error).unwrap_or_else(|| "Unknown emit error".to_string())))
             }
-
-            drain_follow_up_requests(&request_queue, &input_tx, approve, ask_question).await?;
-
-            tokio::select! {
-                biased;
-                _ = request_notify.notified() => {}
-                _ = cancel(), if !cancel_sent => {
-                    cancel_sent = true;
-                    let _ = input_tx.send(RunnerInput::Cancel).await;
-                }
-                result = &mut run_future => break result,
-            }
+            result = &mut run_future => result,
         };
 
         if let Some(err) = take_emit_error(&emit_error) {
             return Err(anyhow::anyhow!(err));
         }
-
-        drain_follow_up_requests(&request_queue, &input_tx, approve, ask_question).await?;
 
         match run_result {
             Ok(Some(final_answer)) => Ok(final_answer),
@@ -223,70 +161,11 @@ where
     }
 }
 
-fn pop_output_queue(output_queue: &RunnerOutputQueue) -> anyhow::Result<Option<RunnerOutput>> {
-    let Ok(mut queue) = output_queue.lock() else {
-        return Err(anyhow::anyhow!("runner output queue poisoned"));
-    };
-    Ok(queue.pop_front())
-}
-
 fn take_emit_error(emit_error: &EmitErrorSlot) -> Option<String> {
     let Ok(mut slot) = emit_error.lock() else {
         return Some("runner emit error slot poisoned".to_string());
     };
     slot.take()
-}
-
-async fn drain_follow_up_requests<AP, APFut, Q, QFut>(
-    request_queue: &RunnerOutputQueue,
-    input_tx: &RunnerInputSender,
-    approve: &mut AP,
-    ask_question: &mut Q,
-) -> anyhow::Result<()>
-where
-    AP: FnMut(ApprovalRequest) -> APFut,
-    APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
-    Q: FnMut(Vec<QuestionPrompt>) -> QFut,
-    QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
-{
-    while let Some(output) = pop_output_queue(request_queue)? {
-        handle_follow_up_request(output, input_tx, approve, ask_question).await?;
-    }
-
-    Ok(())
-}
-
-async fn handle_follow_up_request<AP, APFut, Q, QFut>(
-    output: RunnerOutput,
-    input_tx: &RunnerInputSender,
-    approve: &mut AP,
-    ask_question: &mut Q,
-) -> anyhow::Result<()>
-where
-    AP: FnMut(ApprovalRequest) -> APFut,
-    APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
-    Q: FnMut(Vec<QuestionPrompt>) -> QFut,
-    QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
-{
-    match output {
-        RunnerOutput::ApprovalRequired { call_id, request } => {
-            let choice = approve(request).await?;
-            input_tx
-                .send(RunnerInput::ApprovalDecision { call_id, choice })
-                .await
-                .map_err(|_| anyhow::anyhow!("runner input channel closed"))?;
-        }
-        RunnerOutput::QuestionRequired { call_id, prompts } => {
-            let answers = ask_question(prompts).await?;
-            input_tx
-                .send(RunnerInput::QuestionAnswered { call_id, answers })
-                .await
-                .map_err(|_| anyhow::anyhow!("runner input channel closed"))?;
-        }
-        _ => {}
-    }
-
-    Ok(())
 }
 
 fn push_message_and_record<S: SessionSink>(
@@ -564,24 +443,50 @@ mod tests {
         let approval_count = Arc::new(Mutex::new(0usize));
         let approval_count_for_closure = approval_count.clone();
 
-        let result = agent
-            .run(
-                vec![Message {
-                    role: Role::User,
-                    content: "run checks".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                }],
-                move |_request| {
-                    let approval_count = approval_count_for_closure.clone();
-                    async move {
-                        let mut count = approval_count.lock().expect("approval count lock");
-                        *count += 1;
-                        Ok(ApprovalChoice::AllowSession)
-                    }
-                },
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        tx.send(RunnerInput::Message(Message {
+            role: Role::User,
+            content: "run checks".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }))
+        .await
+        .unwrap();
+
+        let session_for_emit = session.clone();
+        let mut last_emitted_todo_items = Vec::new();
+        let mut emit_output = move |output: RunnerOutput| {
+            if let RunnerOutput::ApprovalRequired {
+                call_id,
+                request: _,
+            } = &output
+            {
+                let mut count = approval_count_for_closure
+                    .lock()
+                    .expect("approval count lock");
+                *count += 1;
+                let tx = tx.clone();
+                let call_id = call_id.clone();
+                tokio::spawn(async move {
+                    let _ = tx
+                        .send(RunnerInput::ApprovalDecision {
+                            call_id,
+                            choice: crate::core::ApprovalChoice::AllowSession,
+                        })
+                        .await;
+                });
+            }
+            apply_runner_output_to_observer(
+                &(),
+                &session_for_emit,
+                output,
+                &mut last_emitted_todo_items,
             )
+        };
+
+        let result = agent
+            .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
             .await;
 
         assert!(result.is_ok());
@@ -688,24 +593,50 @@ mod tests {
         let approval_count = Arc::new(Mutex::new(0usize));
         let approval_count_for_closure = approval_count.clone();
 
-        let result = agent
-            .run(
-                vec![Message {
-                    role: Role::User,
-                    content: "run bash commands".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                }],
-                move |_request| {
-                    let approval_count = approval_count_for_closure.clone();
-                    async move {
-                        let mut count = approval_count.lock().expect("approval count lock");
-                        *count += 1;
-                        Ok(ApprovalChoice::AllowAlways)
-                    }
-                },
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        tx.send(RunnerInput::Message(Message {
+            role: Role::User,
+            content: "run bash commands".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }))
+        .await
+        .unwrap();
+
+        let session_for_emit = session.clone();
+        let mut last_emitted_todo_items = Vec::new();
+        let mut emit_output = move |output: RunnerOutput| {
+            if let RunnerOutput::ApprovalRequired {
+                call_id,
+                request: _,
+            } = &output
+            {
+                let mut count = approval_count_for_closure
+                    .lock()
+                    .expect("approval count lock");
+                *count += 1;
+                let tx = tx.clone();
+                let call_id = call_id.clone();
+                tokio::spawn(async move {
+                    let _ = tx
+                        .send(RunnerInput::ApprovalDecision {
+                            call_id,
+                            choice: crate::core::ApprovalChoice::AllowAlways,
+                        })
+                        .await;
+                });
+            }
+            apply_runner_output_to_observer(
+                &(),
+                &session_for_emit,
+                output,
+                &mut last_emitted_todo_items,
             )
+        };
+
+        let result = agent
+            .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
             .await;
 
         assert!(result.is_ok());
@@ -802,24 +733,33 @@ mod tests {
             session,
         };
 
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        tx.send(RunnerInput::Message(Message {
+            role: Role::User,
+            content: "initial prompt".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }))
+        .await
+        .unwrap();
 
         let result = agent
             .run_with_runner_output_sink_cancellable(
-                vec![Message {
-                    role: Role::User,
-                    content: "initial prompt".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                }],
-                &mut approve,
-                &mut ask_question,
-                &mut || std::future::pending::<()>(),
+                rx,
                 &mut |output| {
+                    if let RunnerOutput::ApprovalRequired { call_id, .. } = &output {
+                        let tx = tx.clone();
+                        let call_id = call_id.clone();
+                        tokio::spawn(async move {
+                            let _ = tx
+                                .send(RunnerInput::ApprovalDecision {
+                                    call_id,
+                                    choice: crate::core::ApprovalChoice::AllowOnce,
+                                })
+                                .await;
+                        });
+                    }
                     if matches!(output, RunnerOutput::ToolEnd { .. })
                         && let Ok(mut queue) = queued.lock()
                         && queue.is_empty()
@@ -918,17 +858,42 @@ mod tests {
             session: session.clone(),
         };
 
-        let result = agent
-            .run(
-                vec![Message {
-                    role: Role::User,
-                    content: "resume".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                }],
-                |_request| async { Ok(ApprovalChoice::AllowOnce) },
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        tx.send(RunnerInput::Message(Message {
+            role: Role::User,
+            content: "resume".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }))
+        .await
+        .unwrap();
+
+        let session_for_emit = session.clone();
+        let mut last_emitted_todo_items = Vec::new();
+        let mut emit_output = move |output: RunnerOutput| {
+            if let RunnerOutput::ApprovalRequired { call_id, .. } = &output {
+                let tx = tx.clone();
+                let call_id = call_id.clone();
+                tokio::spawn(async move {
+                    let _ = tx
+                        .send(RunnerInput::ApprovalDecision {
+                            call_id,
+                            choice: crate::core::ApprovalChoice::AllowOnce,
+                        })
+                        .await;
+                });
+            }
+            apply_runner_output_to_observer(
+                &(),
+                &session_for_emit,
+                output,
+                &mut last_emitted_todo_items,
             )
+        };
+
+        let result = agent
+            .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
             .await;
 
         assert!(result.is_ok());
@@ -1022,17 +987,42 @@ mod tests {
             session: session.clone(),
         };
 
-        let result = agent
-            .run(
-                vec![Message {
-                    role: Role::User,
-                    content: "run todo read".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                }],
-                |_request| async { Ok(ApprovalChoice::AllowOnce) },
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        tx.send(RunnerInput::Message(Message {
+            role: Role::User,
+            content: "run todo read".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }))
+        .await
+        .unwrap();
+
+        let session_for_emit = session.clone();
+        let mut last_emitted_todo_items = Vec::new();
+        let mut emit_output = move |output: RunnerOutput| {
+            if let RunnerOutput::ApprovalRequired { call_id, .. } = &output {
+                let tx = tx.clone();
+                let call_id = call_id.clone();
+                tokio::spawn(async move {
+                    let _ = tx
+                        .send(RunnerInput::ApprovalDecision {
+                            call_id,
+                            choice: crate::core::ApprovalChoice::AllowOnce,
+                        })
+                        .await;
+                });
+            }
+            apply_runner_output_to_observer(
+                &(),
+                &session_for_emit,
+                output,
+                &mut last_emitted_todo_items,
             )
+        };
+
+        let result = agent
+            .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
             .await;
 
         assert!(result.is_ok());
@@ -1138,17 +1128,42 @@ mod tests {
             session: session.clone(),
         };
 
-        let first_result = first_agent
-            .run(
-                vec![Message {
-                    role: Role::User,
-                    content: "seed todo state".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                }],
-                |_request| async { Ok(ApprovalChoice::AllowOnce) },
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        tx.send(RunnerInput::Message(Message {
+            role: Role::User,
+            content: "seed todo state".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }))
+        .await
+        .unwrap();
+
+        let session_for_emit = session.clone();
+        let mut last_emitted_todo_items = Vec::new();
+        let mut emit_output = move |output: RunnerOutput| {
+            if let RunnerOutput::ApprovalRequired { call_id, .. } = &output {
+                let tx = tx.clone();
+                let call_id = call_id.clone();
+                tokio::spawn(async move {
+                    let _ = tx
+                        .send(RunnerInput::ApprovalDecision {
+                            call_id,
+                            choice: crate::core::ApprovalChoice::AllowOnce,
+                        })
+                        .await;
+                });
+            }
+            apply_runner_output_to_observer(
+                &(),
+                &session_for_emit,
+                output,
+                &mut last_emitted_todo_items,
             )
+        };
+
+        let first_result = first_agent
+            .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
             .await;
         assert!(first_result.is_ok());
 
@@ -1188,17 +1203,42 @@ mod tests {
             session: session.clone(),
         };
 
-        let second_result = second_agent
-            .run(
-                vec![Message {
-                    role: Role::User,
-                    content: "resume and continue".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                }],
-                |_request| async { Ok(ApprovalChoice::AllowOnce) },
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        tx.send(RunnerInput::Message(Message {
+            role: Role::User,
+            content: "resume and continue".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }))
+        .await
+        .unwrap();
+
+        let session_for_emit = session.clone();
+        let mut last_emitted_todo_items = Vec::new();
+        let mut emit_output = move |output: RunnerOutput| {
+            if let RunnerOutput::ApprovalRequired { call_id, .. } = &output {
+                let tx = tx.clone();
+                let call_id = call_id.clone();
+                tokio::spawn(async move {
+                    let _ = tx
+                        .send(RunnerInput::ApprovalDecision {
+                            call_id,
+                            choice: crate::core::ApprovalChoice::AllowOnce,
+                        })
+                        .await;
+                });
+            }
+            apply_runner_output_to_observer(
+                &(),
+                &session_for_emit,
+                output,
+                &mut last_emitted_todo_items,
             )
+        };
+
+        let second_result = second_agent
+            .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
             .await;
         assert!(second_result.is_ok());
 
@@ -1251,7 +1291,7 @@ mod tests {
             let _ = cancel_tx.send(true);
         });
 
-        let mut cancel = {
+        let cancel = {
             let cancel_rx = cancel_rx.clone();
             move || {
                 let mut cancel_rx = cancel_rx.clone();
@@ -1264,25 +1304,41 @@ mod tests {
             }
         };
 
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        tx.send(RunnerInput::Message(Message {
+            role: Role::User,
+            content: "cancel this run".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }))
+        .await
+        .unwrap();
+
+        let tx_cancel = tx.clone();
+        tokio::spawn(async move {
+            let cancel = cancel;
+            cancel().await;
+            let _ = tx_cancel.send(RunnerInput::Cancel).await;
+        });
 
         let result = timeout(
             Duration::from_millis(250),
             agent.run_with_runner_output_sink_cancellable(
-                vec![Message {
-                    role: Role::User,
-                    content: "cancel this run".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                }],
-                &mut approve,
-                &mut ask_question,
-                &mut cancel,
+                rx,
                 &mut |output| {
+                    if let RunnerOutput::ApprovalRequired { call_id, .. } = &output {
+                        let tx = tx.clone();
+                        let call_id = call_id.clone();
+                        tokio::spawn(async move {
+                            let _ = tx
+                                .send(RunnerInput::ApprovalDecision {
+                                    call_id,
+                                    choice: crate::core::ApprovalChoice::AllowOnce,
+                                })
+                                .await;
+                        });
+                    }
                     if matches!(output, RunnerOutput::Cancelled) {
                         cancelled_count.fetch_add(1, Ordering::SeqCst);
                     }
@@ -1345,24 +1401,33 @@ mod tests {
             session,
         };
 
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = |_questions: Vec<QuestionPrompt>| async {
-            anyhow::bail!("question tool should not be called in this test")
-        };
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        tx.send(RunnerInput::Message(Message {
+            role: Role::User,
+            content: "burst".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }))
+        .await
+        .unwrap();
 
         let result = agent
             .run_with_runner_output_sink_cancellable(
-                vec![Message {
-                    role: Role::User,
-                    content: "burst".to_string(),
-                    attachments: Vec::new(),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                }],
-                &mut approve,
-                &mut ask_question,
-                &mut || std::future::pending::<()>(),
+                rx,
                 &mut |output| {
+                    if let RunnerOutput::ApprovalRequired { call_id, .. } = &output {
+                        let tx = tx.clone();
+                        let call_id = call_id.clone();
+                        tokio::spawn(async move {
+                            let _ = tx
+                                .send(RunnerInput::ApprovalDecision {
+                                    call_id,
+                                    choice: crate::core::ApprovalChoice::AllowOnce,
+                                })
+                                .await;
+                        });
+                    }
                     if matches!(output, RunnerOutput::TurnComplete) {
                         done_count.fetch_add(1, Ordering::SeqCst);
                     }

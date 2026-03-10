@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use hh_cli::config::settings::Settings;
 use hh_cli::core::RunnerOutputObserver;
-use hh_cli::core::agent::{AgentCore, apply_runner_output_to_observer};
+use hh_cli::core::agent::AgentCore;
 use hh_cli::core::{ApprovalChoice, Message, Role};
 use hh_cli::permission::PermissionMatcher;
 use hh_cli::provider::{
@@ -138,6 +138,66 @@ impl TestContext {
     }
 }
 
+async fn run_agent_with_custom_approve<F, Fut>(
+    agent: &hh_cli::core::agent::AgentCore<
+        MockProvider,
+        hh_cli::tool::registry::ToolRegistry,
+        hh_cli::permission::PermissionMatcher,
+        hh_cli::session::SessionStore,
+    >,
+    messages: Vec<hh_cli::core::Message>,
+    approve_handler: F,
+) -> anyhow::Result<String>
+where
+    F: FnMut(hh_cli::core::ApprovalRequest) -> Fut + Send + 'static,
+    Fut:
+        std::future::Future<Output = anyhow::Result<hh_cli::core::ApprovalChoice>> + Send + 'static,
+{
+    let (tx, rx) = tokio::sync::mpsc::channel(100);
+    for msg in messages {
+        tx.send(hh_cli::core::agent::RunnerInput::Message(msg))
+            .await
+            .unwrap();
+    }
+
+    let tx_clone = tx.clone();
+    let session_for_emit = agent.session.clone();
+    let mut last_emitted_todo_items = Vec::new();
+
+    let handler = std::sync::Arc::new(tokio::sync::Mutex::new(approve_handler));
+
+    let mut emit_output = move |output: hh_cli::core::agent::RunnerOutput| {
+        if let hh_cli::core::agent::RunnerOutput::ApprovalRequired { call_id, request } = &output {
+            let tx = tx_clone.clone();
+            let call_id = call_id.clone();
+            let handler = std::sync::Arc::clone(&handler);
+            let req = request.clone();
+            tokio::spawn(async move {
+                let mut h = handler.lock().await;
+                let choice_res = h(req).await;
+                if let Ok(choice) = choice_res {
+                    let _ = tx
+                        .send(hh_cli::core::agent::RunnerInput::ApprovalDecision {
+                            call_id,
+                            choice,
+                        })
+                        .await;
+                }
+            });
+        }
+        hh_cli::core::agent::apply_runner_output_to_observer(
+            &(),
+            &session_for_emit,
+            output,
+            &mut last_emitted_todo_items,
+        )
+    };
+
+    agent
+        .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
+        .await
+}
+
 struct TestData;
 
 impl TestData {
@@ -212,12 +272,13 @@ async fn agent_loop_stops_on_final_answer() {
     context.seed_workspace_file("Cargo.toml", "[package]\nname='ws'\n");
     let agent = context.make_agent(provider, 3);
 
-    let out = agent
-        .run(vec![TestData::user_message("hello")], |_request| async {
-            Ok::<ApprovalChoice, anyhow::Error>(ApprovalChoice::AllowSession)
-        })
-        .await
-        .expect("run");
+    let out = run_agent_with_custom_approve(
+        &agent,
+        vec![TestData::user_message("hello")],
+        |_request| async { Ok::<ApprovalChoice, anyhow::Error>(ApprovalChoice::AllowSession) },
+    )
+    .await
+    .expect("run");
 
     assert_eq!(out, "done");
 }
@@ -250,18 +311,31 @@ async fn agent_loop_emits_stream_and_tool_events() {
     let agent = context.make_agent(provider, 4);
 
     let mut last_emitted_todo_items = Vec::new();
+    let (tx, rx) = tokio::sync::mpsc::channel(100);
+    tx.send(hh_cli::core::agent::RunnerInput::Message(
+        TestData::user_message("hello"),
+    ))
+    .await
+    .unwrap();
+    let tx_clone = tx.clone();
     let _ = agent
         .run_with_runner_output_sink_cancellable(
-            vec![TestData::user_message("hello")],
-            &mut |_request| async {
-                Ok::<ApprovalChoice, anyhow::Error>(ApprovalChoice::AllowSession)
-            },
-            &mut |_questions| async {
-                anyhow::bail!("question tool should not be called in this test")
-            },
-            &mut || std::future::pending::<()>(),
+            rx,
             &mut |output| {
-                apply_runner_output_to_observer(
+                if let hh_cli::core::agent::RunnerOutput::ApprovalRequired { call_id, .. } = &output
+                {
+                    let tx = tx_clone.clone();
+                    let call_id = call_id.clone();
+                    tokio::spawn(async move {
+                        let _ = tx
+                            .send(hh_cli::core::agent::RunnerInput::ApprovalDecision {
+                                call_id,
+                                choice: ApprovalChoice::AllowSession,
+                            })
+                            .await;
+                    });
+                }
+                hh_cli::core::agent::apply_runner_output_to_observer(
                     &events,
                     &agent.session,
                     output,
@@ -326,23 +400,23 @@ async fn agent_loop_persists_thinking_before_assistant_message() {
         session,
     };
 
-    let _ = agent
-        .run(
-            vec![Message {
-                role: Role::User,
-                content: "hello".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            |_request| async {
-                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
-                    hh_cli::core::ApprovalChoice::AllowSession,
-                )
-            },
-        )
-        .await
-        .expect("run");
+    let _ = run_agent_with_custom_approve(
+        &agent,
+        vec![Message {
+            role: Role::User,
+            content: "hello".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }],
+        |_request| async {
+            Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                hh_cli::core::ApprovalChoice::AllowSession,
+            )
+        },
+    )
+    .await
+    .expect("run");
 
     let events = session_for_assert.replay_events().expect("replay events");
     let mut thinking_idx = None;
@@ -424,23 +498,23 @@ async fn agent_loop_zero_max_steps_is_unbounded() {
         session,
     };
 
-    let out = agent
-        .run(
-            vec![Message {
-                role: Role::User,
-                content: "hello".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            |_request| async {
-                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
-                    hh_cli::core::ApprovalChoice::AllowSession,
-                )
-            },
-        )
-        .await
-        .expect("run");
+    let out = run_agent_with_custom_approve(
+        &agent,
+        vec![Message {
+            role: Role::User,
+            content: "hello".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }],
+        |_request| async {
+            Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                hh_cli::core::ApprovalChoice::AllowSession,
+            )
+        },
+    )
+    .await
+    .expect("run");
 
     assert_eq!(out, "final");
 }
@@ -484,23 +558,23 @@ async fn agent_loop_respects_max_steps_when_set() {
         session,
     };
 
-    let err = agent
-        .run(
-            vec![Message {
-                role: Role::User,
-                content: "hello".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            |_request| async {
-                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
-                    hh_cli::core::ApprovalChoice::AllowSession,
-                )
-            },
-        )
-        .await
-        .expect_err("should hit max steps");
+    let err = run_agent_with_custom_approve(
+        &agent,
+        vec![Message {
+            role: Role::User,
+            content: "hello".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }],
+        |_request| async {
+            Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                hh_cli::core::ApprovalChoice::AllowSession,
+            )
+        },
+    )
+    .await
+    .expect_err("should hit max steps");
 
     assert!(err.to_string().contains("Reached max steps"));
 }
@@ -568,23 +642,23 @@ async fn agent_loop_injects_runtime_todo_state_message() {
         session,
     };
 
-    let out = agent
-        .run(
-            vec![Message {
-                role: Role::User,
-                content: "plan and execute".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            |_request| async {
-                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
-                    hh_cli::core::ApprovalChoice::AllowSession,
-                )
-            },
-        )
-        .await
-        .expect("run");
+    let out = run_agent_with_custom_approve(
+        &agent,
+        vec![Message {
+            role: Role::User,
+            content: "plan and execute".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }],
+        |_request| async {
+            Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                hh_cli::core::ApprovalChoice::AllowSession,
+            )
+        },
+    )
+    .await
+    .expect("run");
 
     assert_eq!(out, "done");
 
@@ -678,23 +752,23 @@ async fn agent_loop_todo_read_returns_current_runtime_snapshot() {
         session,
     };
 
-    let out = agent
-        .run(
-            vec![Message {
-                role: Role::User,
-                content: "manage todos".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            |_request| async {
-                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
-                    hh_cli::core::ApprovalChoice::AllowSession,
-                )
-            },
-        )
-        .await
-        .expect("run");
+    let out = run_agent_with_custom_approve(
+        &agent,
+        vec![Message {
+            role: Role::User,
+            content: "manage todos".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }],
+        |_request| async {
+            Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                hh_cli::core::ApprovalChoice::AllowSession,
+            )
+        },
+    )
+    .await
+    .expect("run");
 
     assert_eq!(out, "done");
 
@@ -786,31 +860,55 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
     };
 
     let mut last_emitted_todo_items = Vec::new();
+    let (tx, rx) = tokio::sync::mpsc::channel(100);
+    tx.send(hh_cli::core::agent::RunnerInput::Message(Message {
+        role: Role::User,
+        content: "ask me".to_string(),
+        attachments: Vec::new(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    }))
+    .await
+    .unwrap();
+    let tx_clone = tx.clone();
     let out = agent
         .run_with_runner_output_sink_cancellable(
-            vec![Message {
-                role: Role::User,
-                content: "ask me".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            &mut |_request| async {
-                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
-                    hh_cli::core::ApprovalChoice::AllowSession,
-                )
-            },
-            &mut |_questions| async { Ok(vec![vec!["B".to_string()]]) },
-            &mut || std::future::pending::<()>(),
+            rx,
             &mut |output| {
-                apply_runner_output_to_observer(
+                if let hh_cli::core::agent::RunnerOutput::ApprovalRequired { call_id, .. } = &output
+                {
+                    let tx = tx_clone.clone();
+                    let call_id = call_id.clone();
+                    tokio::spawn(async move {
+                        let _ = tx
+                            .send(hh_cli::core::agent::RunnerInput::ApprovalDecision {
+                                call_id,
+                                choice: hh_cli::core::ApprovalChoice::AllowSession,
+                            })
+                            .await;
+                    });
+                }
+                if let hh_cli::core::agent::RunnerOutput::QuestionRequired { call_id, .. } = &output
+                {
+                    let tx = tx_clone.clone();
+                    let call_id = call_id.clone();
+                    tokio::spawn(async move {
+                        let _ = tx
+                            .send(hh_cli::core::agent::RunnerInput::QuestionAnswered {
+                                call_id,
+                                answers: vec![vec!["B".to_string()]],
+                            })
+                            .await;
+                    });
+                }
+                hh_cli::core::agent::apply_runner_output_to_observer(
                     &(),
                     &agent.session,
                     output,
                     &mut last_emitted_todo_items,
                 )
             },
-            &mut Vec::new,
+            &mut || Vec::new(),
         )
         .await
         .expect("run");
@@ -867,19 +965,19 @@ async fn approval_choice_is_remembered_for_repeated_ask_policy_tool_calls() {
         let approval_count = Arc::new(Mutex::new(0usize));
         let approval_count_for_handler = Arc::clone(&approval_count);
 
-        let out = agent
-            .run(
-                vec![TestData::user_message("write two files")],
-                move |_request| {
-                    let approval_count = Arc::clone(&approval_count_for_handler);
-                    async move {
-                        *approval_count.lock().expect("approval count") += 1;
-                        Ok::<ApprovalChoice, anyhow::Error>(approval_choice)
-                    }
-                },
-            )
-            .await
-            .expect("run");
+        let out = run_agent_with_custom_approve(
+            &agent,
+            vec![TestData::user_message("write two files")],
+            move |_request| {
+                let approval_count = Arc::clone(&approval_count_for_handler);
+                async move {
+                    *approval_count.lock().expect("approval count") += 1;
+                    Ok::<ApprovalChoice, anyhow::Error>(approval_choice)
+                }
+            },
+        )
+        .await
+        .expect("run");
 
         assert_eq!(out, "done", "{case_name}");
         assert_eq!(
@@ -941,26 +1039,26 @@ async fn bash_approval_request_includes_llm_stated_purpose() {
 
     let captured = Arc::new(Mutex::new(String::new()));
     let captured_for_handler = Arc::clone(&captured);
-    let _ = agent
-        .run(
-            vec![Message {
-                role: Role::User,
-                content: "show changed files".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            }],
-            move |request| {
-                let captured_for_handler = Arc::clone(&captured_for_handler);
-                async move {
-                    *captured_for_handler.lock().expect("capture") = request.body;
-                    Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
-                        hh_cli::core::ApprovalChoice::Deny,
-                    )
-                }
-            },
-        )
-        .await;
+    let _ = run_agent_with_custom_approve(
+        &agent,
+        vec![Message {
+            role: Role::User,
+            content: "show changed files".to_string(),
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        }],
+        move |request| {
+            let captured_for_handler = Arc::clone(&captured_for_handler);
+            async move {
+                *captured_for_handler.lock().expect("capture") = request.body;
+                Ok::<hh_cli::core::ApprovalChoice, anyhow::Error>(
+                    hh_cli::core::ApprovalChoice::Deny,
+                )
+            }
+        },
+    )
+    .await;
 
     let body = captured.lock().expect("captured body").clone();
     assert!(body.contains("Allow `git diff --name-only` to inspect modified files"));
