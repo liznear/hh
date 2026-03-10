@@ -1,8 +1,6 @@
 pub mod agent_init;
-pub mod chat;
 pub mod commands;
 pub mod render;
-pub mod tui;
 
 use crate::cli::commands::{Cli, Commands, ConfigCommand};
 use crate::config::{load_settings, write_default_project_config};
@@ -19,7 +17,7 @@ pub async fn run() -> anyhow::Result<()> {
         Commands::Chat { max_turns, agent } => {
             let settings = load_settings(&cwd, agent)?;
             let settings = apply_max_turns(settings, max_turns);
-            chat::run_chat(settings, &cwd).await
+            crate::app::run_interactive_chat(settings, &cwd).await
         }
         Commands::Run {
             prompt,
@@ -28,7 +26,7 @@ pub async fn run() -> anyhow::Result<()> {
         } => {
             let settings = load_settings(&cwd, agent)?;
             let settings = apply_max_turns(settings, max_turns);
-            chat::run_single_prompt(settings, &cwd, prompt).await?;
+            crate::app::run_single_prompt(settings, &cwd, prompt).await?;
             Ok(())
         }
         Commands::Tools => {

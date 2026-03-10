@@ -7,11 +7,10 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 
-use super::super::app::ChatApp;
-use super::UiLayout;
-use super::theme::*;
+use crate::app::chat_state::ChatApp;
+use crate::theme::colors::*;
 
-pub(super) fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
+pub(crate) fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
     let left_border_x = area.x.saturating_add(layout.user_bubble_indent() as u16);
     f.render_widget(Block::default().style(Style::default().bg(PAGE_BG)), area);
     let input_panel_area = Rect {
@@ -248,7 +247,7 @@ pub(super) fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiL
     );
 }
 
-pub(super) fn question_prompt_line_count(app: &ChatApp, _width: usize) -> usize {
+pub(crate) fn question_prompt_line_count(app: &ChatApp, _width: usize) -> usize {
     let Some(question) = app.pending_question_view() else {
         return 1;
     };
@@ -499,7 +498,7 @@ fn viewport_start(cursor_line: usize, total_lines: usize, height: usize) -> usiz
     cursor_line + 1 - height
 }
 
-pub(super) fn input_line_count(input: &str, width: usize) -> usize {
+pub(crate) fn input_line_count(input: &str, width: usize) -> usize {
     wrap_input_lines(input, width).len()
 }
 
@@ -536,7 +535,7 @@ fn blend_color_with_white(color: Color, amount: f64) -> Color {
     }
 }
 
-pub(super) fn render_processing_indicator(
+pub(crate) fn render_processing_indicator(
     f: &mut Frame,
     app: &ChatApp,
     area: Rect,

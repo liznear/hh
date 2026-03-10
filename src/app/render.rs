@@ -10,19 +10,14 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::iter::Peekable;
 
-mod input;
-mod messages;
-mod overlays;
-mod sidebar;
-mod theme;
+use crate::app::chat_state::{ChatApp, ChatMessage, SubagentStatusView};
+use crate::app::components::{input, messages, popups, sidebar};
+use crate::theme::colors::*;
+use crate::theme::markdown::markdown_to_lines_with_indent;
+use crate::theme::tool_presentation::render_tool_start;
+pub(crate) use crate::theme::colors::{AppLayoutRects, UiLayout};
 
-use super::app::{ChatApp, ChatMessage, SubagentStatusView};
-use super::markdown::markdown_to_lines_with_indent;
-use super::tool_presentation::render_tool_start;
-use theme::*;
-pub(crate) use theme::{AppLayoutRects, UiLayout};
-
-pub(crate) use sidebar::SidebarSectionHeaderHitbox;
+pub(crate) use crate::app::components::sidebar::SidebarSectionHeaderHitbox;
 
 #[derive(Debug, Deserialize)]
 struct EditToolOutput {
@@ -245,7 +240,7 @@ fn render_subagent_footer_line(
     area: Rect,
     layout: UiLayout,
     duration_secs: u64,
-    item: Option<&super::app::SubagentItemView>,
+    item: Option<&crate::app::chat_state::SubagentItemView>,
 ) {
     let agent = app.selected_agent();
     let agent_color = agent
@@ -377,11 +372,11 @@ fn blend_color_with_white(color: Color, amount: f64) -> Color {
 }
 
 fn render_clipboard_notice(f: &mut Frame, app: &ChatApp) {
-    overlays::render_clipboard_notice(f, app);
+    popups::render_clipboard_notice(f, app);
 }
 
 fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
-    overlays::render_command_palette(f, app, area, layout);
+    popups::render_command_palette(f, app, area, layout);
 }
 
 fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
@@ -716,7 +711,7 @@ fn render_footer_block(
     lines: &mut Vec<Line<'static>>,
     footer: FooterBlock<'_>,
     indent: &str,
-    agent: Option<&super::app::AgentOptionView>,
+    agent: Option<&crate::app::chat_state::AgentOptionView>,
 ) {
     // Get agent color, default to TEXT_PRIMARY
     let agent_color = agent

@@ -18,10 +18,10 @@ type QuestionResponder = std::sync::Arc<
     std::sync::Mutex<Option<oneshot::Sender<anyhow::Result<crate::core::QuestionAnswers>>>>,
 >;
 
-use super::commands::{SlashCommand, get_default_commands};
-use super::event::{SubagentEventItem, TuiEvent};
-use super::tool_render::render_tool_result;
-use super::viewport_cache::MessageViewportCache;
+use crate::app::components::commands::{SlashCommand, get_default_commands};
+use crate::app::components::viewport_cache::MessageViewportCache;
+use crate::app::events::{SubagentEventItem, TuiEvent};
+use crate::theme::tool_render::render_tool_result;
 use crate::core::MessageAttachment;
 
 const SIDEBAR_WIDTH: u16 = 38;
@@ -514,7 +514,7 @@ impl ChatApp {
             return None;
         }
 
-        let (_, starts) = super::ui::build_message_lines_with_starts(self, wrap_width);
+        let (_, starts) = crate::app::render::build_message_lines_with_starts(self, wrap_width);
         if starts.is_empty() {
             return None;
         }
@@ -1164,7 +1164,7 @@ impl ChatApp {
         let cached_width = *self.cached_sidebar_width.borrow();
 
         if needs_rebuild || cached_width != width {
-            let lines = super::ui::build_sidebar_lines(self, width);
+            let lines = crate::app::render::build_sidebar_lines(self, width);
             *self.cached_sidebar_lines.borrow_mut() = lines;
             *self.cached_sidebar_width.borrow_mut() = width;
             *self.sidebar_needs_rebuild.borrow_mut() = false;
@@ -2053,7 +2053,7 @@ impl Default for ChatApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::tui::event::SubagentEventItem;
+    use crate::app::events::SubagentEventItem;
     use crate::session::types::SubAgentLifecycleStatus;
 
     #[test]
@@ -2385,7 +2385,7 @@ mod tests {
             }),
         );
 
-        app.handle_event(&crate::cli::tui::TuiEvent::ToolEnd {
+        app.handle_event(&crate::app::events::TuiEvent::ToolEnd {
             name: "task".to_string(),
             result,
         });
@@ -2434,7 +2434,7 @@ mod tests {
             });
         }
 
-        let (_, starts) = crate::cli::tui::ui::build_message_lines_with_starts(&app, 120);
+        let (_, starts) = crate::app::render::build_message_lines_with_starts(&app, 120);
         assert!(starts.len() >= 3);
 
         let first = app

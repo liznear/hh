@@ -1,7 +1,7 @@
 use crate::tool::ToolResult;
 use serde::Deserialize;
 
-use super::app::{TodoItemView, TodoPriority, TodoStatus};
+use crate::app::chat_state::{TodoItemView, TodoPriority, TodoStatus};
 
 #[derive(Debug, Clone)]
 pub struct RenderedToolOutput {

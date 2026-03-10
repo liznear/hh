@@ -1,11 +1,28 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::core::RunnerOutputObserver;
+
+const INPUT_POLL_TIMEOUT: Duration = Duration::from_millis(16);
+const INPUT_BATCH_MAX: usize = 64;
+
+#[derive(Debug, Clone)]
+pub enum InputEvent {
+    KeyPress(crossterm::event::KeyEvent),
+    Paste(String),
+    ScrollUp { x: u16, y: u16 },
+    ScrollDown { x: u16, y: u16 },
+    Click { x: u16, y: u16 },
+    Drag { x: u16, y: u16 },
+    MouseRelease { x: u16, y: u16 },
+    Resize,
+}
 
 #[derive(Debug, Clone)]
 pub struct SubagentEventItem {
@@ -26,20 +43,17 @@ pub struct SubagentEventItem {
 type QuestionResponder =
     Arc<Mutex<Option<oneshot::Sender<anyhow::Result<crate::core::QuestionAnswers>>>>>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScopedTuiEvent {
     pub session_epoch: u64,
     pub run_epoch: u64,
     pub event: TuiEvent,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TuiEvent {
     Thinking(String),
-    ToolStart {
-        name: String,
-        args: Value,
-    },
+    ToolStart { name: String, args: Value },
     ToolEnd {
         name: String,
         result: crate::tool::ToolResult,
@@ -70,7 +84,6 @@ pub enum TuiEvent {
     Tick,
 }
 
-/// Sends agent events to a channel for the TUI to consume
 #[derive(Clone)]
 pub struct TuiEventSender {
     tx: Arc<mpsc::UnboundedSender<ScopedTuiEvent>>,
@@ -181,5 +194,78 @@ impl RunnerOutputObserver for TuiEventSender {
 
     fn on_cancelled(&self) {
         self.send(TuiEvent::Cancelled);
+    }
+}
+
+pub fn normalize_terminal_event(event: Event) -> Option<InputEvent> {
+    match event {
+        Event::Key(key) => {
+            if key.kind == KeyEventKind::Release {
+                None
+            } else {
+                Some(InputEvent::KeyPress(key))
+            }
+        }
+        Event::Paste(text) => Some(InputEvent::Paste(text)),
+        Event::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::ScrollUp => Some(InputEvent::ScrollUp {
+                x: mouse.column,
+                y: mouse.row,
+            }),
+            MouseEventKind::ScrollDown => Some(InputEvent::ScrollDown {
+                x: mouse.column,
+                y: mouse.row,
+            }),
+            MouseEventKind::Down(_) => Some(InputEvent::Click {
+                x: mouse.column,
+                y: mouse.row,
+            }),
+            MouseEventKind::Drag(_) => Some(InputEvent::Drag {
+                x: mouse.column,
+                y: mouse.row,
+            }),
+            MouseEventKind::Up(_) => Some(InputEvent::MouseRelease {
+                x: mouse.column,
+                y: mouse.row,
+            }),
+            _ => None,
+        },
+        Event::Resize(_, _) | Event::FocusGained => Some(InputEvent::Resize),
+        _ => None,
+    }
+}
+
+pub async fn read_input_batch() -> anyhow::Result<Vec<InputEvent>> {
+    if !event::poll(INPUT_POLL_TIMEOUT)? {
+        return Ok(Vec::new());
+    }
+
+    let mut events = Vec::with_capacity(INPUT_BATCH_MAX.min(8));
+    if let Some(input_event) = normalize_terminal_event(event::read()?) {
+        events.push(input_event);
+    }
+
+    while events.len() < INPUT_BATCH_MAX && event::poll(Duration::ZERO)? {
+        if let Some(input_event) = normalize_terminal_event(event::read()?) {
+            events.push(input_event);
+        }
+    }
+
+    Ok(events)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    #[test]
+    fn filters_key_release_events() {
+        let event = Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        ));
+        assert!(normalize_terminal_event(event).is_none());
     }
 }

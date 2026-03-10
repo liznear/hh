@@ -2,12 +2,13 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use crate::cli::chat::session;
-use crate::cli::tui::{self, ChatApp, SubmittedInput, TuiEvent, TuiEventSender};
+use crate::app::chat_state::{ChatApp, ChatMessage, SubmittedInput};
+use crate::app::events::{TuiEvent, TuiEventSender};
+use crate::app::handlers::session;
 use crate::config::Settings;
 use crate::session::SessionStore;
 
-pub(super) fn handle_submitted_input(
+pub(crate) fn handle_submitted_input(
     input: SubmittedInput,
     app: &mut ChatApp,
     settings: &Settings,
@@ -20,12 +21,12 @@ pub(super) fn handle_submitted_input(
 
     if input.text.starts_with('/') && input.attachments.is_empty() {
         if let Some(message_index) = input.message_index {
-            if let Some(tui::ChatMessage::User { text, .. }) = app.messages.get(message_index)
+            if let Some(ChatMessage::User { text, .. }) = app.messages.get(message_index)
                 && text == &input.text
             {
                 app.remove_message_at(message_index);
             }
-        } else if let Some(tui::ChatMessage::User { text, .. }) = app.messages.last()
+        } else if let Some(ChatMessage::User { text, .. }) = app.messages.last()
             && text == &input.text
         {
             app.remove_message_at(app.messages.len().saturating_sub(1));
@@ -33,13 +34,12 @@ pub(super) fn handle_submitted_input(
         handle_slash_command(input.text, app, settings, cwd, event_sender);
     } else if app.is_picking_session {
         if let Err(e) = session::handle_session_selection(input.text, app, settings, cwd) {
-            app.messages
-                .push(tui::ChatMessage::Assistant(e.to_string()));
+            app.messages.push(ChatMessage::Assistant(e.to_string()));
             app.mark_dirty();
         }
         app.set_processing(false);
     } else {
-        super::handle_chat_message(input, app, settings, cwd, event_sender);
+        crate::app::handlers::runner::handle_chat_message(input, app, settings, cwd, event_sender);
     }
 }
 
@@ -56,7 +56,7 @@ fn handle_slash_command(
 
     match command {
         "/new" => {
-            app.start_new_session(super::build_session_name(cwd));
+            app.start_new_session(crate::app::utils::build_session_name(cwd));
             finish_idle(app);
         }
         "/model" => {
@@ -68,8 +68,8 @@ fn handle_slash_command(
                         format!(
                             "Switched to {} ({} -> {}, context: {}, output: {})",
                             model_ref,
-                            super::format_modalities(&model.model.modalities.input),
-                            super::format_modalities(&model.model.modalities.output),
+                            crate::app::utils::format_modalities(&model.model.modalities.input),
+                            crate::app::utils::format_modalities(&model.model.modalities.output),
                             model.model.limits.context,
                             model.model.limits.output
                         ),
@@ -164,7 +164,7 @@ fn handle_slash_command(
 
 fn finish_with_assistant(app: &mut ChatApp, message: impl Into<String>) {
     app.messages
-        .push(tui::ChatMessage::Assistant(message.into()));
+        .push(ChatMessage::Assistant(message.into()));
     finish_idle(app);
 }
 

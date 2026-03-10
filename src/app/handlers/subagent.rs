@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use crate::agent::{AgentLoader, AgentMode, AgentRegistry};
-use crate::cli::chat::agent_run::{AgentLoopOptions, create_agent_core};
-use crate::cli::tui;
+use crate::app::events::SubagentEventItem;
+use crate::app::handlers::runner::{AgentLoopOptions, create_agent_core};
 use crate::config::Settings;
 use crate::core::SessionSink;
 use crate::core::agent::RunnerOutput;
@@ -18,11 +18,11 @@ use crate::session::{SessionEvent, event_id};
 
 static GLOBAL_SUBAGENT_MANAGER: OnceLock<Arc<SubagentManager>> = OnceLock::new();
 
-pub(super) fn initialize_subagent_manager(settings: Settings, cwd: PathBuf) {
+pub(crate) fn initialize_subagent_manager(settings: Settings, cwd: PathBuf) {
     let _ = GLOBAL_SUBAGENT_MANAGER.get_or_init(|| Arc::new(build_subagent_manager(settings, cwd)));
 }
 
-pub(super) fn current_subagent_manager(settings: &Settings, cwd: &Path) -> Arc<SubagentManager> {
+pub(crate) fn current_subagent_manager(settings: &Settings, cwd: &Path) -> Arc<SubagentManager> {
     Arc::clone(
         GLOBAL_SUBAGENT_MANAGER
             .get_or_init(|| Arc::new(build_subagent_manager(settings.clone(), cwd.to_path_buf()))),
@@ -260,9 +260,9 @@ fn completed_subagent_result(
     }
 }
 
-pub(super) fn map_subagent_node_event(
+pub(crate) fn map_subagent_node_event(
     node: &crate::core::agent::subagent_manager::SubagentNode,
-) -> tui::SubagentEventItem {
+) -> SubagentEventItem {
     let status = node.status.label().to_string();
 
     let finished_at = if node.status.is_terminal() {
@@ -271,7 +271,7 @@ pub(super) fn map_subagent_node_event(
         None
     };
 
-    tui::SubagentEventItem {
+    SubagentEventItem {
         task_id: node.task_id.clone(),
         session_id: node.session_id.clone(),
         name: node.name.clone(),

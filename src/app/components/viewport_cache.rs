@@ -2,7 +2,7 @@ use std::cell::{Cell, Ref, RefCell};
 
 use ratatui::text::Line;
 
-use super::app::{ChatApp, SelectionPosition};
+use crate::app::chat_state::{ChatApp, SelectionPosition};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MessageDirtyHint {
@@ -65,7 +65,7 @@ impl MessageViewportCache {
                                 lines.truncate(last_start);
                                 starts.truncate(last_index);
                                 starts.push(lines.len());
-                                super::ui::append_message_lines_for_index(
+                                crate::app::render::append_message_lines_for_index(
                                     &mut lines, app, width, last_index,
                                 );
                                 rebuilt_incrementally = true;
@@ -76,7 +76,8 @@ impl MessageViewportCache {
             }
 
             if !rebuilt_incrementally {
-                let (lines, starts) = super::ui::build_message_lines_with_starts(app, width);
+                let (lines, starts) =
+                    crate::app::render::build_message_lines_with_starts(app, width);
                 *self.cached_lines.borrow_mut() = lines;
                 *self.cached_message_starts.borrow_mut() = starts;
             }
@@ -118,7 +119,7 @@ impl MessageViewportCache {
                 .saturating_add(visible_height)
                 .min(lines.len());
             let mut rendered = lines[scroll_offset..visible_end].to_vec();
-            super::ui::apply_selection_highlight(&mut rendered, app, scroll_offset);
+            crate::app::render::apply_selection_highlight(&mut rendered, app, scroll_offset);
             drop(lines);
 
             *self.cached_visible_lines.borrow_mut() = rendered;
@@ -138,5 +139,11 @@ impl MessageViewportCache {
             self.message_dirty_hint.set(MessageDirtyHint::MutateLast);
         }
         self.needs_rebuild.set(true);
+    }
+}
+
+impl Default for MessageViewportCache {
+    fn default() -> Self {
+        Self::new()
     }
 }

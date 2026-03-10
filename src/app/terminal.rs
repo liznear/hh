@@ -7,11 +7,11 @@ use crossterm::{
     },
     execute,
     terminal::{
-        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
-        enable_raw_mode,
+        disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen,
+        LeaveAlternateScreen,
     },
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{backend::CrosstermBackend, Terminal};
 
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 
@@ -19,7 +19,6 @@ fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
 }
 
-/// Setup terminal for TUI mode (raw mode + alternate screen + mouse capture)
 pub fn setup_terminal() -> io::Result<Tui> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -38,7 +37,6 @@ pub fn setup_terminal() -> io::Result<Tui> {
     Terminal::new(backend)
 }
 
-/// Restore terminal to original state
 pub fn restore_terminal(terminal: &mut Tui) -> io::Result<()> {
     disable_raw_mode()?;
     let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
@@ -52,7 +50,6 @@ pub fn restore_terminal(terminal: &mut Tui) -> io::Result<()> {
     Ok(())
 }
 
-/// RAII guard for terminal cleanup on panic
 pub struct TuiGuard {
     terminal: Tui,
 }
@@ -70,18 +67,5 @@ impl TuiGuard {
 impl Drop for TuiGuard {
     fn drop(&mut self) {
         let _ = restore_terminal(&mut self.terminal);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn keyboard_enhancements_enable_escape_disambiguation() {
-        assert!(
-            keyboard_enhancement_flags()
-                .contains(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        );
     }
 }

@@ -8,10 +8,11 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::cli::chat::session::{fallback_session_title, spawn_session_title_generation_task};
-use crate::cli::chat::subagent::{current_subagent_manager, map_subagent_node_event};
+use crate::app::chat_state::{ChatApp, SubmittedInput};
+use crate::app::events::{TuiEvent, TuiEventSender};
+use crate::app::handlers::session::{fallback_session_title, spawn_session_title_generation_task};
+use crate::app::handlers::subagent::{current_subagent_manager, map_subagent_node_event};
 use crate::cli::render;
-use crate::cli::tui::{ChatApp, SubmittedInput, TuiEvent, TuiEventSender};
 use crate::config::{Settings, upsert_local_permission_rule};
 use crate::core::agent::runner::is_cancellation_error;
 use crate::core::agent::subagent_manager::SubagentManager;
@@ -30,7 +31,7 @@ pub(super) struct AgentRunOptions {
     pub(super) allow_questions: bool,
 }
 
-pub(super) struct AgentLoopOptions {
+pub(crate) struct AgentLoopOptions {
     pub(super) subagent_manager: Option<Arc<SubagentManager>>,
     pub(super) parent_task_id: Option<String>,
     pub(super) depth: usize,
@@ -160,7 +161,7 @@ async fn run_agent(
                     tokio::spawn(async move {
                         let question = approval_request_to_question_prompt(&request_clone);
                         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-                        event_sender.send(crate::cli::tui::TuiEvent::QuestionPrompt {
+                        event_sender.send(TuiEvent::QuestionPrompt {
                             questions: vec![question],
                             responder: std::sync::Arc::new(std::sync::Mutex::new(Some(reply_tx))),
                         });
@@ -200,7 +201,7 @@ async fn run_agent(
                             return;
                         }
                         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-                        event_sender.send(crate::cli::tui::TuiEvent::QuestionPrompt {
+                        event_sender.send(TuiEvent::QuestionPrompt {
                             questions: prompts,
                             responder: std::sync::Arc::new(std::sync::Mutex::new(Some(reply_tx))),
                         });
@@ -221,7 +222,7 @@ async fn run_agent(
                     output,
                     &mut last_emitted_todo_items,
                 ) {
-                    event_sender.send(crate::cli::tui::TuiEvent::Error(format!(
+                    event_sender.send(TuiEvent::Error(format!(
                         "Failed to apply runner output: {}",
                         e
                     )));
@@ -309,11 +310,11 @@ fn validate_image_input_model_support(
 
     anyhow::bail!(
         "Model `{model_ref}` does not support image input (input modalities: {}).",
-        super::format_modalities(&selected.model.modalities.input)
+        crate::app::utils::format_modalities(&selected.model.modalities.input)
     )
 }
 
-pub(super) fn approval_request_to_question_prompt(
+pub(crate) fn approval_request_to_question_prompt(
     request: &crate::core::ApprovalRequest,
 ) -> crate::core::QuestionPrompt {
     let is_bash = request
@@ -376,7 +377,7 @@ pub(super) fn approval_request_to_question_prompt(
 
 // Approval option labels are protocol between question prompt rendering and parsing.
 // Keep prompt labels and parse_approval_choice mapping in lock-step.
-pub(super) fn parse_approval_choice(
+pub(crate) fn parse_approval_choice(
     request: &crate::core::ApprovalRequest,
     answers: &crate::core::QuestionAnswers,
 ) -> Option<crate::core::ApprovalChoice> {
@@ -405,7 +406,7 @@ pub(super) fn parse_approval_choice(
 
 // Only bash approvals persist to local permission rules.
 // Non-bash approvals remain per-request/per-session decisions.
-pub(super) fn persist_approval_choice_if_needed(
+pub(crate) fn persist_approval_choice_if_needed(
     cwd: &Path,
     request: &crate::core::ApprovalRequest,
     choice: crate::core::ApprovalChoice,
@@ -436,7 +437,7 @@ pub(super) fn persist_approval_choice_if_needed(
     }
 }
 
-pub(super) fn create_agent_core(
+pub(crate) fn create_agent_core(
     settings: Settings,
     cwd: &Path,
     model_ref: &str,
@@ -509,7 +510,7 @@ pub(super) fn create_agent_core(
     })
 }
 
-pub(super) fn handle_chat_message(
+pub(crate) fn handle_chat_message(
     input: SubmittedInput,
     app: &mut ChatApp,
     settings: &Settings,
@@ -579,7 +580,7 @@ pub(super) fn handle_chat_message(
     }
 }
 
-pub(super) async fn run_single_prompt(
+pub(crate) async fn run_single_prompt(
     settings: Settings,
     cwd: &Path,
     prompt: String,
@@ -595,7 +596,7 @@ pub(super) async fn run_single_prompt(
         let model_ref = default_model_ref.clone();
         let prompt = prompt.clone();
         tokio::spawn(async move {
-            let generated = match super::session::generate_session_title(
+            let generated = match crate::app::handlers::session::generate_session_title(
                 &settings, &model_ref, &prompt,
             )
             .await

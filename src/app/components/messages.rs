@@ -1,14 +1,14 @@
 use ratatui::{
-    Frame,
     style::{Color, Style},
     text::{Line, Span, Text},
     widgets::{Block, Paragraph},
+    Frame,
 };
 
-use super::super::app::ChatApp;
-use super::theme::*;
+use crate::app::chat_state::ChatApp;
+use crate::theme::colors::*;
 
-pub(super) fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
+pub(crate) fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
     let panel = Block::default().style(Style::default().bg(PAGE_BG));
     let inner = panel.inner(area);
     f.render_widget(panel, area);
@@ -35,7 +35,7 @@ pub(super) fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layou
     f.render_widget(paragraph, content);
 }
 
-pub(super) fn apply_selection_highlight(
+pub(crate) fn apply_selection_highlight(
     lines: &mut [Line<'static>],
     app: &ChatApp,
     line_offset: usize,

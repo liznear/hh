@@ -1,5 +1,5 @@
 use crate::agent::AgentRegistry;
-use crate::cli::tui::AgentOptionView;
+use crate::app::chat_state::AgentOptionView;
 use crate::config::Settings;
 
 /// Load and configure agents for the chat app

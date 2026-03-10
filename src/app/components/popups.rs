@@ -1,15 +1,14 @@
 use ratatui::{
-    Frame,
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Clear, List, ListItem, Padding, Paragraph, Wrap},
+    Frame,
 };
 
-use super::super::app::ChatApp;
-use super::UiLayout;
-use super::theme::*;
+use crate::app::chat_state::ChatApp;
+use crate::theme::colors::*;
 
-pub(super) fn render_clipboard_notice(f: &mut Frame, app: &ChatApp) {
+pub(crate) fn render_clipboard_notice(f: &mut Frame, app: &ChatApp) {
     let Some(notice) = app.active_clipboard_notice() else {
         return;
     };
@@ -48,7 +47,7 @@ pub(super) fn render_clipboard_notice(f: &mut Frame, app: &ChatApp) {
     );
 }
 
-pub(super) fn render_command_palette(
+pub(crate) fn render_command_palette(
     f: &mut Frame,
     app: &ChatApp,
     area: ratatui::layout::Rect,
@@ -87,7 +86,7 @@ pub(super) fn render_command_palette(
                 Style::default().fg(TEXT_PRIMARY).bg(COMMAND_PALETTE_BG)
             };
 
-            let description = super::truncate_chars(&cmd.description, description_width);
+            let description = truncate_chars(&cmd.description, description_width);
 
             ListItem::new(Line::from(vec![
                 Span::raw(left_padding.clone()),
@@ -108,4 +107,8 @@ pub(super) fn render_command_palette(
 
     let list = List::new(items).style(Style::default().bg(COMMAND_PALETTE_BG));
     f.render_widget(list, area);
+}
+
+fn truncate_chars(input: &str, max_chars: usize) -> String {
+    input.chars().take(max_chars).collect()
 }

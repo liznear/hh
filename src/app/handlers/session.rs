@@ -3,7 +3,10 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use crate::cli::tui::{self, ChatApp, TuiEvent, TuiEventSender};
+use crate::app::chat_state::{
+    ChatApp, ChatMessage, SubagentItemView, SubagentStatusView,
+};
+use crate::app::events::{TuiEvent, TuiEventSender};
 use crate::config::Settings;
 use crate::core::Message;
 #[cfg(not(test))]
@@ -101,7 +104,7 @@ async fn generate_compaction_summary(
     }
 }
 
-pub(super) fn handle_session_selection(
+pub(crate) fn handle_session_selection(
     input: String,
     app: &mut ChatApp,
     settings: &Settings,
@@ -128,22 +131,22 @@ pub(super) fn handle_session_selection(
     app.messages.clear();
     app.todo_items.clear();
     app.subagent_items.clear();
-    let mut subagent_items_by_task: HashMap<String, tui::SubagentItemView> = HashMap::new();
+    let mut subagent_items_by_task: HashMap<String, SubagentItemView> = HashMap::new();
     for event in events {
         match event {
             SessionEvent::Message { message, .. } => {
                 let chat_msg = match message.role {
-                    crate::core::Role::User => tui::ChatMessage::User {
+                    crate::core::Role::User => ChatMessage::User {
                         text: message.content,
                         queued: false,
                     },
-                    crate::core::Role::Assistant => tui::ChatMessage::Assistant(message.content),
+                    crate::core::Role::Assistant => ChatMessage::Assistant(message.content),
                     _ => continue,
                 };
                 app.messages.push(chat_msg);
             }
             SessionEvent::ToolCall { call } => {
-                app.messages.push(tui::ChatMessage::ToolCall {
+                app.messages.push(ChatMessage::ToolCall {
                     name: call.name,
                     args: call.arguments.to_string(),
                     output: None,
@@ -157,7 +160,7 @@ pub(super) fn handle_session_selection(
                 result,
             } => {
                 let pending_tool_name = app.messages.iter().rev().find_map(|msg| match msg {
-                    tui::ChatMessage::ToolCall { name, output, .. } if output.is_none() => {
+                    ChatMessage::ToolCall { name, output, .. } if output.is_none() => {
                         Some(name.clone())
                     }
                     _ => None,
@@ -170,17 +173,17 @@ pub(super) fn handle_session_selection(
                             crate::tool::ToolResult::ok_text("ok", output)
                         }
                     });
-                    app.handle_event(&tui::TuiEvent::ToolEnd {
+                    app.handle_event(&TuiEvent::ToolEnd {
                         name,
                         result: replayed_result,
                     });
                 }
             }
             SessionEvent::Thinking { content, .. } => {
-                app.messages.push(tui::ChatMessage::Thinking(content));
+                app.messages.push(ChatMessage::Thinking(content));
             }
             SessionEvent::Compact { summary, .. } => {
-                app.messages.push(tui::ChatMessage::Compaction(summary));
+                app.messages.push(ChatMessage::Compaction(summary));
             }
             SessionEvent::SubAgentStart {
                 id,
@@ -198,7 +201,7 @@ pub(super) fn handle_session_selection(
                 let task_id = task_id.unwrap_or(id);
                 subagent_items_by_task.insert(
                     task_id.clone(),
-                    tui::SubagentItemView {
+                    SubagentItemView {
                         task_id,
                         session_id: session_id.unwrap_or_default(),
                         name: name
@@ -211,7 +214,7 @@ pub(super) fn handle_session_selection(
                         depth,
                         started_at: created_at,
                         finished_at: None,
-                        status: tui::SubagentStatusView::from_lifecycle(status),
+                        status: SubagentStatusView::from_lifecycle(status),
                     },
                 );
             }
@@ -226,7 +229,7 @@ pub(super) fn handle_session_selection(
                 let task_id = task_id.unwrap_or(id);
                 let entry = subagent_items_by_task
                     .entry(task_id.clone())
-                    .or_insert_with(|| tui::SubagentItemView {
+                    .or_insert_with(|| SubagentItemView {
                         task_id,
                         session_id: String::new(),
                         name: "subagent".to_string(),
@@ -237,9 +240,9 @@ pub(super) fn handle_session_selection(
                         depth: 0,
                         started_at: 0,
                         finished_at: None,
-                        status: tui::SubagentStatusView::Running,
+                        status: SubagentStatusView::Running,
                     });
-                entry.status = tui::SubagentStatusView::from_lifecycle(status);
+                entry.status = SubagentStatusView::from_lifecycle(status);
                 if entry.status.is_terminal() {
                     entry.finished_at = Some(entry.started_at);
                 }
@@ -257,7 +260,7 @@ pub(super) fn handle_session_selection(
     app.subagent_items = subagent_items_by_task.into_values().collect();
     for item in &mut app.subagent_items {
         if item.status.is_active() {
-            item.status = tui::SubagentStatusView::Failed;
+            item.status = SubagentStatusView::Failed;
             if item.summary.is_none() {
                 item.summary = Some("interrupted_by_restart".to_string());
             }
@@ -268,7 +271,7 @@ pub(super) fn handle_session_selection(
     Ok(())
 }
 
-pub(super) fn fallback_session_title(prompt: &str) -> String {
+pub(crate) fn fallback_session_title(prompt: &str) -> String {
     let trimmed = prompt.trim();
     if trimmed.is_empty() {
         return "Image input".to_string();
@@ -301,7 +304,7 @@ fn normalize_session_title(raw: &str, fallback: &str) -> String {
     }
 }
 
-pub(super) fn spawn_session_title_generation_task(
+pub(crate) fn spawn_session_title_generation_task(
     settings: &Settings,
     cwd: &Path,
     session_id: String,

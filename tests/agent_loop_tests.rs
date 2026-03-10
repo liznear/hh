@@ -193,9 +193,7 @@ where
         )
     };
 
-    agent
-        .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
-        .await
+    agent.run(rx, &mut emit_output, &mut || Vec::new()).await
 }
 
 struct TestData;
@@ -319,7 +317,7 @@ async fn agent_loop_emits_stream_and_tool_events() {
     .unwrap();
     let tx_clone = tx.clone();
     let _ = agent
-        .run_with_runner_output_sink_cancellable(
+        .run(
             rx,
             &mut |output| {
                 if let hh_cli::core::agent::RunnerOutput::ApprovalRequired { call_id, .. } = &output
@@ -872,7 +870,7 @@ async fn agent_loop_question_tool_uses_question_handler_answers() {
     .unwrap();
     let tx_clone = tx.clone();
     let out = agent
-        .run_with_runner_output_sink_cancellable(
+        .run(
             rx,
             &mut |output| {
                 if let hh_cli::core::agent::RunnerOutput::ApprovalRequired { call_id, .. } = &output

@@ -6,4 +6,6 @@ pub mod permission;
 pub mod provider;
 pub mod safety;
 pub mod session;
+pub mod theme;
+pub mod app;
 pub mod tool;

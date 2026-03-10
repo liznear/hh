@@ -1,14 +1,14 @@
 use ratatui::{
-    Frame,
     prelude::Stylize,
     style::Style,
     text::{Line, Span, Text},
     widgets::{Block, Paragraph, Wrap},
+    Frame,
 };
 use serde_json::Value;
 
-use super::super::app::{ChatApp, ChatMessage, TodoItemView, TodoStatus};
-use super::theme::*;
+use crate::app::chat_state::{ChatApp, ChatMessage, TodoItemView, TodoStatus};
+use crate::theme::colors::*;
 
 const FOLDABLE_SECTION_MIN_LINES: usize = 7;
 
@@ -19,10 +19,15 @@ pub(crate) struct SidebarSectionHeaderHitbox {
     pub(crate) title_width: u16,
 }
 
-pub(super) fn render_sidebar(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
+pub(crate) fn render_sidebar(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
     let block = Block::default().style(Style::default().bg(SIDEBAR_BG));
     let inner = block.inner(area);
-    let content = super::inset_rect(inner, 2, 0);
+    let content = ratatui::layout::Rect {
+        x: inner.x.saturating_add(2).min(inner.right()),
+        y: inner.y,
+        width: inner.width.saturating_sub(2),
+        height: inner.height,
+    };
     f.render_widget(block, area);
 
     let lines = build_sidebar_lines(app, content.width);
@@ -37,7 +42,7 @@ pub(super) fn render_sidebar(f: &mut Frame, app: &ChatApp, area: ratatui::layout
     f.render_widget(sidebar, content);
 }
 
-pub(super) fn build_sidebar_lines(app: &ChatApp, content_width: u16) -> Vec<Line<'static>> {
+pub(crate) fn build_sidebar_lines(app: &ChatApp, content_width: u16) -> Vec<Line<'static>> {
     build_sidebar_model(app, content_width).lines
 }
 
@@ -332,7 +337,7 @@ fn append_modified_file_list(
         };
         let delta_len = added_text.chars().count() + removed_text.chars().count() + gap;
         let path_max = line_width.saturating_sub(delta_len + 1);
-        let path_text = super::truncate_chars(&file.path, path_max.max(1));
+        let path_text = truncate_chars(&file.path, path_max.max(1));
         let spaces = line_width
             .saturating_sub(path_text.chars().count() + delta_len)
             .max(1);
@@ -422,4 +427,8 @@ fn sidebar_prefixed(text: &str) -> String {
 
 fn sidebar_label(text: &str) -> String {
     format!("{SIDEBAR_LABEL_INDENT}{text}")
+}
+
+fn truncate_chars(input: &str, max_chars: usize) -> String {
+    input.chars().take(max_chars).collect()
 }

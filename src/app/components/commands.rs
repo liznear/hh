@@ -1,4 +1,4 @@
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SlashCommand {
     pub name: String,
     pub description: String,
