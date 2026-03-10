@@ -54,31 +54,7 @@ where
     A: ApprovalPolicy,
     S: SessionSink + SessionReader,
 {
-    pub async fn run(
-        &self,
-        input_rx: tokio::sync::mpsc::Receiver<RunnerInput>,
-    ) -> anyhow::Result<String> {
-        let initial_runner_state = self
-            .session
-            .load_runner_state_snapshot()?
-            .unwrap_or_default();
-        let mut last_emitted_todo_items = initial_runner_state.todo_items;
-        self.run_with_runner_output_sink_cancellable(
-            input_rx,
-            &mut |output| {
-                apply_runner_output_to_observer(
-                    &(),
-                    &self.session,
-                    output,
-                    &mut last_emitted_todo_items,
-                )
-            },
-            &mut Vec::new,
-        )
-        .await
-    }
-
-    pub async fn run_with_runner_output_sink_cancellable<O, D>(
+    pub async fn run<O, D>(
         &self,
         input_rx: tokio::sync::mpsc::Receiver<RunnerInput>,
         emit_output: &mut O,
@@ -485,9 +461,7 @@ mod tests {
             )
         };
 
-        let result = agent
-            .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
-            .await;
+        let result = agent.run(rx, &mut emit_output, &mut || Vec::new()).await;
 
         assert!(result.is_ok());
         assert_eq!(*approval_count.lock().expect("approval count lock"), 2);
@@ -635,9 +609,7 @@ mod tests {
             )
         };
 
-        let result = agent
-            .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
-            .await;
+        let result = agent.run(rx, &mut emit_output, &mut || Vec::new()).await;
 
         assert!(result.is_ok());
         assert_eq!(*approval_count.lock().expect("approval count lock"), 1);
@@ -745,7 +717,7 @@ mod tests {
         .unwrap();
 
         let result = agent
-            .run_with_runner_output_sink_cancellable(
+            .run(
                 rx,
                 &mut |output| {
                     if let RunnerOutput::ApprovalRequired { call_id, .. } = &output {
@@ -892,9 +864,7 @@ mod tests {
             )
         };
 
-        let result = agent
-            .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
-            .await;
+        let result = agent.run(rx, &mut emit_output, &mut || Vec::new()).await;
 
         assert!(result.is_ok());
 
@@ -1021,9 +991,7 @@ mod tests {
             )
         };
 
-        let result = agent
-            .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
-            .await;
+        let result = agent.run(rx, &mut emit_output, &mut || Vec::new()).await;
 
         assert!(result.is_ok());
 
@@ -1163,7 +1131,7 @@ mod tests {
         };
 
         let first_result = first_agent
-            .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
+            .run(rx, &mut emit_output, &mut || Vec::new())
             .await;
         assert!(first_result.is_ok());
 
@@ -1238,7 +1206,7 @@ mod tests {
         };
 
         let second_result = second_agent
-            .run_with_runner_output_sink_cancellable(rx, &mut emit_output, &mut || Vec::new())
+            .run(rx, &mut emit_output, &mut || Vec::new())
             .await;
         assert!(second_result.is_ok());
 
@@ -1324,7 +1292,7 @@ mod tests {
 
         let result = timeout(
             Duration::from_millis(250),
-            agent.run_with_runner_output_sink_cancellable(
+            agent.run(
                 rx,
                 &mut |output| {
                     if let RunnerOutput::ApprovalRequired { call_id, .. } = &output {
@@ -1413,7 +1381,7 @@ mod tests {
         .unwrap();
 
         let result = agent
-            .run_with_runner_output_sink_cancellable(
+            .run(
                 rx,
                 &mut |output| {
                     if let RunnerOutput::ApprovalRequired { call_id, .. } = &output {

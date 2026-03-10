@@ -139,7 +139,7 @@ async fn run_subagent_execution(
     }));
 
     match loop_runner
-        .run_with_runner_output_sink_cancellable(
+        .run(
             input_rx,
             &mut |output| {
                 if let crate::core::agent::RunnerOutput::ApprovalRequired {

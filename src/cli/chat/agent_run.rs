@@ -146,7 +146,7 @@ async fn run_agent(
     });
 
     let result = loop_runner
-        .run_with_runner_output_sink_cancellable(
+        .run(
             input_rx,
             &mut |output| {
                 if let crate::core::agent::RunnerOutput::ApprovalRequired { call_id, request } =
@@ -647,7 +647,7 @@ pub(super) async fn run_single_prompt(
     }));
 
     loop_runner
-        .run_with_runner_output_sink_cancellable(
+        .run(
             input_rx,
             &mut |output| {
                 if let crate::core::agent::RunnerOutput::ApprovalRequired { call_id, request } =
