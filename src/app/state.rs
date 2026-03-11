@@ -120,7 +120,13 @@ impl App {
             | AppAction::ToggleSidebarSection(..)
             | AppAction::ShowClipboardNotice { .. }
             | AppAction::UpdateInput(..)
-            | AppAction::ClearInput => {}
+            | AppAction::ClearInput
+            | AppAction::UserMessageAppended(_)
+            | AppAction::AssistantMessageAppended(_)
+            | AppAction::SystemMessageAppended(_)
+            | AppAction::StartNewSession(_)
+            | AppAction::SetSelectedModel(_)
+            | AppAction::SetProcessing(_) => {}
         }
     }
 

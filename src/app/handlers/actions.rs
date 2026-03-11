@@ -14,9 +14,9 @@ pub(crate) fn handle_submitted_input(
     settings: &Settings,
     cwd: &Path,
     event_sender: &TuiEventSender,
-) {
+) -> Vec<crate::app::core::AppAction> {
     if input.queued {
-        return;
+        return vec![];
     }
 
     if input.text.starts_with('/') && input.attachments.is_empty() {
@@ -31,15 +31,15 @@ pub(crate) fn handle_submitted_input(
         {
             app.remove_message_at(app.messages.len().saturating_sub(1));
         }
-        handle_slash_command(input.text, app, settings, cwd, event_sender);
+        handle_slash_command(input.text, app, settings, cwd, event_sender)
     } else if app.is_picking_session {
         if let Err(e) = session::handle_session_selection(input.text, app, settings, cwd) {
-            app.messages.push(ChatMessage::Assistant(e.to_string()));
-            app.mark_dirty();
+            return vec![crate::app::core::AppAction::AssistantMessageAppended(e.to_string()), crate::app::core::AppAction::SetProcessing(false), crate::app::core::AppAction::Redraw];
         }
-        app.set_processing(false);
+        vec![crate::app::core::AppAction::SetProcessing(false), crate::app::core::AppAction::Redraw]
     } else {
         crate::app::handlers::runner::handle_chat_message(input, app, settings, cwd, event_sender);
+        vec![]
     }
 }
 
@@ -49,21 +49,20 @@ fn handle_slash_command(
     settings: &Settings,
     cwd: &Path,
     event_sender: &TuiEventSender,
-) {
+) -> Vec<crate::app::core::AppAction> {
     let scoped_sender = event_sender.scoped(app.session_epoch(), app.run_epoch());
     let mut parts = input.split_whitespace();
     let command = parts.next().unwrap_or_default();
 
     match command {
         "/new" => {
-            app.start_new_session(crate::app::utils::build_session_name(cwd));
-            finish_idle(app);
+            vec![crate::app::core::AppAction::StartNewSession(crate::app::utils::build_session_name(cwd)), crate::app::core::AppAction::SetProcessing(false), crate::app::core::AppAction::Redraw]
         }
         "/model" => {
             if let Some(model_ref) = parts.next() {
                 if let Some(model) = settings.resolve_model_ref(model_ref) {
-                    app.set_selected_model(model_ref);
-                    finish_with_assistant(
+                    let mut actions = vec![crate::app::core::AppAction::SetSelectedModel(model_ref.to_string())];
+                    actions.extend(finish_with_assistant(
                         app,
                         format!(
                             "Switched to {} ({} -> {}, context: {}, output: {})",
@@ -73,9 +72,10 @@ fn handle_slash_command(
                             model.model.limits.context,
                             model.model.limits.output
                         ),
-                    );
+                    ));
+                    actions
                 } else {
-                    finish_with_assistant(app, format!("Unknown model: {model_ref}"));
+                    finish_with_assistant(app, format!("Unknown model: {model_ref}"))
                 }
             } else {
                 let mut text = format!(
@@ -89,17 +89,16 @@ fn handle_slash_command(
                     ));
                 }
                 text.push_str("\nUse /model <provider-id/model-id> to switch.");
-                finish_with_assistant(app, text);
+                finish_with_assistant(app, text)
             }
         }
         "/compact" => {
             let Some(session_id) = app.session_id.clone() else {
-                finish_with_assistant(app, "No active session to compact yet.");
-                return;
+                return finish_with_assistant(app, "No active session to compact yet.");
             };
             let model_ref = app.selected_model_ref().to_string();
 
-            app.handle_event(&TuiEvent::CompactionStart);
+
 
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 let settings = settings.clone();
@@ -129,21 +128,22 @@ fn handle_slash_command(
 
                 match result {
                     Ok(summary) => {
-                        app.handle_event(&TuiEvent::CompactionDone(summary));
+                        return vec![crate::app::core::AppAction::AgentEvent(TuiEvent::CompactionStart), crate::app::core::AppAction::AgentEvent(TuiEvent::CompactionDone(summary))];
                     }
                     Err(e) => {
-                        app.handle_event(&TuiEvent::Error(format!("Failed to compact: {e}")));
+                        return vec![crate::app::core::AppAction::AgentEvent(TuiEvent::CompactionStart), crate::app::core::AppAction::AgentEvent(TuiEvent::Error(format!("Failed to compact: {e}")))];
                     }
                 }
             }
+            vec![crate::app::core::AppAction::AgentEvent(TuiEvent::CompactionStart)]
         }
         "/quit" => {
-            app.should_quit = true;
+            vec![crate::app::core::AppAction::Quit]
         }
         "/resume" => {
             let sessions = SessionStore::list(&settings.session.root, cwd).unwrap_or_default();
             if sessions.is_empty() {
-                finish_with_assistant(app, "No previous sessions found.");
+                finish_with_assistant(app, "No previous sessions found.")
             } else {
                 app.available_sessions = sessions;
                 app.is_picking_session = true;
@@ -153,22 +153,21 @@ fn handle_slash_command(
                     msg.push_str(&format!("[{}] {}\n", i + 1, s.title));
                 }
                 msg.push_str("\nEnter number to resume:");
-                finish_with_assistant(app, msg);
+                finish_with_assistant(app, msg)
             }
         }
         _ => {
-            finish_with_assistant(app, format!("Unknown command: {}", input));
+            finish_with_assistant(app, format!("Unknown command: {}", input))
         }
     }
 }
 
-fn finish_with_assistant(app: &mut ChatApp, message: impl Into<String>) {
-    app.messages
-        .push(ChatMessage::Assistant(message.into()));
-    finish_idle(app);
+fn finish_with_assistant(_app: &mut ChatApp, message: impl Into<String>) -> Vec<crate::app::core::AppAction> {
+    vec![
+        crate::app::core::AppAction::AssistantMessageAppended(message.into()),
+        crate::app::core::AppAction::SetProcessing(false),
+        crate::app::core::AppAction::Redraw,
+    ]
 }
 
-fn finish_idle(app: &mut ChatApp) {
-    app.mark_dirty();
-    app.set_processing(false);
-}
+
