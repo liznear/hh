@@ -176,7 +176,7 @@ impl App {
             }
             AppAction::SetSelectedModel(model_ref) => {
                 self.state.current_model_ref = model_ref.clone();
-                self.state.legacy_chat_app.set_selected_model(&model_ref);
+                self.state.legacy_chat_app.set_selected_model(model_ref);
                 self.state.needs_redraw = true;
             }
         }

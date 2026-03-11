@@ -40,7 +40,7 @@ pub(crate) fn handle_submitted_input(
         vec![crate::app::core::AppAction::SetProcessing(false), crate::app::core::AppAction::Redraw]
     } else {
         crate::app::handlers::runner::handle_chat_message(input, app, _actions, settings, cwd, event_sender);
-        vec![]
+        vec![crate::app::core::AppAction::Redraw]
     }
 }
 

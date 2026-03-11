@@ -110,7 +110,7 @@ pub(crate) fn handle_session_selection(
     _actions: &mut Vec<crate::app::core::AppAction>,
     settings: &Settings,
     cwd: &Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<crate::app::core::AppAction>> {
     let idx = input.trim().parse::<usize>().context("Invalid number.")?;
 
     if idx == 0 || idx > app.available_sessions.len() {
@@ -269,7 +269,7 @@ pub(crate) fn handle_session_selection(
     }
     app.mark_dirty();
 
-    Ok(())
+    Ok(vec![])
 }
 
 pub(crate) fn fallback_session_title(prompt: &str) -> String {
