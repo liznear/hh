@@ -93,7 +93,7 @@ async fn run_interactive_chat_loop(
     loop {
         if mvu_app.take_needs_redraw() {
             if flush_stream_before_draw {
-                flush_stream_chunks(app, &mut pending_thinking, &mut pending_assistant_delta);
+                flush_stream_chunks(&mut mvu_app, &mut pending_thinking, &mut pending_assistant_delta);
                 flush_stream_before_draw = false;
             }
             tui_guard.get().draw(|f| {
@@ -183,7 +183,6 @@ async fn run_interactive_chat_loop(
                 {
                     let mut handled_non_stream_event = false;
                     merge_or_handle_event(
-                        app,
                         &mut mvu_app,
                         event.event,
                         &mut pending_thinking,
@@ -199,7 +198,6 @@ async fn run_interactive_chat_loop(
                             && next_event.run_epoch == app.run_epoch()
                         {
                             merge_or_handle_event(
-                                app,
                                 &mut mvu_app,
                                 next_event.event,
                                 &mut pending_thinking,
@@ -254,7 +252,6 @@ async fn run_interactive_chat_loop(
 }
 
 fn merge_or_handle_event(
-    app: &mut ChatApp,
     mvu_app: &mut MvuApp,
     event: TuiEvent,
     pending_thinking: &mut String,
@@ -265,25 +262,24 @@ fn merge_or_handle_event(
         TuiEvent::Thinking(chunk) => pending_thinking.push_str(&chunk),
         TuiEvent::AssistantDelta(chunk) => pending_assistant_delta.push_str(&chunk),
         other => {
-            flush_stream_chunks(app, pending_thinking, pending_assistant_delta);
+            flush_stream_chunks(mvu_app, pending_thinking, pending_assistant_delta);
             mvu_app.dispatch(AppAction::AgentEvent(other.clone()));
-            app.handle_event(&other);
             *handled_non_stream_event = true;
         }
     }
 }
 
 fn flush_stream_chunks(
-    app: &mut ChatApp,
+    mvu_app: &mut MvuApp,
     pending_thinking: &mut String,
     pending_assistant_delta: &mut String,
 ) {
     if !pending_thinking.is_empty() {
         let chunk = std::mem::take(pending_thinking);
-        app.handle_event(&TuiEvent::Thinking(chunk));
+        mvu_app.dispatch(AppAction::AgentEvent(TuiEvent::Thinking(chunk)));
     }
     if !pending_assistant_delta.is_empty() {
         let chunk = std::mem::take(pending_assistant_delta);
-        app.handle_event(&TuiEvent::AssistantDelta(chunk));
+        mvu_app.dispatch(AppAction::AgentEvent(TuiEvent::AssistantDelta(chunk)));
     }
 }
