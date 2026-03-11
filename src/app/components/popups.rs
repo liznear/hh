@@ -1,16 +1,16 @@
 use ratatui::{
+    Frame,
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Clear, List, ListItem, Padding, Paragraph, Wrap},
-    Frame,
 };
 
 use crate::app::chat_state::ChatApp;
 use crate::theme::colors::*;
 
+use crate::app::chat_state::ClipboardNotice;
 use crate::app::core::{AppAction, Component};
 use crate::app::state::AppState;
-use crate::app::chat_state::ClipboardNotice;
 
 #[derive(Default)]
 pub struct PopupComponent {
@@ -46,8 +46,13 @@ impl Component for PopupComponent {
     }
 }
 
-pub(crate) fn render_clipboard_notice_local(f: &mut ratatui::Frame, notice: &Option<ClipboardNotice>) {
-    let Some(notice) = notice else { return; };
+pub(crate) fn render_clipboard_notice_local(
+    f: &mut ratatui::Frame,
+    notice: &Option<ClipboardNotice>,
+) {
+    let Some(notice) = notice else {
+        return;
+    };
 
     let label = "Copied";
     let width = (label.len() as u16).saturating_add(4);

@@ -53,7 +53,10 @@ pub struct ScopedTuiEvent {
 #[derive(Debug, Clone)]
 pub enum TuiEvent {
     Thinking(String),
-    ToolStart { name: String, args: Value },
+    ToolStart {
+        name: String,
+        args: Value,
+    },
     ToolEnd {
         name: String,
         result: crate::tool::ToolResult,

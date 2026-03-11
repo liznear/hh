@@ -85,10 +85,18 @@ impl App {
 
     pub fn handle_input_event(&mut self, event: &crate::app::input::InputEvent) {
         let mut queue = VecDeque::new();
-        if let Some(action) = self.input.handle_event(event) { queue.push_back(action); }
-        if let Some(action) = self.popups.handle_event(event) { queue.push_back(action); }
-        if let Some(action) = self.messages.handle_event(event) { queue.push_back(action); }
-        if let Some(action) = self.sidebar.handle_event(event) { queue.push_back(action); }
+        if let Some(action) = self.input.handle_event(event) {
+            queue.push_back(action);
+        }
+        if let Some(action) = self.popups.handle_event(event) {
+            queue.push_back(action);
+        }
+        if let Some(action) = self.messages.handle_event(event) {
+            queue.push_back(action);
+        }
+        if let Some(action) = self.sidebar.handle_event(event) {
+            queue.push_back(action);
+        }
         while let Some(action) = queue.pop_front() {
             self.dispatch(action);
         }
@@ -110,10 +118,18 @@ impl App {
 
             self.reduce(&action);
 
-            if let Some(next) = self.input.update(&action) { queue.push_back(next); }
-            if let Some(next) = self.popups.update(&action) { queue.push_back(next); }
-            if let Some(next) = self.messages.update(&action) { queue.push_back(next); }
-            if let Some(next) = self.sidebar.update(&action) { queue.push_back(next); }
+            if let Some(next) = self.input.update(&action) {
+                queue.push_back(next);
+            }
+            if let Some(next) = self.popups.update(&action) {
+                queue.push_back(next);
+            }
+            if let Some(next) = self.messages.update(&action) {
+                queue.push_back(next);
+            }
+            if let Some(next) = self.sidebar.update(&action) {
+                queue.push_back(next);
+            }
         }
     }
 
@@ -158,11 +174,15 @@ impl App {
                 self.state.needs_redraw = true;
             }
             AppAction::AssistantMessageAppended(text) => {
-                self.state.messages.push(crate::app::chat_state::ChatMessage::Assistant(text.clone()));
+                self.state
+                    .messages
+                    .push(crate::app::chat_state::ChatMessage::Assistant(text.clone()));
                 self.state.needs_redraw = true;
             }
             AppAction::SystemMessageAppended(text) => {
-                self.state.messages.push(crate::app::chat_state::ChatMessage::Assistant(text.clone()));
+                self.state
+                    .messages
+                    .push(crate::app::chat_state::ChatMessage::Assistant(text.clone()));
                 self.state.needs_redraw = true;
             }
             AppAction::StartNewSession(session_name) => {
@@ -171,7 +191,9 @@ impl App {
                 self.state.messages.clear();
                 self.state.session_epoch += 1;
                 self.state.run_epoch += 1;
-                self.state.legacy_chat_app.start_new_session(session_name.clone());
+                self.state
+                    .legacy_chat_app
+                    .start_new_session(session_name.clone());
                 self.state.needs_redraw = true;
             }
             AppAction::SetSelectedModel(model_ref) => {
@@ -193,5 +215,3 @@ impl App {
         self.messages.render(f, area, &self.state);
     }
 }
-
-

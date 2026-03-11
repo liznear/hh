@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod app;
 pub mod cli;
 pub mod config;
 pub mod core;
@@ -7,5 +8,4 @@ pub mod provider;
 pub mod safety;
 pub mod session;
 pub mod theme;
-pub mod app;
 pub mod tool;

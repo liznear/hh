@@ -3,9 +3,7 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use crate::app::chat_state::{
-    ChatApp, ChatMessage, SubagentItemView, SubagentStatusView,
-};
+use crate::app::chat_state::{ChatApp, ChatMessage, SubagentItemView, SubagentStatusView};
 use crate::app::events::{TuiEvent, TuiEventSender};
 use crate::config::Settings;
 use crate::core::Message;

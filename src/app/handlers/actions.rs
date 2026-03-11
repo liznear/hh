@@ -34,12 +34,27 @@ pub(crate) fn handle_submitted_input(
         }
         handle_slash_command(input.text, app, _actions, settings, cwd, event_sender)
     } else if app.is_picking_session {
-        if let Err(e) = session::handle_session_selection(input.text, app, _actions, settings, cwd) {
-            return vec![crate::app::core::AppAction::AssistantMessageAppended(e.to_string()), crate::app::core::AppAction::SetProcessing(false), crate::app::core::AppAction::Redraw];
+        if let Err(e) = session::handle_session_selection(input.text, app, _actions, settings, cwd)
+        {
+            return vec![
+                crate::app::core::AppAction::AssistantMessageAppended(e.to_string()),
+                crate::app::core::AppAction::SetProcessing(false),
+                crate::app::core::AppAction::Redraw,
+            ];
         }
-        vec![crate::app::core::AppAction::SetProcessing(false), crate::app::core::AppAction::Redraw]
+        vec![
+            crate::app::core::AppAction::SetProcessing(false),
+            crate::app::core::AppAction::Redraw,
+        ]
     } else {
-        crate::app::handlers::runner::handle_chat_message(input, app, _actions, settings, cwd, event_sender);
+        crate::app::handlers::runner::handle_chat_message(
+            input,
+            app,
+            _actions,
+            settings,
+            cwd,
+            event_sender,
+        );
         vec![crate::app::core::AppAction::Redraw]
     }
 }
@@ -58,12 +73,20 @@ fn handle_slash_command(
 
     match command {
         "/new" => {
-            vec![crate::app::core::AppAction::StartNewSession(crate::app::utils::build_session_name(cwd)), crate::app::core::AppAction::SetProcessing(false), crate::app::core::AppAction::Redraw]
+            vec![
+                crate::app::core::AppAction::StartNewSession(
+                    crate::app::utils::build_session_name(cwd),
+                ),
+                crate::app::core::AppAction::SetProcessing(false),
+                crate::app::core::AppAction::Redraw,
+            ]
         }
         "/model" => {
             if let Some(model_ref) = parts.next() {
                 if let Some(model) = settings.resolve_model_ref(model_ref) {
-                    let mut actions = vec![crate::app::core::AppAction::SetSelectedModel(model_ref.to_string())];
+                    let mut actions = vec![crate::app::core::AppAction::SetSelectedModel(
+                        model_ref.to_string(),
+                    )];
                     actions.extend(finish_with_assistant(
                         app,
                         format!(
@@ -100,8 +123,6 @@ fn handle_slash_command(
             };
             let model_ref = app.current_model_ref.to_string();
 
-
-
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 let settings = settings.clone();
                 let cwd = cwd.to_path_buf();
@@ -130,14 +151,26 @@ fn handle_slash_command(
 
                 match result {
                     Ok(summary) => {
-                        return vec![crate::app::core::AppAction::AgentEvent(TuiEvent::CompactionStart), crate::app::core::AppAction::AgentEvent(TuiEvent::CompactionDone(summary))];
+                        return vec![
+                            crate::app::core::AppAction::AgentEvent(TuiEvent::CompactionStart),
+                            crate::app::core::AppAction::AgentEvent(TuiEvent::CompactionDone(
+                                summary,
+                            )),
+                        ];
                     }
                     Err(e) => {
-                        return vec![crate::app::core::AppAction::AgentEvent(TuiEvent::CompactionStart), crate::app::core::AppAction::AgentEvent(TuiEvent::Error(format!("Failed to compact: {e}")))];
+                        return vec![
+                            crate::app::core::AppAction::AgentEvent(TuiEvent::CompactionStart),
+                            crate::app::core::AppAction::AgentEvent(TuiEvent::Error(format!(
+                                "Failed to compact: {e}"
+                            ))),
+                        ];
                     }
                 }
             }
-            vec![crate::app::core::AppAction::AgentEvent(TuiEvent::CompactionStart)]
+            vec![crate::app::core::AppAction::AgentEvent(
+                TuiEvent::CompactionStart,
+            )]
         }
         "/quit" => {
             vec![crate::app::core::AppAction::Quit]
@@ -158,18 +191,17 @@ fn handle_slash_command(
                 finish_with_assistant(app, msg)
             }
         }
-        _ => {
-            finish_with_assistant(app, format!("Unknown command: {}", input))
-        }
+        _ => finish_with_assistant(app, format!("Unknown command: {}", input)),
     }
 }
 
-fn finish_with_assistant(_app: &mut ChatApp, message: impl Into<String>) -> Vec<crate::app::core::AppAction> {
+fn finish_with_assistant(
+    _app: &mut ChatApp,
+    message: impl Into<String>,
+) -> Vec<crate::app::core::AppAction> {
     vec![
         crate::app::core::AppAction::AssistantMessageAppended(message.into()),
         crate::app::core::AppAction::SetProcessing(false),
         crate::app::core::AppAction::Redraw,
     ]
 }
-
-

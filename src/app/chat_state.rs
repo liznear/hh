@@ -19,8 +19,8 @@ type QuestionResponder = std::sync::Arc<
 
 use crate::app::components::commands::{SlashCommand, get_default_commands};
 use crate::app::events::{SubagentEventItem, TuiEvent};
-use crate::theme::tool_render::render_tool_result;
 use crate::core::MessageAttachment;
+use crate::theme::tool_render::render_tool_result;
 
 const SIDEBAR_WIDTH: u16 = 38;
 const LEFT_COLUMN_RIGHT_MARGIN: u16 = 2;
@@ -308,7 +308,7 @@ pub struct ChatApp {
     preferred_column: Option<usize>,
     // Text selection state
     pub text_selection: TextSelection,
-    
+
     pending_question: Option<PendingQuestionState>,
     // Agent state
     pub current_agent_name: Option<String>,
@@ -379,7 +379,7 @@ impl ChatApp {
             last_context_tokens: None,
             preferred_column: None,
             text_selection: TextSelection::None,
-            
+
             pending_question: None,
             current_agent_name: None,
             available_agents: Vec::new(),
@@ -1130,10 +1130,6 @@ impl ChatApp {
         }
     }
 
-
-
-
-
     pub fn progress_panel_height(&self) -> u16 {
         0
     }
@@ -1518,17 +1514,13 @@ impl ChatApp {
         self.mark_message_dirty();
     }
 
-    pub fn mark_message_dirty(&self) {
-    }
+    pub fn mark_message_dirty(&self) {}
 
-    pub fn mark_message_tail_dirty(&self) {
-    }
+    pub fn mark_message_tail_dirty(&self) {}
 
     pub fn mark_sidebar_dirty(&self) {
         *self.cached_context_usage_estimate.borrow_mut() = None;
     }
-
-
 
     pub fn configure_models(
         &mut self,
@@ -1724,10 +1716,8 @@ impl ChatApp {
         self.text_selection = TextSelection::None;
     }
 
-
     pub fn on_periodic_tick(&mut self) -> bool {
         let mut needs_redraw = self.is_processing;
-
 
         if self.is_processing {
             let now_second = SystemTime::now()
@@ -1742,8 +1732,6 @@ impl ChatApp {
 
         needs_redraw
     }
-
-
 
     /// Get selected text from the lines
     pub fn get_selected_text(&self, lines: &[Line<'static>]) -> String {

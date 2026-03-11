@@ -1,18 +1,18 @@
 use ratatui::{
+    Frame,
     prelude::Stylize,
     style::Style,
     text::{Line, Span, Text},
     widgets::{Block, Paragraph, Wrap},
-    Frame,
 };
 use serde_json::Value;
 
-use crate::app::chat_state::{ChatApp, ChatMessage, TodoItemView, TodoStatus};
-use crate::theme::colors::*;
-use std::collections::HashSet;
 use crate::app::chat_state::ScrollState;
+use crate::app::chat_state::{ChatApp, ChatMessage, TodoItemView, TodoStatus};
 use crate::app::core::{AppAction, Component};
+use crate::theme::colors::*;
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 
 pub struct SidebarComponent {
     pub scroll: ScrollState,
@@ -50,7 +50,10 @@ impl Component for SidebarComponent {
             AppAction::ScrollSidebar(amount) => {
                 let amount = *amount;
                 if amount < 0 {
-                    self.scroll.offset = self.scroll.offset.saturating_add(amount.unsigned_abs() as usize);
+                    self.scroll.offset = self
+                        .scroll
+                        .offset
+                        .saturating_add(amount.unsigned_abs() as usize);
                 } else {
                     self.scroll.offset = self.scroll.offset.saturating_sub(amount as usize);
                 }
@@ -82,7 +85,12 @@ pub(crate) struct SidebarSectionHeaderHitbox {
     pub(crate) title_width: u16,
 }
 
-pub(crate) fn render_sidebar(f: &mut Frame, app: &ChatApp, sidebar_comp: &SidebarComponent, area: ratatui::layout::Rect) {
+pub(crate) fn render_sidebar(
+    f: &mut Frame,
+    app: &ChatApp,
+    sidebar_comp: &SidebarComponent,
+    area: ratatui::layout::Rect,
+) {
     let block = Block::default().style(Style::default().bg(SIDEBAR_BG));
     let inner = block.inner(area);
     let content = ratatui::layout::Rect {
@@ -93,7 +101,8 @@ pub(crate) fn render_sidebar(f: &mut Frame, app: &ChatApp, sidebar_comp: &Sideba
     };
     f.render_widget(block, area);
 
-    let needs_rebuild = sidebar_comp.needs_rebuild.get() || sidebar_comp.cached_width.get() != content.width;
+    let needs_rebuild =
+        sidebar_comp.needs_rebuild.get() || sidebar_comp.cached_width.get() != content.width;
     if needs_rebuild {
         let lines = build_sidebar_lines(app, sidebar_comp, content.width);
         *sidebar_comp.cached_lines.borrow_mut() = lines;
@@ -113,7 +122,11 @@ pub(crate) fn render_sidebar(f: &mut Frame, app: &ChatApp, sidebar_comp: &Sideba
     f.render_widget(sidebar, content);
 }
 
-pub(crate) fn build_sidebar_lines(app: &ChatApp, sidebar: &SidebarComponent, content_width: u16) -> Vec<Line<'static>> {
+pub(crate) fn build_sidebar_lines(
+    app: &ChatApp,
+    sidebar: &SidebarComponent,
+    content_width: u16,
+) -> Vec<Line<'static>> {
     build_sidebar_model(app, sidebar, content_width).lines
 }
 
@@ -143,7 +156,11 @@ struct SidebarRenderModel {
     hitboxes: Vec<SidebarSectionHeaderHitbox>,
 }
 
-fn build_sidebar_model(app: &ChatApp, sidebar: &SidebarComponent, content_width: u16) -> SidebarRenderModel {
+fn build_sidebar_model(
+    app: &ChatApp,
+    sidebar: &SidebarComponent,
+    content_width: u16,
+) -> SidebarRenderModel {
     let content_width = content_width.max(1);
 
     let (used, budget) = app.context_usage();

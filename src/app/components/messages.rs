@@ -1,8 +1,8 @@
 use ratatui::{
+    Frame,
     style::{Color, Style},
     text::{Line, Span, Text},
     widgets::{Block, Paragraph},
-    Frame,
 };
 
 use crate::app::chat_state::ChatApp;
@@ -32,7 +32,10 @@ impl Component for MessagesComponent {
             AppAction::ScrollMessages(amount) => {
                 let amount = *amount;
                 if amount < 0 {
-                    self.scroll.offset = self.scroll.offset.saturating_add(amount.unsigned_abs() as usize);
+                    self.scroll.offset = self
+                        .scroll
+                        .offset
+                        .saturating_add(amount.unsigned_abs() as usize);
                 } else {
                     self.scroll.offset = self.scroll.offset.saturating_sub(amount as usize);
                 }
@@ -44,10 +47,15 @@ impl Component for MessagesComponent {
     }
 }
 
+use crate::app::core::{AppAction, Component};
 use crate::theme::colors::*;
-use crate::app::core::{Component, AppAction};
 
-pub(crate) fn render_messages(f: &mut Frame, app: &ChatApp, messages: &MessagesComponent, area: ratatui::layout::Rect) {
+pub(crate) fn render_messages(
+    f: &mut Frame,
+    app: &ChatApp,
+    messages: &MessagesComponent,
+    area: ratatui::layout::Rect,
+) {
     let panel = Block::default().style(Style::default().bg(PAGE_BG));
     let inner = panel.inner(area);
     f.render_widget(panel, area);
@@ -65,7 +73,10 @@ pub(crate) fn render_messages(f: &mut Frame, app: &ChatApp, messages: &MessagesC
         .effective_offset(total_lines, visible_height);
     drop(lines);
 
-    let rendered_lines = messages.viewport.get_visible_lines(app, wrap_width, visible_height, scroll_offset);
+    let rendered_lines =
+        messages
+            .viewport
+            .get_visible_lines(app, wrap_width, visible_height, scroll_offset);
     let text = Text::from(rendered_lines.to_vec());
     let paragraph = Paragraph::new(text)
         .style(Style::default().bg(PAGE_BG).fg(TEXT_PRIMARY))

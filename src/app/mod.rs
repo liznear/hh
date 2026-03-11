@@ -1,7 +1,7 @@
+pub mod chat_state;
 pub mod components;
 pub mod core;
 pub mod events;
-pub mod chat_state;
 pub mod handlers;
 pub mod input;
 pub mod render;
@@ -15,15 +15,15 @@ use std::time::Duration;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 
-use crate::cli::agent_init;
+use crate::app::chat_state::ChatApp;
+use crate::app::core::AppAction;
+use crate::app::events::{ScopedTuiEvent, TuiEvent, TuiEventSender};
 use crate::app::input::{
     InputEvent, apply_paste, handle_area_scroll, handle_input_batch, handle_key_event,
     handle_mouse_click, handle_mouse_drag, handle_mouse_release, load_session_messages,
 };
-use crate::app::chat_state::ChatApp;
-use crate::app::core::AppAction;
-use crate::app::events::{ScopedTuiEvent, TuiEvent, TuiEventSender};
 use crate::app::state::{App as MvuApp, AppState};
+use crate::cli::agent_init;
 use crate::config::Settings;
 
 pub async fn run_interactive_chat(settings: Settings, cwd: &Path) -> anyhow::Result<()> {
@@ -93,7 +93,11 @@ async fn run_interactive_chat_loop(
     loop {
         if mvu_app.take_needs_redraw() {
             if flush_stream_before_draw {
-                flush_stream_chunks(&mut mvu_app, &mut pending_thinking, &mut pending_assistant_delta);
+                flush_stream_chunks(
+                    &mut mvu_app,
+                    &mut pending_thinking,
+                    &mut pending_assistant_delta,
+                );
                 flush_stream_before_draw = false;
             }
             tui_guard.get().draw(|f| {

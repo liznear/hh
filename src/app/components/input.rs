@@ -8,9 +8,9 @@ use ratatui::{
 };
 
 use crate::app::chat_state::ChatApp;
-use crate::theme::colors::*;
-use crate::app::core::{AppAction, Component};
 use crate::app::components::commands::{SlashCommand, get_default_commands};
+use crate::app::core::{AppAction, Component};
+use crate::theme::colors::*;
 
 pub struct InputComponent {
     pub text: String,
@@ -72,8 +72,13 @@ impl InputComponent {
     }
 }
 
-
-pub(crate) fn render_input(f: &mut Frame, app: &ChatApp, input_comp: &InputComponent, area: Rect, layout: UiLayout) {
+pub(crate) fn render_input(
+    f: &mut Frame,
+    app: &ChatApp,
+    input_comp: &InputComponent,
+    area: Rect,
+    layout: UiLayout,
+) {
     let left_border_x = area.x.saturating_add(layout.user_bubble_indent() as u16);
     f.render_widget(Block::default().style(Style::default().bg(PAGE_BG)), area);
     let input_panel_area = Rect {

@@ -14,7 +14,13 @@ pub trait Component {
         None
     }
 
-    fn render(&self, _f: &mut ratatui::Frame<'_>, _area: Rect, _state: &crate::app::state::AppState) {}
+    fn render(
+        &self,
+        _f: &mut ratatui::Frame<'_>,
+        _area: Rect,
+        _state: &crate::app::state::AppState,
+    ) {
+    }
 }
 
 #[derive(Debug, Clone)]

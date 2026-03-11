@@ -92,7 +92,8 @@ where
             KeyCode::PageUp => {
                 let (width, height) = terminal_size()?;
                 scroll_up_steps(
-                    app, messages,
+                    app,
+                    messages,
                     width,
                     height,
                     app.message_viewport_height(height).saturating_sub(1),
@@ -213,7 +214,8 @@ where
         KeyCode::PageUp => {
             let (width, height) = terminal_size()?;
             scroll_up_steps(
-                app, messages,
+                app,
+                messages,
                 width,
                 height,
                 app.message_viewport_height(height).saturating_sub(1),
@@ -229,11 +231,22 @@ where
     Ok(())
 }
 
-fn scroll_down_once(app: &mut ChatApp, messages: &crate::app::components::messages::MessagesComponent, width: u16, height: u16) {
+fn scroll_down_once(
+    app: &mut ChatApp,
+    messages: &crate::app::components::messages::MessagesComponent,
+    width: u16,
+    height: u16,
+) {
     scroll_down_steps(app, messages, width, height, 1);
 }
 
-pub(crate) fn scroll_up_steps(app: &mut ChatApp, messages: &crate::app::components::messages::MessagesComponent, width: u16, height: u16, steps: usize) {
+pub(crate) fn scroll_up_steps(
+    app: &mut ChatApp,
+    messages: &crate::app::components::messages::MessagesComponent,
+    width: u16,
+    height: u16,
+    steps: usize,
+) {
     if steps == 0 {
         return;
     }
@@ -243,7 +256,13 @@ pub(crate) fn scroll_up_steps(app: &mut ChatApp, messages: &crate::app::componen
         .scroll_up_steps(total_lines, visible_height, steps);
 }
 
-fn scroll_down_steps(app: &mut ChatApp, messages: &crate::app::components::messages::MessagesComponent, width: u16, height: u16, steps: usize) {
+fn scroll_down_steps(
+    app: &mut ChatApp,
+    messages: &crate::app::components::messages::MessagesComponent,
+    width: u16,
+    height: u16,
+    steps: usize,
+) {
     if steps == 0 {
         return;
     }
@@ -539,7 +558,16 @@ fn submit_and_handle(
         return;
     }
 
-    for action in crate::app::handlers::actions::handle_submitted_input(input, app, actions, settings, cwd, event_sender) { actions.push(action); }
+    for action in crate::app::handlers::actions::handle_submitted_input(
+        input,
+        app,
+        actions,
+        settings,
+        cwd,
+        event_sender,
+    ) {
+        actions.push(action);
+    }
 }
 
 fn handle_enter_key(
@@ -559,7 +587,12 @@ fn handle_enter_key(
     submit_and_handle(app, actions, settings, cwd, event_sender);
 }
 
-fn scroll_page_down(app: &mut ChatApp, messages: &crate::app::components::messages::MessagesComponent, width: u16, height: u16) {
+fn scroll_page_down(
+    app: &mut ChatApp,
+    messages: &crate::app::components::messages::MessagesComponent,
+    width: u16,
+    height: u16,
+) {
     let (total_lines, visible_height) = scroll_bounds(app, messages, width, height);
     app.message_scroll.scroll_down_steps(
         total_lines,
@@ -568,7 +601,12 @@ fn scroll_page_down(app: &mut ChatApp, messages: &crate::app::components::messag
     );
 }
 
-fn scroll_bounds(app: &ChatApp, messages: &crate::app::components::messages::MessagesComponent, width: u16, height: u16) -> (usize, usize) {
+fn scroll_bounds(
+    app: &ChatApp,
+    messages: &crate::app::components::messages::MessagesComponent,
+    width: u16,
+    height: u16,
+) -> (usize, usize) {
     let visible_height = app.message_viewport_height(height);
     let wrap_width = app.message_wrap_width(width);
     let lines = messages.viewport.get_lines(app, wrap_width);
@@ -577,7 +615,11 @@ fn scroll_bounds(app: &ChatApp, messages: &crate::app::components::messages::Mes
     (total_lines, visible_height)
 }
 
-fn copy_selection_to_clipboard(app: &ChatApp, messages: &crate::app::components::messages::MessagesComponent, terminal_width: u16) -> bool {
+fn copy_selection_to_clipboard(
+    app: &ChatApp,
+    messages: &crate::app::components::messages::MessagesComponent,
+    terminal_width: u16,
+) -> bool {
     let wrap_width = app.message_wrap_width(terminal_width);
     let lines = messages.viewport.get_lines(app, wrap_width);
     let selected_text = app.get_selected_text(&lines);
@@ -605,7 +647,9 @@ pub(crate) fn handle_mouse_click<B: ratatui::backend::Backend>(
     cwd: &Path,
 ) {
     if let Some(section_id) = screen_to_sidebar_header(app, sidebar, x, y, terminal) {
-        actions.push(crate::app::core::AppAction::ToggleSidebarSection(section_id.to_string()));
+        actions.push(crate::app::core::AppAction::ToggleSidebarSection(
+            section_id.to_string(),
+        ));
         return;
     }
 
@@ -721,7 +765,8 @@ fn screen_to_sidebar_header<B: ratatui::backend::Backend>(
 
     let scroll_offset = {
         let lines = crate::app::render::build_sidebar_lines(app, sidebar, sidebar_content.width);
-        sidebar.scroll
+        sidebar
+            .scroll
             .effective_offset(lines.len(), sidebar_content.height as usize)
     };
     let line_index = scroll_offset.saturating_add(relative_y);
@@ -753,15 +798,20 @@ pub(crate) fn handle_area_scroll(
     if let Some(sidebar_content) = layout_rects.sidebar_content
         && point_in_rect(x, y, sidebar_content)
     {
-        let total_lines = crate::app::render::build_sidebar_lines(app, sidebar, sidebar_content.width).len();
+        let total_lines =
+            crate::app::render::build_sidebar_lines(app, sidebar, sidebar_content.width).len();
         let visible_height = sidebar_content.height as usize;
 
         if total_lines > visible_height {
             if up_steps > 0 {
-                actions.push(crate::app::core::AppAction::ScrollSidebar(-(up_steps as i32)));
+                actions.push(crate::app::core::AppAction::ScrollSidebar(
+                    -(up_steps as i32),
+                ));
             }
             if down_steps > 0 {
-                actions.push(crate::app::core::AppAction::ScrollSidebar(down_steps as i32));
+                actions.push(crate::app::core::AppAction::ScrollSidebar(
+                    down_steps as i32,
+                ));
             }
             return true;
         }
@@ -774,10 +824,14 @@ pub(crate) fn handle_area_scroll(
         let (_total_lines, _visible_height) =
             scroll_bounds(app, messages, terminal_size.width, terminal_size.height);
         if up_steps > 0 {
-            actions.push(crate::app::core::AppAction::ScrollMessages(-(up_steps as i32)));
+            actions.push(crate::app::core::AppAction::ScrollMessages(
+                -(up_steps as i32),
+            ));
         }
         if down_steps > 0 {
-            actions.push(crate::app::core::AppAction::ScrollMessages(down_steps as i32));
+            actions.push(crate::app::core::AppAction::ScrollMessages(
+                down_steps as i32,
+            ));
         }
         return true;
     }

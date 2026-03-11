@@ -13,9 +13,9 @@ use std::iter::Peekable;
 use crate::app::chat_state::{ChatApp, ChatMessage, SubagentStatusView};
 use crate::app::components::{input, messages, popups, sidebar};
 use crate::theme::colors::*;
+pub(crate) use crate::theme::colors::{AppLayoutRects, UiLayout};
 use crate::theme::markdown::markdown_to_lines_with_indent;
 use crate::theme::tool_presentation::render_tool_start;
-pub(crate) use crate::theme::colors::{AppLayoutRects, UiLayout};
 
 pub(crate) use crate::app::components::sidebar::SidebarSectionHeaderHitbox;
 
@@ -93,7 +93,6 @@ pub fn render_app(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App
             render_sidebar(f, app, mvu_app, clipped_sidebar_area);
         }
 
-        
         return;
     }
 
@@ -152,8 +151,6 @@ pub fn render_app(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App
         };
         render_sidebar(f, app, mvu_app, clipped_sidebar_area);
     }
-
-    
 }
 
 fn render_subagent_back_indicator(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
@@ -371,8 +368,6 @@ fn blend_color_with_white(color: Color, amount: f64) -> Color {
     }
 }
 
-
-
 fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
     popups::render_command_palette(f, app, area, layout);
 }
@@ -381,7 +376,11 @@ fn render_sidebar(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App
     sidebar::render_sidebar(f, app, &mvu_app.sidebar, area);
 }
 
-pub(crate) fn build_sidebar_lines(app: &ChatApp, sidebar: &sidebar::SidebarComponent, content_width: u16) -> Vec<Line<'static>> {
+pub(crate) fn build_sidebar_lines(
+    app: &ChatApp,
+    sidebar: &sidebar::SidebarComponent,
+    content_width: u16,
+) -> Vec<Line<'static>> {
     sidebar::build_sidebar_lines(app, sidebar, content_width)
 }
 
@@ -393,7 +392,12 @@ pub(crate) fn sidebar_section_header_hitboxes(
     sidebar::sidebar_section_header_hitboxes(app, sidebar, content_width)
 }
 
-fn render_messages(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App, area: ratatui::layout::Rect) {
+fn render_messages(
+    f: &mut Frame,
+    app: &ChatApp,
+    mvu_app: &crate::app::state::App,
+    area: ratatui::layout::Rect,
+) {
     messages::render_messages(f, app, &mvu_app.messages, area);
 }
 
@@ -1115,7 +1119,13 @@ fn title_case(name: &str) -> String {
     result.trim().to_string()
 }
 
-fn render_input(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App, area: Rect, layout: UiLayout) {
+fn render_input(
+    f: &mut Frame,
+    app: &ChatApp,
+    mvu_app: &crate::app::state::App,
+    area: Rect,
+    layout: UiLayout,
+) {
     input::render_input(f, app, &mvu_app.input, area, layout);
 }
 
