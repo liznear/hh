@@ -36,7 +36,7 @@ impl AppState {
 pub struct App {
     pub state: AppState,
     pub popups: crate::app::components::popups::PopupComponent,
-    pub input_actions: crate::app::components::input_actions::InputActionComponent,
+    pub input: crate::app::components::input::InputComponent,
     pub messages: crate::app::components::messages::MessagesComponent,
     pub sidebar: crate::app::components::sidebar::SidebarComponent,
 }
@@ -46,7 +46,7 @@ impl App {
         Self {
             state,
             popups: crate::app::components::popups::PopupComponent::default(),
-            input_actions: crate::app::components::input_actions::InputActionComponent,
+            input: crate::app::components::input::InputComponent::default(),
             messages: crate::app::components::messages::MessagesComponent::default(),
             sidebar: crate::app::components::sidebar::SidebarComponent::default(),
         }
@@ -54,7 +54,7 @@ impl App {
 
     pub fn handle_input_event(&mut self, event: &crate::app::input::InputEvent) {
         let mut queue = VecDeque::new();
-        if let Some(action) = self.input_actions.handle_event(event) { queue.push_back(action); }
+        if let Some(action) = self.input.handle_event(event) { queue.push_back(action); }
         if let Some(action) = self.popups.handle_event(event) { queue.push_back(action); }
         if let Some(action) = self.messages.handle_event(event) { queue.push_back(action); }
         if let Some(action) = self.sidebar.handle_event(event) { queue.push_back(action); }
@@ -79,7 +79,7 @@ impl App {
 
             self.reduce(&action);
 
-            if let Some(next) = self.input_actions.update(&action) { queue.push_back(next); }
+            if let Some(next) = self.input.update(&action) { queue.push_back(next); }
             if let Some(next) = self.popups.update(&action) { queue.push_back(next); }
             if let Some(next) = self.messages.update(&action) { queue.push_back(next); }
             if let Some(next) = self.sidebar.update(&action) { queue.push_back(next); }
@@ -118,7 +118,9 @@ impl App {
             | AppAction::ScrollMessages(..)
             | AppAction::ScrollSidebar(..)
             | AppAction::ToggleSidebarSection(..)
-            | AppAction::ShowClipboardNotice { .. } => {}
+            | AppAction::ShowClipboardNotice { .. }
+            | AppAction::UpdateInput(..)
+            | AppAction::ClearInput => {}
         }
     }
 

@@ -30,6 +30,8 @@ pub enum AppAction {
     ScrollMessages(i32),
     ScrollSidebar(i32),
     ToggleSidebarSection(String),
+    UpdateInput(String, usize),
+    ClearInput,
     SelectSession(String),
     ReportDispatchOverflow,
     ShowClipboardNotice { x: u16, y: u16 },

@@ -102,7 +102,7 @@ pub fn render_app(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App
         .saturating_sub(layout.user_bubble_indent() as u16 + 3)
         as usize;
     let input_line_count =
-        input_line_count(&app.input, input_content_width).clamp(1, MAX_INPUT_LINES);
+        input_line_count(&mvu_app.input.text, input_content_width).clamp(1, MAX_INPUT_LINES);
     let input_area_height = if app.has_pending_question() {
         (question_prompt_line_count(app, input_content_width) + 2) as u16
     } else {
@@ -122,7 +122,7 @@ pub fn render_app(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App
 
     render_messages(f, app, mvu_app, main_chunks[0]);
     render_processing_indicator(f, app, main_chunks[2], layout);
-    render_input(f, app, main_chunks[4], layout);
+    render_input(f, app, mvu_app, main_chunks[4], layout);
 
     if !app.filtered_commands.is_empty() {
         let item_count = app.filtered_commands.len().min(5) as u16;
@@ -1115,8 +1115,8 @@ fn title_case(name: &str) -> String {
     result.trim().to_string()
 }
 
-fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
-    input::render_input(f, app, area, layout);
+fn render_input(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App, area: Rect, layout: UiLayout) {
+    input::render_input(f, app, &mvu_app.input, area, layout);
 }
 
 fn question_prompt_line_count(app: &ChatApp, _width: usize) -> usize {
@@ -1140,7 +1140,7 @@ fn inset_rect(area: Rect, padding_x: u16, padding_y: u16) -> Rect {
     }
 }
 
-pub(crate) fn compute_layout_rects(area: Rect, app: &ChatApp) -> AppLayoutRects {
+pub(crate) fn compute_layout_rects(area: Rect, app: &ChatApp, input_text: &str) -> AppLayoutRects {
     let layout = UiLayout::default();
     let app_area = inset_rect(
         area,
@@ -1168,7 +1168,7 @@ pub(crate) fn compute_layout_rects(area: Rect, app: &ChatApp) -> AppLayoutRects 
         .saturating_sub(layout.user_bubble_indent() as u16 + 3)
         as usize;
     let input_line_count =
-        input_line_count(&app.input, input_content_width).clamp(1, MAX_INPUT_LINES);
+        input_line_count(input_text, input_content_width).clamp(1, MAX_INPUT_LINES);
     let input_area_height = if app.has_pending_question() {
         (question_prompt_line_count(app, input_content_width) + 2) as u16
     } else {

@@ -9,8 +9,71 @@ use ratatui::{
 
 use crate::app::chat_state::ChatApp;
 use crate::theme::colors::*;
+use crate::app::core::{AppAction, Component};
+use crate::app::components::commands::{SlashCommand, get_default_commands};
 
-pub(crate) fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
+pub struct InputComponent {
+    pub text: String,
+    pub cursor: usize,
+    pub commands: Vec<SlashCommand>,
+    pub filtered_commands: Vec<SlashCommand>,
+    pub selected_command_index: usize,
+}
+
+impl Default for InputComponent {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            cursor: 0,
+            commands: get_default_commands(),
+            filtered_commands: Vec::new(),
+            selected_command_index: 0,
+        }
+    }
+}
+
+impl Component for InputComponent {
+    fn update(&mut self, action: &AppAction) -> Option<AppAction> {
+        match action {
+            AppAction::UpdateInput(text, cursor) => {
+                self.text = text.clone();
+                self.cursor = *cursor;
+                self.update_command_filtering();
+                Some(AppAction::Redraw)
+            }
+            AppAction::ClearInput => {
+                self.text.clear();
+                self.cursor = 0;
+                self.filtered_commands.clear();
+                Some(AppAction::Redraw)
+            }
+            _ => None,
+        }
+    }
+}
+
+impl InputComponent {
+    pub fn update_command_filtering(&mut self) {
+        if self.text.starts_with('/') {
+            let query = self.text.trim();
+            self.filtered_commands = self
+                .commands
+                .iter()
+                .filter(|cmd| cmd.name.starts_with(query))
+                .cloned()
+                .collect();
+        } else {
+            self.filtered_commands.clear();
+        }
+
+        if self.selected_command_index >= self.filtered_commands.len() {
+            self.selected_command_index = 0;
+        }
+    }
+}
+
+
+pub(crate) fn render_input(f: &mut Frame, app: &ChatApp, input_comp: &InputComponent, area: Rect, layout: UiLayout) {
     let left_border_x = area.x.saturating_add(layout.user_bubble_indent() as u16);
     f.render_widget(Block::default().style(Style::default().bg(PAGE_BG)), area);
     let input_panel_area = Rect {
@@ -197,12 +260,12 @@ pub(crate) fn render_input(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiL
         return;
     }
 
-    let (input_value, cursor_row, cursor_col) = if app.input.is_empty() {
+    let (input_value, cursor_row, cursor_col) = if input_comp.text.is_empty() {
         ("Tell me more about this project...".to_string(), 0, 0)
     } else {
         let layout = input_viewport_layout(
-            &app.input,
-            app.cursor,
+            &input_comp.text,
+            input_comp.cursor,
             content_area.width as usize,
             content_area.height as usize,
         );

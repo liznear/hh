@@ -673,7 +673,7 @@ fn screen_to_message_coords<B: ratatui::backend::Backend>(
 ) -> Option<(usize, usize)> {
     let size = terminal.size().ok()?;
     let terminal_rect = Rect::new(0, 0, size.width, size.height);
-    let layout_rects = crate::app::render::compute_layout_rects(terminal_rect, app);
+    let layout_rects = crate::app::render::compute_layout_rects(terminal_rect, app, &app.input);
 
     let main_messages = layout_rects.main_messages?;
     if !point_in_rect(x, y, main_messages) {
@@ -705,7 +705,7 @@ fn screen_to_sidebar_header<B: ratatui::backend::Backend>(
 ) -> Option<&'static str> {
     let size = terminal.size().ok()?;
     let terminal_rect = Rect::new(0, 0, size.width, size.height);
-    let layout_rects = crate::app::render::compute_layout_rects(terminal_rect, app);
+    let layout_rects = crate::app::render::compute_layout_rects(terminal_rect, app, &app.input);
     let sidebar_content = layout_rects.sidebar_content?;
 
     if !point_in_rect(x, y, sidebar_content) {
@@ -744,7 +744,7 @@ pub(crate) fn handle_area_scroll(
     up_steps: usize,
     down_steps: usize,
 ) -> bool {
-    let layout_rects = crate::app::render::compute_layout_rects(terminal_size, app);
+    let layout_rects = crate::app::render::compute_layout_rects(terminal_size, app, &app.input);
 
     if let Some(sidebar_content) = layout_rects.sidebar_content
         && point_in_rect(x, y, sidebar_content)
