@@ -106,6 +106,7 @@ async fn run_interactive_chat_loop(
             input_result = handle_input_batch() => {
                 let input_events = input_result?;
                 let mut handled_any_input = false;
+                let mut actions = Vec::new();
                 for input_event in input_events {
                     handled_any_input = true;
                     mvu_app.dispatch(AppAction::Input(input_event.clone()));
@@ -136,7 +137,7 @@ async fn run_interactive_chat_loop(
                             width: terminal_size.width,
                             height: terminal_size.height,
                         };
-                        handle_area_scroll(app, &mvu_app.messages, terminal_rect, x, y, 3, 0);
+                        handle_area_scroll(app, &mvu_app.messages, &mvu_app.sidebar, &mut actions, terminal_rect, x, y, 3, 0);
                     }
                     InputEvent::ScrollDown { x, y } => {
                         let terminal_size = tui_guard.get().size()?;
@@ -147,7 +148,7 @@ async fn run_interactive_chat_loop(
                             height: terminal_size.height,
                         };
                         handle_area_scroll(
-                            app, &mvu_app.messages,
+                            app, &mvu_app.messages, &mvu_app.sidebar, &mut actions,
                             terminal_rect,
                             x,
                             y,
@@ -160,7 +161,7 @@ async fn run_interactive_chat_loop(
                         tui_guard.get().clear()?;
                     }
                     InputEvent::MouseClick { x, y } => {
-                        handle_mouse_click(app, &mvu_app.messages, x, y, tui_guard.get(), runner.settings, runner.cwd);
+                        handle_mouse_click(app, &mvu_app.messages, &mvu_app.sidebar, &mut actions, x, y, tui_guard.get(), runner.settings, runner.cwd);
                     }
                     InputEvent::MouseDrag { x, y } => {
                         handle_mouse_drag(app, &mvu_app.messages, x, y, tui_guard.get());
@@ -172,6 +173,7 @@ async fn run_interactive_chat_loop(
                     }
                     }
                 }
+                for a in actions { mvu_app.dispatch(a); }
                 if handled_any_input { mvu_app.dispatch(AppAction::Redraw); }
             }
             event = runner.event_rx.recv() => {

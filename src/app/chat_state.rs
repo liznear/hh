@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -284,7 +283,6 @@ pub struct ChatApp {
     pub input: String,
     pub cursor: usize,
     pub message_scroll: ScrollState,
-    pub sidebar_scroll: ScrollState,
     pub should_quit: bool,
     pub is_processing: bool,
     pub session_id: Option<String>,
@@ -297,10 +295,6 @@ pub struct ChatApp {
     processing_started_at: Option<Instant>,
     pub todo_items: Vec<TodoItemView>,
     pub subagent_items: Vec<SubagentItemView>,
-    pub cached_sidebar_lines: RefCell<Vec<Line<'static>>>,
-    pub cached_sidebar_width: RefCell<u16>,
-    pub sidebar_needs_rebuild: RefCell<bool>,
-    folded_sidebar_sections: HashSet<String>,
     pub cached_context_usage_estimate: RefCell<Option<usize>>,
     pub available_sessions: Vec<SessionMetadata>,
     pub is_picking_session: bool,
@@ -361,7 +355,6 @@ impl ChatApp {
             input: String::new(),
             cursor: 0,
             message_scroll: ScrollState::new(true),
-            sidebar_scroll: ScrollState::new(false),
             should_quit: false,
             is_processing: false,
             session_id: None,
@@ -374,10 +367,6 @@ impl ChatApp {
             processing_started_at: None,
             todo_items: Vec::new(),
             subagent_items: Vec::new(),
-            cached_sidebar_lines: RefCell::new(Vec::new()),
-            cached_sidebar_width: RefCell::new(0),
-            sidebar_needs_rebuild: RefCell::new(true),
-            folded_sidebar_sections: HashSet::new(),
             cached_context_usage_estimate: RefCell::new(None),
             available_sessions: Vec::new(),
             is_picking_session: false,
@@ -1143,19 +1132,7 @@ impl ChatApp {
 
 
 
-    pub fn get_sidebar_lines(&self, width: u16) -> std::cell::Ref<'_, Vec<Line<'static>>> {
-        let needs_rebuild = *self.sidebar_needs_rebuild.borrow();
-        let cached_width = *self.cached_sidebar_width.borrow();
 
-        if needs_rebuild || cached_width != width {
-            let lines = crate::app::render::build_sidebar_lines(self, width);
-            *self.cached_sidebar_lines.borrow_mut() = lines;
-            *self.cached_sidebar_width.borrow_mut() = width;
-            *self.sidebar_needs_rebuild.borrow_mut() = false;
-        }
-
-        self.cached_sidebar_lines.borrow()
-    }
 
     pub fn progress_panel_height(&self) -> u16 {
         0
@@ -1458,7 +1435,6 @@ impl ChatApp {
         self.available_sessions.clear();
         self.is_picking_session = false;
         self.message_scroll.reset(true);
-        self.sidebar_scroll.reset(false);
         self.set_processing(false);
         self.pending_question = None;
         self.cancel_agent_task();
@@ -1540,7 +1516,6 @@ impl ChatApp {
 
     pub fn mark_dirty(&self) {
         self.mark_message_dirty();
-        self.mark_sidebar_dirty();
     }
 
     pub fn mark_message_dirty(&self) {
@@ -1550,28 +1525,10 @@ impl ChatApp {
     }
 
     pub fn mark_sidebar_dirty(&self) {
-        *self.sidebar_needs_rebuild.borrow_mut() = true;
         *self.cached_context_usage_estimate.borrow_mut() = None;
     }
 
-    pub fn is_sidebar_section_folded(&self, section_id: &str) -> bool {
-        self.folded_sidebar_sections.contains(section_id)
-    }
 
-    pub fn toggle_sidebar_section_folded(&mut self, section_id: &str) {
-        if !self.folded_sidebar_sections.insert(section_id.to_string()) {
-            self.folded_sidebar_sections.remove(section_id);
-        }
-        self.mark_sidebar_dirty();
-    }
-
-    pub fn set_sidebar_section_folded(&mut self, section_id: &str, folded: bool) {
-        if folded {
-            self.folded_sidebar_sections.insert(section_id.to_string());
-        } else {
-            self.folded_sidebar_sections.remove(section_id);
-        }
-    }
 
     pub fn configure_models(
         &mut self,
@@ -1587,7 +1544,6 @@ impl ChatApp {
             .map(|model| model.max_context_size)
             .unwrap_or(DEFAULT_CONTEXT_LIMIT);
         self.last_context_tokens = None;
-        self.mark_sidebar_dirty();
     }
 
     pub fn selected_model_ref(&self) -> &str {
@@ -1603,7 +1559,6 @@ impl ChatApp {
             .map(|model| model.max_context_size)
             .unwrap_or(DEFAULT_CONTEXT_LIMIT);
         self.last_context_tokens = None;
-        self.mark_sidebar_dirty();
     }
 
     pub fn insert_char(&mut self, ch: char) {

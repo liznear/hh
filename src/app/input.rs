@@ -588,17 +588,20 @@ fn copy_selection_to_clipboard(app: &ChatApp, messages: &crate::app::components:
     false
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_mouse_click<B: ratatui::backend::Backend>(
     app: &mut ChatApp,
     messages: &crate::app::components::messages::MessagesComponent,
+    sidebar: &crate::app::components::sidebar::SidebarComponent,
+    actions: &mut Vec<crate::app::core::AppAction>,
     x: u16,
     y: u16,
     terminal: &ratatui::Terminal<B>,
     settings: &Settings,
     cwd: &Path,
 ) {
-    if let Some(section_id) = screen_to_sidebar_header(app, x, y, terminal) {
-        app.toggle_sidebar_section_folded(section_id);
+    if let Some(section_id) = screen_to_sidebar_header(app, sidebar, x, y, terminal) {
+        actions.push(crate::app::core::AppAction::ToggleSidebarSection(section_id.to_string()));
         return;
     }
 
@@ -695,6 +698,7 @@ fn screen_to_message_coords<B: ratatui::backend::Backend>(
 
 fn screen_to_sidebar_header<B: ratatui::backend::Backend>(
     app: &ChatApp,
+    sidebar: &crate::app::components::sidebar::SidebarComponent,
     x: u16,
     y: u16,
     terminal: &ratatui::Terminal<B>,
@@ -712,13 +716,13 @@ fn screen_to_sidebar_header<B: ratatui::backend::Backend>(
     let relative_x = x - sidebar_content.x;
 
     let scroll_offset = {
-        let lines = app.get_sidebar_lines(sidebar_content.width);
-        app.sidebar_scroll
+        let lines = crate::app::render::build_sidebar_lines(app, sidebar, sidebar_content.width);
+        sidebar.scroll
             .effective_offset(lines.len(), sidebar_content.height as usize)
     };
     let line_index = scroll_offset.saturating_add(relative_y);
 
-    crate::app::render::sidebar_section_header_hitboxes(app, sidebar_content.width)
+    crate::app::render::sidebar_section_header_hitboxes(app, sidebar, sidebar_content.width)
         .into_iter()
         .find(|hitbox| {
             hitbox.line_index == line_index
@@ -728,9 +732,12 @@ fn screen_to_sidebar_header<B: ratatui::backend::Backend>(
         .map(|hitbox| hitbox.section_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_area_scroll(
     app: &mut ChatApp,
     messages: &crate::app::components::messages::MessagesComponent,
+    sidebar: &crate::app::components::sidebar::SidebarComponent,
+    actions: &mut Vec<crate::app::core::AppAction>,
     terminal_size: Rect,
     x: u16,
     y: u16,
@@ -742,17 +749,15 @@ pub(crate) fn handle_area_scroll(
     if let Some(sidebar_content) = layout_rects.sidebar_content
         && point_in_rect(x, y, sidebar_content)
     {
-        let total_lines = app.get_sidebar_lines(sidebar_content.width).len();
+        let total_lines = crate::app::render::build_sidebar_lines(app, sidebar, sidebar_content.width).len();
         let visible_height = sidebar_content.height as usize;
 
         if total_lines > visible_height {
             if up_steps > 0 {
-                app.sidebar_scroll
-                    .scroll_up_steps(total_lines, visible_height, up_steps);
+                actions.push(crate::app::core::AppAction::ScrollSidebar(-(up_steps as i32)));
             }
             if down_steps > 0 {
-                app.sidebar_scroll
-                    .scroll_down_steps(total_lines, visible_height, down_steps);
+                actions.push(crate::app::core::AppAction::ScrollSidebar(down_steps as i32));
             }
             return true;
         }
@@ -762,15 +767,13 @@ pub(crate) fn handle_area_scroll(
     if let Some(main_messages) = layout_rects.main_messages
         && point_in_rect(x, y, main_messages)
     {
-        let (total_lines, visible_height) =
+        let (_total_lines, _visible_height) =
             scroll_bounds(app, messages, terminal_size.width, terminal_size.height);
         if up_steps > 0 {
-            app.message_scroll
-                .scroll_up_steps(total_lines, visible_height, up_steps);
+            actions.push(crate::app::core::AppAction::ScrollMessages(-(up_steps as i32)));
         }
         if down_steps > 0 {
-            app.message_scroll
-                .scroll_down_steps(total_lines, visible_height, down_steps);
+            actions.push(crate::app::core::AppAction::ScrollMessages(down_steps as i32));
         }
         return true;
     }

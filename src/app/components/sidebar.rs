@@ -9,6 +9,69 @@ use serde_json::Value;
 
 use crate::app::chat_state::{ChatApp, ChatMessage, TodoItemView, TodoStatus};
 use crate::theme::colors::*;
+use std::collections::HashSet;
+use crate::app::chat_state::ScrollState;
+use crate::app::core::{AppAction, Component};
+use std::cell::{Cell, RefCell};
+
+pub struct SidebarComponent {
+    pub scroll: ScrollState,
+    pub folded_sections: HashSet<String>,
+    pub cached_lines: RefCell<Vec<Line<'static>>>,
+    pub cached_width: Cell<u16>,
+    pub needs_rebuild: Cell<bool>,
+}
+
+impl Default for SidebarComponent {
+    fn default() -> Self {
+        Self {
+            scroll: ScrollState::new(false),
+            folded_sections: HashSet::new(),
+            cached_lines: RefCell::new(Vec::new()),
+            cached_width: Cell::new(0),
+            needs_rebuild: Cell::new(true),
+        }
+    }
+}
+
+impl SidebarComponent {
+    pub fn is_folded(&self, section_id: &str) -> bool {
+        self.folded_sections.contains(section_id)
+    }
+
+    pub fn mark_dirty(&self) {
+        self.needs_rebuild.set(true);
+    }
+}
+
+impl Component for SidebarComponent {
+    fn update(&mut self, action: &AppAction) -> Option<AppAction> {
+        match action {
+            AppAction::ScrollSidebar(amount) => {
+                let amount = *amount;
+                if amount < 0 {
+                    self.scroll.offset = self.scroll.offset.saturating_add(amount.unsigned_abs() as usize);
+                } else {
+                    self.scroll.offset = self.scroll.offset.saturating_sub(amount as usize);
+                }
+                Some(AppAction::Redraw)
+            }
+            AppAction::ToggleSidebarSection(section_id) => {
+                if !self.folded_sections.insert(section_id.clone()) {
+                    self.folded_sections.remove(section_id);
+                }
+                self.mark_dirty();
+                Some(AppAction::Redraw)
+            }
+            AppAction::Redraw | AppAction::PeriodicTick => {
+                // Since this runs during update, we can't rebuild cache yet until render provides width.
+                // It just tells us state changed somewhere.
+                None
+            }
+            _ => None,
+        }
+    }
+}
 
 const FOLDABLE_SECTION_MIN_LINES: usize = 7;
 
@@ -19,7 +82,7 @@ pub(crate) struct SidebarSectionHeaderHitbox {
     pub(crate) title_width: u16,
 }
 
-pub(crate) fn render_sidebar(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
+pub(crate) fn render_sidebar(f: &mut Frame, app: &ChatApp, sidebar_comp: &SidebarComponent, area: ratatui::layout::Rect) {
     let block = Block::default().style(Style::default().bg(SIDEBAR_BG));
     let inner = block.inner(area);
     let content = ratatui::layout::Rect {
@@ -30,27 +93,36 @@ pub(crate) fn render_sidebar(f: &mut Frame, app: &ChatApp, area: ratatui::layout
     };
     f.render_widget(block, area);
 
-    let lines = build_sidebar_lines(app, content.width);
-    let scroll_offset = app
-        .sidebar_scroll
-        .effective_offset(lines.len(), content.height as usize);
+    let needs_rebuild = sidebar_comp.needs_rebuild.get() || sidebar_comp.cached_width.get() != content.width;
+    if needs_rebuild {
+        let lines = build_sidebar_lines(app, sidebar_comp, content.width);
+        *sidebar_comp.cached_lines.borrow_mut() = lines;
+        sidebar_comp.cached_width.set(content.width);
+        sidebar_comp.needs_rebuild.set(false);
+    }
 
-    let sidebar = Paragraph::new(Text::from(lines.to_vec()))
+    let lines_ref = sidebar_comp.cached_lines.borrow();
+    let scroll_offset = sidebar_comp
+        .scroll
+        .effective_offset(lines_ref.len(), content.height as usize);
+
+    let sidebar = Paragraph::new(Text::from(lines_ref.to_vec()))
         .style(Style::default().bg(SIDEBAR_BG))
         .wrap(Wrap { trim: true })
         .scroll((scroll_offset as u16, 0));
     f.render_widget(sidebar, content);
 }
 
-pub(crate) fn build_sidebar_lines(app: &ChatApp, content_width: u16) -> Vec<Line<'static>> {
-    build_sidebar_model(app, content_width).lines
+pub(crate) fn build_sidebar_lines(app: &ChatApp, sidebar: &SidebarComponent, content_width: u16) -> Vec<Line<'static>> {
+    build_sidebar_model(app, sidebar, content_width).lines
 }
 
 pub(crate) fn sidebar_section_header_hitboxes(
     app: &ChatApp,
+    sidebar: &SidebarComponent,
     content_width: u16,
 ) -> Vec<SidebarSectionHeaderHitbox> {
-    build_sidebar_model(app, content_width).hitboxes
+    build_sidebar_model(app, sidebar, content_width).hitboxes
 }
 
 struct SidebarSection {
@@ -71,7 +143,7 @@ struct SidebarRenderModel {
     hitboxes: Vec<SidebarSectionHeaderHitbox>,
 }
 
-fn build_sidebar_model(app: &ChatApp, content_width: u16) -> SidebarRenderModel {
+fn build_sidebar_model(app: &ChatApp, sidebar: &SidebarComponent, content_width: u16) -> SidebarRenderModel {
     let content_width = content_width.max(1);
 
     let (used, budget) = app.context_usage();
@@ -165,7 +237,7 @@ fn build_sidebar_model(app: &ChatApp, content_width: u16) -> SidebarRenderModel 
     let section_count = sections.len();
     for (index, section) in sections.into_iter().enumerate() {
         let is_foldable = section.total_lines() >= FOLDABLE_SECTION_MIN_LINES;
-        let is_folded = is_foldable && app.is_sidebar_section_folded(section.id);
+        let is_folded = is_foldable && sidebar.is_folded(section.id);
         let title_text = if is_foldable {
             if is_folded {
                 format!("▶ {}", section.title)

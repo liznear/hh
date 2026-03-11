@@ -38,6 +38,7 @@ pub struct App {
     pub popups: crate::app::components::popups::PopupComponent,
     pub input_actions: crate::app::components::input_actions::InputActionComponent,
     pub messages: crate::app::components::messages::MessagesComponent,
+    pub sidebar: crate::app::components::sidebar::SidebarComponent,
 }
 
 impl App {
@@ -47,6 +48,7 @@ impl App {
             popups: crate::app::components::popups::PopupComponent::default(),
             input_actions: crate::app::components::input_actions::InputActionComponent,
             messages: crate::app::components::messages::MessagesComponent::default(),
+            sidebar: crate::app::components::sidebar::SidebarComponent::default(),
         }
     }
 
@@ -55,6 +57,7 @@ impl App {
         if let Some(action) = self.input_actions.handle_event(event) { queue.push_back(action); }
         if let Some(action) = self.popups.handle_event(event) { queue.push_back(action); }
         if let Some(action) = self.messages.handle_event(event) { queue.push_back(action); }
+        if let Some(action) = self.sidebar.handle_event(event) { queue.push_back(action); }
         while let Some(action) = queue.pop_front() {
             self.dispatch(action);
         }
@@ -79,6 +82,7 @@ impl App {
             if let Some(next) = self.input_actions.update(&action) { queue.push_back(next); }
             if let Some(next) = self.popups.update(&action) { queue.push_back(next); }
             if let Some(next) = self.messages.update(&action) { queue.push_back(next); }
+            if let Some(next) = self.sidebar.update(&action) { queue.push_back(next); }
         }
     }
 
@@ -112,9 +116,9 @@ impl App {
             | AppAction::RunSlashCommand(..)
             | AppAction::AgentEvent(..)
             | AppAction::ScrollMessages(..)
-            | AppAction::ShowClipboardNotice { .. }
             | AppAction::ScrollSidebar(..)
-            | AppAction::ToggleSidebarSection(..) => {}
+            | AppAction::ToggleSidebarSection(..)
+            | AppAction::ShowClipboardNotice { .. } => {}
         }
     }
 

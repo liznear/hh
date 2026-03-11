@@ -90,7 +90,7 @@ pub fn render_app(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App
                 width: area.width,
                 height: sidebar_bottom.saturating_sub(area.y),
             };
-            render_sidebar(f, app, clipped_sidebar_area);
+            render_sidebar(f, app, mvu_app, clipped_sidebar_area);
         }
 
         
@@ -150,7 +150,7 @@ pub fn render_app(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App
             width: area.width,
             height: sidebar_bottom.saturating_sub(area.y),
         };
-        render_sidebar(f, app, clipped_sidebar_area);
+        render_sidebar(f, app, mvu_app, clipped_sidebar_area);
     }
 
     
@@ -377,19 +377,20 @@ fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLa
     popups::render_command_palette(f, app, area, layout);
 }
 
-fn render_sidebar(f: &mut Frame, app: &ChatApp, area: Rect) {
-    sidebar::render_sidebar(f, app, area);
+fn render_sidebar(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App, area: Rect) {
+    sidebar::render_sidebar(f, app, &mvu_app.sidebar, area);
 }
 
-pub(crate) fn build_sidebar_lines(app: &ChatApp, content_width: u16) -> Vec<Line<'static>> {
-    sidebar::build_sidebar_lines(app, content_width)
+pub(crate) fn build_sidebar_lines(app: &ChatApp, sidebar: &sidebar::SidebarComponent, content_width: u16) -> Vec<Line<'static>> {
+    sidebar::build_sidebar_lines(app, sidebar, content_width)
 }
 
 pub(crate) fn sidebar_section_header_hitboxes(
     app: &ChatApp,
+    sidebar: &sidebar::SidebarComponent,
     content_width: u16,
 ) -> Vec<SidebarSectionHeaderHitbox> {
-    sidebar::sidebar_section_header_hitboxes(app, content_width)
+    sidebar::sidebar_section_header_hitboxes(app, sidebar, content_width)
 }
 
 fn render_messages(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App, area: ratatui::layout::Rect) {
