@@ -107,6 +107,7 @@ async fn generate_compaction_summary(
 pub(crate) fn handle_session_selection(
     input: String,
     app: &mut ChatApp,
+    _actions: &mut Vec<crate::app::core::AppAction>,
     settings: &Settings,
     cwd: &Path,
 ) -> anyhow::Result<()> {

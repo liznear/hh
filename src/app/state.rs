@@ -19,10 +19,31 @@ pub struct AppState {
     pub context: SessionContext,
     pub last_error: Option<String>,
     pub legacy_chat_app: crate::app::chat_state::ChatApp,
+
+    // Migrated primitives
+    pub messages: Vec<crate::app::chat_state::ChatMessage>,
+    pub is_picking_session: bool,
+    pub available_sessions: Vec<crate::session::SessionMetadata>,
+    pub session_id: Option<String>,
+    pub session_name: String,
+    pub session_epoch: u64,
+    pub run_epoch: u64,
+    pub current_model_ref: String,
+    pub available_models: Vec<crate::app::chat_state::ModelOptionView>,
 }
 
 impl AppState {
-    pub fn new(cwd: PathBuf, legacy_chat_app: crate::app::chat_state::ChatApp) -> Self {
+    pub fn new(cwd: PathBuf, mut legacy_chat_app: crate::app::chat_state::ChatApp) -> Self {
+        let messages = std::mem::take(&mut legacy_chat_app.messages);
+        let is_picking_session = legacy_chat_app.is_picking_session;
+        let available_sessions = std::mem::take(&mut legacy_chat_app.available_sessions);
+        let session_id = legacy_chat_app.session_id.clone();
+        let session_name = legacy_chat_app.session_name.clone();
+        let session_epoch = legacy_chat_app.session_epoch();
+        let run_epoch = legacy_chat_app.run_epoch();
+        let current_model_ref = legacy_chat_app.current_model_ref.clone();
+        let available_models = legacy_chat_app.available_models.clone();
+
         Self {
             cwd,
             should_quit: false,
@@ -30,6 +51,15 @@ impl AppState {
             context: SessionContext::default(),
             last_error: None,
             legacy_chat_app,
+            messages,
+            is_picking_session,
+            available_sessions,
+            session_id,
+            session_name,
+            session_epoch,
+            run_epoch,
+            current_model_ref,
+            available_models,
         }
     }
 }
@@ -122,12 +152,33 @@ impl App {
             | AppAction::ShowClipboardNotice { .. }
             | AppAction::UpdateInput(..)
             | AppAction::ClearInput
-            | AppAction::UserMessageAppended(_)
-            | AppAction::AssistantMessageAppended(_)
-            | AppAction::SystemMessageAppended(_)
-            | AppAction::StartNewSession(_)
-            | AppAction::SetSelectedModel(_)
             | AppAction::SetProcessing(_) => {}
+            AppAction::UserMessageAppended(msg) => {
+                self.state.messages.push(msg.clone());
+                self.state.needs_redraw = true;
+            }
+            AppAction::AssistantMessageAppended(text) => {
+                self.state.messages.push(crate::app::chat_state::ChatMessage::Assistant(text.clone()));
+                self.state.needs_redraw = true;
+            }
+            AppAction::SystemMessageAppended(text) => {
+                self.state.messages.push(crate::app::chat_state::ChatMessage::Assistant(text.clone()));
+                self.state.needs_redraw = true;
+            }
+            AppAction::StartNewSession(session_name) => {
+                self.state.session_id = None;
+                self.state.session_name = session_name.clone();
+                self.state.messages.clear();
+                self.state.session_epoch += 1;
+                self.state.run_epoch += 1;
+                self.state.legacy_chat_app.start_new_session(session_name.clone());
+                self.state.needs_redraw = true;
+            }
+            AppAction::SetSelectedModel(model_ref) => {
+                self.state.current_model_ref = model_ref.clone();
+                self.state.legacy_chat_app.set_selected_model(&model_ref);
+                self.state.needs_redraw = true;
+            }
         }
     }
 

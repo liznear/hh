@@ -113,6 +113,7 @@ async fn run_interactive_chat_loop(
                     mvu_app.handle_input_event(&input_event);
                     match input_event {
                     InputEvent::Key(key_event) => {
+                        // For handle_key_event we actually don't pass the whole mvu_app. Wait, we pass mvu_app? We shouldn't. Let's fix input.rs handle_key_event to not take mvu_app.
                         handle_key_event(
                             key_event,
                             &mut mvu_app.state.legacy_chat_app,

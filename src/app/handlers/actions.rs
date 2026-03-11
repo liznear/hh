@@ -11,6 +11,7 @@ use crate::session::SessionStore;
 pub(crate) fn handle_submitted_input(
     input: SubmittedInput,
     app: &mut ChatApp,
+    _actions: &mut Vec<crate::app::core::AppAction>,
     settings: &Settings,
     cwd: &Path,
     event_sender: &TuiEventSender,
@@ -31,14 +32,14 @@ pub(crate) fn handle_submitted_input(
         {
             app.remove_message_at(app.messages.len().saturating_sub(1));
         }
-        handle_slash_command(input.text, app, settings, cwd, event_sender)
+        handle_slash_command(input.text, app, _actions, settings, cwd, event_sender)
     } else if app.is_picking_session {
-        if let Err(e) = session::handle_session_selection(input.text, app, settings, cwd) {
+        if let Err(e) = session::handle_session_selection(input.text, app, _actions, settings, cwd) {
             return vec![crate::app::core::AppAction::AssistantMessageAppended(e.to_string()), crate::app::core::AppAction::SetProcessing(false), crate::app::core::AppAction::Redraw];
         }
         vec![crate::app::core::AppAction::SetProcessing(false), crate::app::core::AppAction::Redraw]
     } else {
-        crate::app::handlers::runner::handle_chat_message(input, app, settings, cwd, event_sender);
+        crate::app::handlers::runner::handle_chat_message(input, app, _actions, settings, cwd, event_sender);
         vec![]
     }
 }
@@ -46,6 +47,7 @@ pub(crate) fn handle_submitted_input(
 fn handle_slash_command(
     input: String,
     app: &mut ChatApp,
+    _actions: &mut Vec<crate::app::core::AppAction>,
     settings: &Settings,
     cwd: &Path,
     event_sender: &TuiEventSender,
@@ -80,7 +82,7 @@ fn handle_slash_command(
             } else {
                 let mut text = format!(
                     "Current model: {}\n\nAvailable models:\n",
-                    app.selected_model_ref()
+                    app.current_model_ref
                 );
                 for option in &app.available_models {
                     text.push_str(&format!(
@@ -96,7 +98,7 @@ fn handle_slash_command(
             let Some(session_id) = app.session_id.clone() else {
                 return finish_with_assistant(app, "No active session to compact yet.");
             };
-            let model_ref = app.selected_model_ref().to_string();
+            let model_ref = app.current_model_ref.to_string();
 
 
 

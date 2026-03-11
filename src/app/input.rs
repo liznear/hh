@@ -539,7 +539,7 @@ fn submit_and_handle(
         return;
     }
 
-    for action in crate::app::handlers::actions::handle_submitted_input(input, app, settings, cwd, event_sender) { actions.push(action); }
+    for action in crate::app::handlers::actions::handle_submitted_input(input, app, actions, settings, cwd, event_sender) { actions.push(action); }
 }
 
 fn handle_enter_key(

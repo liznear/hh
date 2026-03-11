@@ -513,6 +513,7 @@ pub(crate) fn create_agent_core(
 pub(crate) fn handle_chat_message(
     input: SubmittedInput,
     app: &mut ChatApp,
+    _actions: &mut Vec<crate::app::core::AppAction>,
     settings: &Settings,
     cwd: &Path,
     event_sender: &TuiEventSender,
