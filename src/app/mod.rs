@@ -131,9 +131,17 @@ async fn run_interactive_chat_loop(
                                 Ok((size.width, size.height))
                             },
                         )?;
+                        mvu_app.dispatch(AppAction::UpdateInput(
+                            mvu_app.state.legacy_chat_app.input.clone(),
+                            mvu_app.state.legacy_chat_app.cursor,
+                        ));
                     }
                     InputEvent::Paste(text) => {
                         apply_paste(&mut mvu_app.state.legacy_chat_app, text);
+                        mvu_app.dispatch(AppAction::UpdateInput(
+                            mvu_app.state.legacy_chat_app.input.clone(),
+                            mvu_app.state.legacy_chat_app.cursor,
+                        ));
                     }
                     InputEvent::ScrollUp { x, y } => {
                         let terminal_size = tui_guard.get().size()?;
