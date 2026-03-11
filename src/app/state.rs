@@ -115,7 +115,8 @@ impl App {
             AppAction::SubmitInput(..)
             | AppAction::RunSlashCommand(..)
             | AppAction::AgentEvent(..)
-            | AppAction::ScrollMessages(..) => {}
+            | AppAction::ScrollMessages(..)
+            | AppAction::ShowClipboardNotice { .. } => {}
         }
     }
 
@@ -123,6 +124,12 @@ impl App {
         let redraw = self.state.needs_redraw;
         self.state.needs_redraw = false;
         redraw
+    }
+
+    pub fn render_components(&self, f: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect) {
+        for component in &self.components {
+            component.render(f, area, &self.state);
+        }
     }
 }
 

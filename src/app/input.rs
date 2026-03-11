@@ -640,7 +640,8 @@ pub(crate) fn handle_mouse_release(
     x: u16,
     y: u16,
     terminal: &crate::app::terminal::Tui,
-) {
+) -> Option<crate::app::core::AppAction> {
+    let mut action = None;
     if let Some((line, column)) = screen_to_message_coords(app, x, y, terminal) {
         app.update_selection(line, column);
     }
@@ -648,11 +649,12 @@ pub(crate) fn handle_mouse_release(
         && let Ok(size) = terminal.size()
     {
         if copy_selection_to_clipboard(app, size.width) {
-            app.show_clipboard_notice(x, y);
+            action = Some(crate::app::core::AppAction::ShowClipboardNotice { x, y });
         }
         app.clear_selection();
     }
     app.end_selection();
+    action
 }
 
 fn screen_to_message_coords<B: ratatui::backend::Backend>(

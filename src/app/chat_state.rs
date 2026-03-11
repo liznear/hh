@@ -316,7 +316,7 @@ pub struct ChatApp {
     preferred_column: Option<usize>,
     // Text selection state
     pub text_selection: TextSelection,
-    pub clipboard_notice: Option<ClipboardNotice>,
+    
     pending_question: Option<PendingQuestionState>,
     // Agent state
     pub current_agent_name: Option<String>,
@@ -393,7 +393,7 @@ impl ChatApp {
             last_context_tokens: None,
             preferred_column: None,
             text_selection: TextSelection::None,
-            clipboard_notice: None,
+            
             pending_question: None,
             current_agent_name: None,
             available_agents: Vec::new(),
@@ -1787,22 +1787,10 @@ impl ChatApp {
         self.text_selection = TextSelection::None;
     }
 
-    pub fn show_clipboard_notice(&mut self, x: u16, y: u16) {
-        self.clipboard_notice = Some(ClipboardNotice {
-            x,
-            y,
-            expires_at: Instant::now() + std::time::Duration::from_secs(1),
-        });
-    }
 
     pub fn on_periodic_tick(&mut self) -> bool {
         let mut needs_redraw = self.is_processing;
-        if let Some(notice) = self.clipboard_notice
-            && Instant::now() > notice.expires_at
-        {
-            self.clipboard_notice = None;
-            needs_redraw = true;
-        }
+
 
         if self.is_processing {
             let now_second = SystemTime::now()
@@ -1818,10 +1806,7 @@ impl ChatApp {
         needs_redraw
     }
 
-    pub fn active_clipboard_notice(&self) -> Option<ClipboardNotice> {
-        self.clipboard_notice
-            .filter(|notice| Instant::now() <= notice.expires_at)
-    }
+
 
     /// Get selected text from the lines
     pub fn get_selected_text(&self, lines: &[Line<'static>]) -> String {

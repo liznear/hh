@@ -8,10 +8,46 @@ use ratatui::{
 use crate::app::chat_state::ChatApp;
 use crate::theme::colors::*;
 
-pub(crate) fn render_clipboard_notice(f: &mut Frame, app: &ChatApp) {
-    let Some(notice) = app.active_clipboard_notice() else {
-        return;
-    };
+use crate::app::core::{AppAction, Component};
+use crate::app::state::AppState;
+use crate::app::chat_state::ClipboardNotice;
+
+#[derive(Default)]
+pub struct PopupComponent {
+    clipboard_notice: Option<ClipboardNotice>,
+}
+
+impl Component for PopupComponent {
+    fn update(&mut self, action: &AppAction) -> Option<AppAction> {
+        match action {
+            AppAction::ShowClipboardNotice { x, y } => {
+                self.clipboard_notice = Some(ClipboardNotice {
+                    x: *x,
+                    y: *y,
+                    expires_at: std::time::Instant::now() + std::time::Duration::from_millis(1500),
+                });
+                Some(AppAction::Redraw)
+            }
+            AppAction::PeriodicTick => {
+                if let Some(notice) = &self.clipboard_notice
+                    && std::time::Instant::now() > notice.expires_at
+                {
+                    self.clipboard_notice = None;
+                    return Some(AppAction::Redraw);
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn render(&self, f: &mut ratatui::Frame<'_>, _area: ratatui::layout::Rect, _state: &AppState) {
+        render_clipboard_notice_local(f, &self.clipboard_notice);
+    }
+}
+
+pub(crate) fn render_clipboard_notice_local(f: &mut ratatui::Frame, notice: &Option<ClipboardNotice>) {
+    let Some(notice) = notice else { return; };
 
     let label = "Copied";
     let width = (label.len() as u16).saturating_add(4);

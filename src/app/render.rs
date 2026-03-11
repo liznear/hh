@@ -41,7 +41,7 @@ struct TaskToolRenderOutput {
     finished_at: Option<u64>,
 }
 
-pub fn render_app(f: &mut Frame, app: &ChatApp) {
+pub fn render_app(f: &mut Frame, app: &ChatApp, _mvu_app: &crate::app::state::App) {
     let layout = UiLayout::default();
     f.render_widget(
         Block::default().style(Style::default().bg(PAGE_BG)),
@@ -93,7 +93,7 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
             render_sidebar(f, app, clipped_sidebar_area);
         }
 
-        render_clipboard_notice(f, app);
+        
         return;
     }
 
@@ -153,7 +153,7 @@ pub fn render_app(f: &mut Frame, app: &ChatApp) {
         render_sidebar(f, app, clipped_sidebar_area);
     }
 
-    render_clipboard_notice(f, app);
+    
 }
 
 fn render_subagent_back_indicator(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
@@ -371,9 +371,7 @@ fn blend_color_with_white(color: Color, amount: f64) -> Color {
     }
 }
 
-fn render_clipboard_notice(f: &mut Frame, app: &ChatApp) {
-    popups::render_clipboard_notice(f, app);
-}
+
 
 fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
     popups::render_command_palette(f, app, area, layout);

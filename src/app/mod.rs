@@ -87,6 +87,7 @@ async fn run_interactive_chat_loop(
     let mut stream_flush_tick = tokio::time::interval(STREAM_CHUNK_FLUSH_INTERVAL);
     let mut mvu_app = MvuApp::new(AppState::new(runner.cwd.to_path_buf()));
     mvu_app.register_component(Box::new(InputActionComponent));
+    mvu_app.register_component(Box::new(crate::app::components::popups::PopupComponent::default()));
     mvu_app.dispatch(AppAction::Redraw);
     let mut flush_stream_before_draw = false;
     let mut pending_assistant_delta = String::new();
@@ -98,7 +99,10 @@ async fn run_interactive_chat_loop(
                 flush_stream_chunks(app, &mut pending_thinking, &mut pending_assistant_delta);
                 flush_stream_before_draw = false;
             }
-            tui_guard.get().draw(|f| crate::app::render::render_app(f, app))?;
+            tui_guard.get().draw(|f| {
+                crate::app::render::render_app(f, app, &mvu_app);
+                mvu_app.render_components(f, f.area());
+            })?;
         }
 
         tokio::select! {
@@ -164,7 +168,9 @@ async fn run_interactive_chat_loop(
                         handle_mouse_drag(app, x, y, tui_guard.get());
                     }
                     InputEvent::MouseRelease { x, y } => {
-                        handle_mouse_release(app, x, y, tui_guard.get());
+                        if let Some(action) = handle_mouse_release(app, x, y, tui_guard.get()) {
+                            mvu_app.dispatch(action);
+                        }
                     }
                     }
                 }

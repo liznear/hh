@@ -3,7 +3,6 @@ use ratatui::layout::Rect;
 use crate::app::components::commands::SlashCommand;
 use crate::app::events::TuiEvent;
 use crate::app::input::InputEvent;
-use crate::app::state::SessionContext;
 use crate::core::MessageAttachment;
 
 pub trait Component {
@@ -15,7 +14,7 @@ pub trait Component {
         None
     }
 
-    fn render(&self, _f: &mut ratatui::Frame<'_>, _area: Rect, _ctx: &SessionContext) {}
+    fn render(&self, _f: &mut ratatui::Frame<'_>, _area: Rect, _state: &crate::app::state::AppState) {}
 }
 
 #[derive(Debug, Clone)]
@@ -31,4 +30,5 @@ pub enum AppAction {
     ScrollMessages(i32),
     SelectSession(String),
     ReportDispatchOverflow,
+    ShowClipboardNotice { x: u16, y: u16 },
 }
