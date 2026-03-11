@@ -28,6 +28,7 @@ pub struct MessageViewportCache {
     message_dirty_hint: Cell<MessageDirtyHint>,
     line_cache_generation: Cell<u64>,
     visible_cache_key: RefCell<Option<VisibleCacheKey>>,
+    app_message_generation: Cell<u64>,
 }
 
 impl MessageViewportCache {
@@ -41,10 +42,17 @@ impl MessageViewportCache {
             message_dirty_hint: Cell::new(MessageDirtyHint::Full),
             line_cache_generation: Cell::new(0),
             visible_cache_key: RefCell::new(None),
+            app_message_generation: Cell::new(0),
         }
     }
 
     pub fn get_lines<'a>(&'a self, app: &ChatApp, width: usize) -> Ref<'a, Vec<Line<'static>>> {
+        let app_generation = app.message_cache_generation();
+        if app_generation != self.app_message_generation.get() {
+            self.mark_full_dirty();
+            self.app_message_generation.set(app_generation);
+        }
+
         let needs_rebuild = self.needs_rebuild.get();
         let cached_width = self.cached_width.get();
 

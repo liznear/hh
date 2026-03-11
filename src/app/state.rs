@@ -161,26 +161,43 @@ impl App {
             }
             AppAction::SubmitInput(..)
             | AppAction::RunSlashCommand(..)
-            | AppAction::AgentEvent(..)
             | AppAction::ScrollMessages(..)
             | AppAction::ScrollSidebar(..)
             | AppAction::ToggleSidebarSection(..)
             | AppAction::ShowClipboardNotice { .. }
             | AppAction::UpdateInput(..)
-            | AppAction::ClearInput
-            | AppAction::SetProcessing(_) => {}
+            | AppAction::ClearInput => {}
+            AppAction::SetProcessing(processing) => {
+                self.state.legacy_chat_app.set_processing(*processing);
+                self.state.context.is_processing = *processing;
+                self.state.needs_redraw = true;
+            }
+            AppAction::AgentEvent(event) => {
+                self.state.legacy_chat_app.handle_event(event);
+                self.state.context.is_processing = self.state.legacy_chat_app.is_processing;
+                self.state.needs_redraw = true;
+            }
             AppAction::UserMessageAppended(msg) => {
                 self.state.messages.push(msg.clone());
+                self.state.legacy_chat_app.messages.push(msg.clone());
                 self.state.needs_redraw = true;
             }
             AppAction::AssistantMessageAppended(text) => {
                 self.state
                     .messages
                     .push(crate::app::chat_state::ChatMessage::Assistant(text.clone()));
+                self.state
+                    .legacy_chat_app
+                    .messages
+                    .push(crate::app::chat_state::ChatMessage::Assistant(text.clone()));
                 self.state.needs_redraw = true;
             }
             AppAction::SystemMessageAppended(text) => {
                 self.state
+                    .messages
+                    .push(crate::app::chat_state::ChatMessage::Assistant(text.clone()));
+                self.state
+                    .legacy_chat_app
                     .messages
                     .push(crate::app::chat_state::ChatMessage::Assistant(text.clone()));
                 self.state.needs_redraw = true;
@@ -213,5 +230,63 @@ impl App {
     pub fn render_components(&self, f: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect) {
         self.popups.render(f, area, &self.state);
         self.messages.render(f, area, &self.state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    use crate::app::chat_state::{ChatApp, ChatMessage};
+    use crate::app::events::TuiEvent;
+
+    fn build_app() -> App {
+        App::new(AppState::new(
+            Path::new(".").to_path_buf(),
+            ChatApp::default(),
+        ))
+    }
+
+    #[test]
+    fn dispatches_agent_event_into_legacy_chat_state() {
+        let mut app = build_app();
+        app.state.legacy_chat_app.set_processing(true);
+
+        app.dispatch(AppAction::AgentEvent(TuiEvent::AssistantDelta(
+            "hello".to_string(),
+        )));
+        app.dispatch(AppAction::AgentEvent(TuiEvent::AssistantDone));
+
+        assert!(matches!(
+            app.state.legacy_chat_app.messages.last(),
+            Some(ChatMessage::Assistant(text)) if text == "hello"
+        ));
+        assert!(!app.state.legacy_chat_app.is_processing);
+    }
+
+    #[test]
+    fn set_processing_action_updates_legacy_processing_state() {
+        let mut app = build_app();
+
+        app.dispatch(AppAction::SetProcessing(true));
+        assert!(app.state.legacy_chat_app.is_processing);
+        assert!(app.state.context.is_processing);
+
+        app.dispatch(AppAction::SetProcessing(false));
+        assert!(!app.state.legacy_chat_app.is_processing);
+        assert!(!app.state.context.is_processing);
+    }
+
+    #[test]
+    fn assistant_message_appended_updates_legacy_transcript() {
+        let mut app = build_app();
+
+        app.dispatch(AppAction::AssistantMessageAppended("ready".to_string()));
+
+        assert!(matches!(
+            app.state.legacy_chat_app.messages.last(),
+            Some(ChatMessage::Assistant(text)) if text == "ready"
+        ));
     }
 }

@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -296,6 +296,7 @@ pub struct ChatApp {
     pub todo_items: Vec<TodoItemView>,
     pub subagent_items: Vec<SubagentItemView>,
     pub cached_context_usage_estimate: RefCell<Option<usize>>,
+    message_cache_generation: Cell<u64>,
     pub available_sessions: Vec<SessionMetadata>,
     pub is_picking_session: bool,
     pub commands: Vec<SlashCommand>,
@@ -368,6 +369,7 @@ impl ChatApp {
             todo_items: Vec::new(),
             subagent_items: Vec::new(),
             cached_context_usage_estimate: RefCell::new(None),
+            message_cache_generation: Cell::new(0),
             available_sessions: Vec::new(),
             is_picking_session: false,
             commands,
@@ -1439,7 +1441,7 @@ impl ChatApp {
 
     /// Cancel any running agent task
     pub fn cancel_agent_task(&mut self) {
-        if let Some(task) = self.agent_task.take() {
+        if let Some(task) = self.agent_task.take() && !task.handle.is_finished() {
             self.bump_run_epoch();
             let _ = task.cancel_tx.send(true);
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -1449,7 +1451,7 @@ impl ChatApp {
                         task.handle.abort();
                     }
                 });
-            } else if !task.handle.is_finished() {
+            } else {
                 task.handle.abort();
             }
         }
@@ -1514,9 +1516,19 @@ impl ChatApp {
         self.mark_message_dirty();
     }
 
-    pub fn mark_message_dirty(&self) {}
+    pub fn mark_message_dirty(&self) {
+        self.message_cache_generation
+            .set(self.message_cache_generation.get().wrapping_add(1));
+    }
 
-    pub fn mark_message_tail_dirty(&self) {}
+    pub fn mark_message_tail_dirty(&self) {
+        self.message_cache_generation
+            .set(self.message_cache_generation.get().wrapping_add(1));
+    }
+
+    pub fn message_cache_generation(&self) -> u64 {
+        self.message_cache_generation.get()
+    }
 
     pub fn mark_sidebar_dirty(&self) {
         *self.cached_context_usage_estimate.borrow_mut() = None;
@@ -2004,6 +2016,22 @@ mod tests {
             app.messages.first(),
             Some(ChatMessage::User { queued: false, .. })
         ));
+    }
+
+    #[test]
+    fn message_cache_generation_increments_when_messages_change() {
+        let mut app = ChatApp::default();
+        let base = app.message_cache_generation();
+
+        app.set_input("hello".to_string());
+        let _submitted = app.submit_input();
+        let after_submit = app.message_cache_generation();
+        assert!(after_submit > base);
+
+        app.handle_event(&crate::app::events::TuiEvent::AssistantDelta(
+            "world".to_string(),
+        ));
+        assert!(app.message_cache_generation() > after_submit);
     }
 
     #[test]

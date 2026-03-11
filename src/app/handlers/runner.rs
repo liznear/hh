@@ -523,9 +523,8 @@ pub(crate) fn handle_chat_message(
     }
 
     if !input.text.is_empty() || !input.attachments.is_empty() {
-        // Ensure any run-epoch bump from replacing an existing task happens
-        // before we scope events for the new run.
-        event_sender.send(TuiEvent::Cancelled);
+        // Ensure run/session epochs are up to date before we scope events for this run.
+        app.cancel_agent_task();
 
         let scoped_sender = event_sender.scoped(app.session_epoch(), app.run_epoch());
         let session_id = app.session_id.clone();
