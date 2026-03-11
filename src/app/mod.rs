@@ -21,7 +21,6 @@ use crate::app::input::{
     handle_mouse_click, handle_mouse_drag, handle_mouse_release, load_session_messages,
 };
 use crate::app::chat_state::ChatApp;
-use crate::app::components::input_actions::InputActionComponent;
 use crate::app::core::AppAction;
 use crate::app::events::{ScopedTuiEvent, TuiEvent, TuiEventSender};
 use crate::app::state::{App as MvuApp, AppState};
@@ -86,8 +85,6 @@ async fn run_interactive_chat_loop(
     let mut render_tick = tokio::time::interval(Duration::from_millis(100));
     let mut stream_flush_tick = tokio::time::interval(STREAM_CHUNK_FLUSH_INTERVAL);
     let mut mvu_app = MvuApp::new(AppState::new(runner.cwd.to_path_buf()));
-    mvu_app.register_component(Box::new(InputActionComponent));
-    mvu_app.register_component(Box::new(crate::app::components::popups::PopupComponent::default()));
     mvu_app.dispatch(AppAction::Redraw);
     let mut flush_stream_before_draw = false;
     let mut pending_assistant_delta = String::new();
@@ -118,6 +115,7 @@ async fn run_interactive_chat_loop(
                         handle_key_event(
                             key_event,
                             app,
+                            &mvu_app.messages,
                             runner.settings,
                             runner.cwd,
                             runner.event_sender,
@@ -138,7 +136,7 @@ async fn run_interactive_chat_loop(
                             width: terminal_size.width,
                             height: terminal_size.height,
                         };
-                        handle_area_scroll(app, terminal_rect, x, y, 3, 0);
+                        handle_area_scroll(app, &mvu_app.messages, terminal_rect, x, y, 3, 0);
                     }
                     InputEvent::ScrollDown { x, y } => {
                         let terminal_size = tui_guard.get().size()?;
@@ -149,7 +147,7 @@ async fn run_interactive_chat_loop(
                             height: terminal_size.height,
                         };
                         handle_area_scroll(
-                            app,
+                            app, &mvu_app.messages,
                             terminal_rect,
                             x,
                             y,
@@ -162,13 +160,13 @@ async fn run_interactive_chat_loop(
                         tui_guard.get().clear()?;
                     }
                     InputEvent::MouseClick { x, y } => {
-                        handle_mouse_click(app, x, y, tui_guard.get(), runner.settings, runner.cwd);
+                        handle_mouse_click(app, &mvu_app.messages, x, y, tui_guard.get(), runner.settings, runner.cwd);
                     }
                     InputEvent::MouseDrag { x, y } => {
-                        handle_mouse_drag(app, x, y, tui_guard.get());
+                        handle_mouse_drag(app, &mvu_app.messages, x, y, tui_guard.get());
                     }
                     InputEvent::MouseRelease { x, y } => {
-                        if let Some(action) = handle_mouse_release(app, x, y, tui_guard.get()) {
+                        if let Some(action) = handle_mouse_release(app, &mvu_app.messages, x, y, tui_guard.get()) {
                             mvu_app.dispatch(action);
                         }
                     }

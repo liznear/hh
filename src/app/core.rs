@@ -28,6 +28,8 @@ pub enum AppAction {
     CancelExecution,
     AgentEvent(TuiEvent),
     ScrollMessages(i32),
+    ScrollSidebar(i32),
+    ToggleSidebarSection(String),
     SelectSession(String),
     ReportDispatchOverflow,
     ShowClipboardNotice { x: u16, y: u16 },

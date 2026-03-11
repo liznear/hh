@@ -35,28 +35,26 @@ impl AppState {
 
 pub struct App {
     pub state: AppState,
-    components: Vec<Box<dyn Component>>,
+    pub popups: crate::app::components::popups::PopupComponent,
+    pub input_actions: crate::app::components::input_actions::InputActionComponent,
+    pub messages: crate::app::components::messages::MessagesComponent,
 }
 
 impl App {
     pub fn new(state: AppState) -> Self {
         Self {
             state,
-            components: Vec::new(),
+            popups: crate::app::components::popups::PopupComponent::default(),
+            input_actions: crate::app::components::input_actions::InputActionComponent,
+            messages: crate::app::components::messages::MessagesComponent::default(),
         }
-    }
-
-    pub fn register_component(&mut self, component: Box<dyn Component>) {
-        self.components.push(component);
     }
 
     pub fn handle_input_event(&mut self, event: &crate::app::input::InputEvent) {
         let mut queue = VecDeque::new();
-        for component in &mut self.components {
-            if let Some(action) = component.handle_event(event) {
-                queue.push_back(action);
-            }
-        }
+        if let Some(action) = self.input_actions.handle_event(event) { queue.push_back(action); }
+        if let Some(action) = self.popups.handle_event(event) { queue.push_back(action); }
+        if let Some(action) = self.messages.handle_event(event) { queue.push_back(action); }
         while let Some(action) = queue.pop_front() {
             self.dispatch(action);
         }
@@ -78,11 +76,9 @@ impl App {
 
             self.reduce(&action);
 
-            for component in &mut self.components {
-                if let Some(next) = component.update(&action) {
-                    queue.push_back(next);
-                }
-            }
+            if let Some(next) = self.input_actions.update(&action) { queue.push_back(next); }
+            if let Some(next) = self.popups.update(&action) { queue.push_back(next); }
+            if let Some(next) = self.messages.update(&action) { queue.push_back(next); }
         }
     }
 
@@ -116,7 +112,9 @@ impl App {
             | AppAction::RunSlashCommand(..)
             | AppAction::AgentEvent(..)
             | AppAction::ScrollMessages(..)
-            | AppAction::ShowClipboardNotice { .. } => {}
+            | AppAction::ShowClipboardNotice { .. }
+            | AppAction::ScrollSidebar(..)
+            | AppAction::ToggleSidebarSection(..) => {}
         }
     }
 
@@ -127,9 +125,8 @@ impl App {
     }
 
     pub fn render_components(&self, f: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect) {
-        for component in &self.components {
-            component.render(f, area, &self.state);
-        }
+        self.popups.render(f, area, &self.state);
+        self.messages.render(f, area, &self.state);
     }
 }
 

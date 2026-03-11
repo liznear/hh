@@ -19,7 +19,6 @@ type QuestionResponder = std::sync::Arc<
 >;
 
 use crate::app::components::commands::{SlashCommand, get_default_commands};
-use crate::app::components::viewport_cache::MessageViewportCache;
 use crate::app::events::{SubagentEventItem, TuiEvent};
 use crate::theme::tool_render::render_tool_result;
 use crate::core::MessageAttachment;
@@ -298,7 +297,6 @@ pub struct ChatApp {
     processing_started_at: Option<Instant>,
     pub todo_items: Vec<TodoItemView>,
     pub subagent_items: Vec<SubagentItemView>,
-    message_viewport: MessageViewportCache,
     pub cached_sidebar_lines: RefCell<Vec<Line<'static>>>,
     pub cached_sidebar_width: RefCell<u16>,
     pub sidebar_needs_rebuild: RefCell<bool>,
@@ -376,7 +374,6 @@ impl ChatApp {
             processing_started_at: None,
             todo_items: Vec::new(),
             subagent_items: Vec::new(),
-            message_viewport: MessageViewportCache::new(),
             cached_sidebar_lines: RefCell::new(Vec::new()),
             cached_sidebar_width: RefCell::new(0),
             sidebar_needs_rebuild: RefCell::new(true),
@@ -1144,20 +1141,7 @@ impl ChatApp {
         }
     }
 
-    /// Get or rebuild cached lines for the given width (interior mutability)
-    pub fn get_lines(&self, width: usize) -> std::cell::Ref<'_, Vec<Line<'static>>> {
-        self.message_viewport.get_lines(self, width)
-    }
 
-    pub fn get_visible_lines(
-        &self,
-        wrap_width: usize,
-        visible_height: usize,
-        scroll_offset: usize,
-    ) -> std::cell::Ref<'_, Vec<Line<'static>>> {
-        self.message_viewport
-            .get_visible_lines(self, wrap_width, visible_height, scroll_offset)
-    }
 
     pub fn get_sidebar_lines(&self, width: u16) -> std::cell::Ref<'_, Vec<Line<'static>>> {
         let needs_rebuild = *self.sidebar_needs_rebuild.borrow();
@@ -1560,11 +1544,9 @@ impl ChatApp {
     }
 
     pub fn mark_message_dirty(&self) {
-        self.message_viewport.mark_full_dirty();
     }
 
     pub fn mark_message_tail_dirty(&self) {
-        self.message_viewport.mark_tail_dirty();
     }
 
     pub fn mark_sidebar_dirty(&self) {

@@ -41,7 +41,7 @@ struct TaskToolRenderOutput {
     finished_at: Option<u64>,
 }
 
-pub fn render_app(f: &mut Frame, app: &ChatApp, _mvu_app: &crate::app::state::App) {
+pub fn render_app(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App) {
     let layout = UiLayout::default();
     f.render_widget(
         Block::default().style(Style::default().bg(PAGE_BG)),
@@ -79,7 +79,7 @@ pub fn render_app(f: &mut Frame, app: &ChatApp, _mvu_app: &crate::app::state::Ap
             ])
             .split(main_area);
 
-        render_messages(f, app, main_chunks[0]);
+        render_messages(f, app, mvu_app, main_chunks[0]);
         render_subagent_back_indicator(f, app, main_chunks[2], layout);
 
         if let Some(area) = sidebar_area {
@@ -120,7 +120,7 @@ pub fn render_app(f: &mut Frame, app: &ChatApp, _mvu_app: &crate::app::state::Ap
         ])
         .split(main_area);
 
-    render_messages(f, app, main_chunks[0]);
+    render_messages(f, app, mvu_app, main_chunks[0]);
     render_processing_indicator(f, app, main_chunks[2], layout);
     render_input(f, app, main_chunks[4], layout);
 
@@ -392,8 +392,8 @@ pub(crate) fn sidebar_section_header_hitboxes(
     sidebar::sidebar_section_header_hitboxes(app, content_width)
 }
 
-fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
-    messages::render_messages(f, app, area);
+fn render_messages(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App, area: ratatui::layout::Rect) {
+    messages::render_messages(f, app, &mvu_app.messages, area);
 }
 
 pub(crate) fn apply_selection_highlight(

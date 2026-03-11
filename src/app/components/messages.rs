@@ -6,9 +6,48 @@ use ratatui::{
 };
 
 use crate::app::chat_state::ChatApp;
-use crate::theme::colors::*;
+use crate::app::chat_state::{ScrollState, TextSelection};
 
-pub(crate) fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layout::Rect) {
+use crate::app::components::viewport_cache::MessageViewportCache;
+
+pub struct MessagesComponent {
+    pub viewport: MessageViewportCache,
+    pub scroll: ScrollState,
+    pub selection: TextSelection,
+}
+
+impl Default for MessagesComponent {
+    fn default() -> Self {
+        Self {
+            viewport: MessageViewportCache::new(),
+            scroll: ScrollState::new(true),
+            selection: TextSelection::None,
+        }
+    }
+}
+
+impl Component for MessagesComponent {
+    fn update(&mut self, action: &AppAction) -> Option<AppAction> {
+        match action {
+            AppAction::ScrollMessages(amount) => {
+                let amount = *amount;
+                if amount < 0 {
+                    self.scroll.offset = self.scroll.offset.saturating_add(amount.unsigned_abs() as usize);
+                } else {
+                    self.scroll.offset = self.scroll.offset.saturating_sub(amount as usize);
+                }
+                self.scroll.auto_follow = self.scroll.offset == 0;
+                Some(AppAction::Redraw)
+            }
+            _ => None,
+        }
+    }
+}
+
+use crate::theme::colors::*;
+use crate::app::core::{Component, AppAction};
+
+pub(crate) fn render_messages(f: &mut Frame, app: &ChatApp, messages: &MessagesComponent, area: ratatui::layout::Rect) {
     let panel = Block::default().style(Style::default().bg(PAGE_BG));
     let inner = panel.inner(area);
     f.render_widget(panel, area);
@@ -18,7 +57,7 @@ pub(crate) fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layou
     let wrap_width = content.width as usize;
     let visible_height = content.height as usize;
 
-    let lines = app.get_lines(wrap_width);
+    let lines = messages.viewport.get_lines(app, wrap_width);
     let total_lines = lines.len();
 
     let scroll_offset = app
@@ -26,7 +65,7 @@ pub(crate) fn render_messages(f: &mut Frame, app: &ChatApp, area: ratatui::layou
         .effective_offset(total_lines, visible_height);
     drop(lines);
 
-    let rendered_lines = app.get_visible_lines(wrap_width, visible_height, scroll_offset);
+    let rendered_lines = messages.viewport.get_visible_lines(app, wrap_width, visible_height, scroll_offset);
     let text = Text::from(rendered_lines.to_vec());
     let paragraph = Paragraph::new(text)
         .style(Style::default().bg(PAGE_BG).fg(TEXT_PRIMARY))
