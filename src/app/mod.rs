@@ -117,6 +117,7 @@ async fn run_interactive_chat_loop(
                             key_event,
                             app,
                             &mvu_app.messages,
+                            &mut actions,
                             runner.settings,
                             runner.cwd,
                             runner.event_sender,

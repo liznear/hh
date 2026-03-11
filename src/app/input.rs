@@ -60,10 +60,12 @@ fn translate_terminal_event(event: Event) -> Option<InputEvent> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_key_event<F>(
     key_event: event::KeyEvent,
     app: &mut ChatApp,
     messages: &crate::app::components::messages::MessagesComponent,
+    actions: &mut Vec<crate::app::core::AppAction>,
     settings: &Settings,
     cwd: &Path,
     event_sender: &TuiEventSender,
@@ -157,7 +159,7 @@ where
             mutate_input(app, |app| app.insert_char('\n'));
         }
         KeyCode::Enter => {
-            handle_enter_key(app, settings, cwd, event_sender);
+            handle_enter_key(app, actions, settings, cwd, event_sender);
         }
         KeyCode::Tab => {
             app.cycle_agent();
@@ -515,6 +517,7 @@ fn selected_command_name(app: &ChatApp) -> Option<String> {
 
 fn submit_and_handle(
     app: &mut ChatApp,
+    actions: &mut Vec<crate::app::core::AppAction>,
     settings: &Settings,
     cwd: &Path,
     event_sender: &TuiEventSender,
@@ -536,11 +539,12 @@ fn submit_and_handle(
         return;
     }
 
-    crate::app::handlers::actions::handle_submitted_input(input, app, settings, cwd, event_sender);
+    for action in crate::app::handlers::actions::handle_submitted_input(input, app, settings, cwd, event_sender) { actions.push(action); }
 }
 
 fn handle_enter_key(
     app: &mut ChatApp,
+    actions: &mut Vec<crate::app::core::AppAction>,
     settings: &Settings,
     cwd: &Path,
     event_sender: &TuiEventSender,
@@ -552,7 +556,7 @@ fn handle_enter_key(
         return;
     }
 
-    submit_and_handle(app, settings, cwd, event_sender);
+    submit_and_handle(app, actions, settings, cwd, event_sender);
 }
 
 fn scroll_page_down(app: &mut ChatApp, messages: &crate::app::components::messages::MessagesComponent, width: u16, height: u16) {
