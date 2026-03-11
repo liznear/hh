@@ -12,23 +12,24 @@ pub struct SessionContext {
     pub is_processing: bool,
 }
 
-#[derive(Debug, Clone)]
 pub struct AppState {
     pub cwd: PathBuf,
     pub should_quit: bool,
     pub needs_redraw: bool,
     pub context: SessionContext,
     pub last_error: Option<String>,
+    pub legacy_chat_app: crate::app::chat_state::ChatApp,
 }
 
 impl AppState {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub fn new(cwd: PathBuf, legacy_chat_app: crate::app::chat_state::ChatApp) -> Self {
         Self {
             cwd,
             should_quit: false,
             needs_redraw: true,
             context: SessionContext::default(),
             last_error: None,
+            legacy_chat_app,
         }
     }
 }

@@ -45,7 +45,7 @@ pub async fn run_interactive_chat(settings: Settings, cwd: &Path) -> anyhow::Res
 
     run_interactive_chat_loop(
         &mut tui_guard,
-        &mut app,
+        app,
         InteractiveChatRunner {
             settings: &settings,
             cwd,
@@ -79,12 +79,12 @@ struct InteractiveChatRunner<'a> {
 
 async fn run_interactive_chat_loop(
     tui_guard: &mut terminal::TuiGuard,
-    app: &mut ChatApp,
+    app: ChatApp,
     runner: InteractiveChatRunner<'_>,
 ) -> anyhow::Result<()> {
     let mut render_tick = tokio::time::interval(Duration::from_millis(100));
     let mut stream_flush_tick = tokio::time::interval(STREAM_CHUNK_FLUSH_INTERVAL);
-    let mut mvu_app = MvuApp::new(AppState::new(runner.cwd.to_path_buf()));
+    let mut mvu_app = MvuApp::new(AppState::new(runner.cwd.to_path_buf(), app));
     mvu_app.dispatch(AppAction::Redraw);
     let mut flush_stream_before_draw = false;
     let mut pending_assistant_delta = String::new();
@@ -97,7 +97,7 @@ async fn run_interactive_chat_loop(
                 flush_stream_before_draw = false;
             }
             tui_guard.get().draw(|f| {
-                crate::app::render::render_app(f, app, &mvu_app);
+                crate::app::render::render_app(f, &mvu_app.state.legacy_chat_app, &mvu_app);
                 mvu_app.render_components(f, f.area());
             })?;
         }
@@ -115,7 +115,7 @@ async fn run_interactive_chat_loop(
                     InputEvent::Key(key_event) => {
                         handle_key_event(
                             key_event,
-                            app,
+                            &mut mvu_app.state.legacy_chat_app,
                             &mvu_app.messages,
                             &mut actions,
                             runner.settings,
@@ -128,7 +128,7 @@ async fn run_interactive_chat_loop(
                         )?;
                     }
                     InputEvent::Paste(text) => {
-                        apply_paste(app, text);
+                        apply_paste(&mut mvu_app.state.legacy_chat_app, text);
                     }
                     InputEvent::ScrollUp { x, y } => {
                         let terminal_size = tui_guard.get().size()?;
@@ -138,7 +138,7 @@ async fn run_interactive_chat_loop(
                             width: terminal_size.width,
                             height: terminal_size.height,
                         };
-                        handle_area_scroll(app, &mvu_app.messages, &mvu_app.sidebar, &mut actions, terminal_rect, x, y, 3, 0);
+                        handle_area_scroll(&mut mvu_app.state.legacy_chat_app, &mvu_app.messages, &mvu_app.sidebar, &mut actions, terminal_rect, x, y, 3, 0);
                     }
                     InputEvent::ScrollDown { x, y } => {
                         let terminal_size = tui_guard.get().size()?;
@@ -149,7 +149,7 @@ async fn run_interactive_chat_loop(
                             height: terminal_size.height,
                         };
                         handle_area_scroll(
-                            app, &mvu_app.messages, &mvu_app.sidebar, &mut actions,
+                            &mut mvu_app.state.legacy_chat_app, &mvu_app.messages, &mvu_app.sidebar, &mut actions,
                             terminal_rect,
                             x,
                             y,
@@ -162,13 +162,13 @@ async fn run_interactive_chat_loop(
                         tui_guard.get().clear()?;
                     }
                     InputEvent::MouseClick { x, y } => {
-                        handle_mouse_click(app, &mvu_app.messages, &mvu_app.sidebar, &mut actions, x, y, tui_guard.get(), runner.settings, runner.cwd);
+                        handle_mouse_click(&mut mvu_app.state.legacy_chat_app, &mvu_app.messages, &mvu_app.sidebar, &mut actions, x, y, tui_guard.get(), runner.settings, runner.cwd);
                     }
                     InputEvent::MouseDrag { x, y } => {
-                        handle_mouse_drag(app, &mvu_app.messages, x, y, tui_guard.get());
+                        handle_mouse_drag(&mut mvu_app.state.legacy_chat_app, &mvu_app.messages, x, y, tui_guard.get());
                     }
                     InputEvent::MouseRelease { x, y } => {
-                        if let Some(action) = handle_mouse_release(app, &mvu_app.messages, x, y, tui_guard.get()) {
+                        if let Some(action) = handle_mouse_release(&mut mvu_app.state.legacy_chat_app, &mvu_app.messages, x, y, tui_guard.get()) {
                             mvu_app.dispatch(action);
                         }
                     }
@@ -179,8 +179,8 @@ async fn run_interactive_chat_loop(
             }
             event = runner.event_rx.recv() => {
                 if let Some(event) = event
-                    && event.session_epoch == app.session_epoch()
-                    && event.run_epoch == app.run_epoch()
+                    && event.session_epoch == mvu_app.state.legacy_chat_app.session_epoch()
+                    && event.run_epoch == mvu_app.state.legacy_chat_app.run_epoch()
                 {
                     let mut handled_non_stream_event = false;
                     merge_or_handle_event(
@@ -195,8 +195,8 @@ async fn run_interactive_chat_loop(
                         let Ok(next_event) = runner.event_rx.try_recv() else {
                             break;
                         };
-                        if next_event.session_epoch == app.session_epoch()
-                            && next_event.run_epoch == app.run_epoch()
+                        if next_event.session_epoch == mvu_app.state.legacy_chat_app.session_epoch()
+                            && next_event.run_epoch == mvu_app.state.legacy_chat_app.run_epoch()
                         {
                             merge_or_handle_event(
                                 &mut mvu_app,
@@ -227,24 +227,24 @@ async fn run_interactive_chat_loop(
             }
             _ = render_tick.tick() => {
                 mvu_app.dispatch(AppAction::PeriodicTick);
-                if let Some(subagent_view) = app.active_subagent_session()
+                if let Some(subagent_view) = mvu_app.state.legacy_chat_app.active_subagent_session()
                     && let Ok(messages) = load_session_messages(
                         runner.settings,
                         runner.cwd,
                         &subagent_view.session_id,
                     )
                 {
-                    app.replace_active_subagent_messages(messages);
+                    mvu_app.state.legacy_chat_app.replace_active_subagent_messages(messages);
                     mvu_app.dispatch(AppAction::Redraw);
                 }
 
-                if app.on_periodic_tick() {
+                if mvu_app.state.legacy_chat_app.on_periodic_tick() {
                     mvu_app.dispatch(AppAction::Redraw);
                 }
             }
         }
 
-        if app.should_quit || mvu_app.state.should_quit {
+        if mvu_app.state.legacy_chat_app.should_quit || mvu_app.state.should_quit {
             break;
         }
     }
