@@ -1,12 +1,9 @@
 use std::fs;
 use std::io::Cursor;
 use std::path::Path;
-use std::time::Duration;
 
 use base64::Engine;
-use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
-};
+use crossterm::event::{self, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::app::chat_state::{ChatApp, ChatMessage, QuestionKeyResult};
@@ -14,51 +11,6 @@ use crate::app::events::TuiEventSender;
 use crate::config::Settings;
 use crate::core::{Message, MessageAttachment, Role};
 use crate::session::{SessionEvent, SessionStore};
-
-const INPUT_POLL_TIMEOUT: Duration = Duration::from_millis(16);
-const INPUT_BATCH_MAX: usize = 64;
-
-/// Input event from terminal
-#[derive(Debug, Clone)]
-pub enum InputEvent {
-    Key(event::KeyEvent),
-    Paste(String),
-    ScrollUp { x: u16, y: u16 },
-    ScrollDown { x: u16, y: u16 },
-    Refresh,
-    MouseClick { x: u16, y: u16 },
-    MouseDrag { x: u16, y: u16 },
-    MouseRelease { x: u16, y: u16 },
-}
-
-pub(crate) async fn handle_input_batch() -> anyhow::Result<Vec<InputEvent>> {
-    if !event::poll(INPUT_POLL_TIMEOUT)? {
-        return Ok(Vec::new());
-    }
-
-    let mut events = Vec::with_capacity(INPUT_BATCH_MAX.min(8));
-    if let Some(input_event) = translate_terminal_event(event::read()?) {
-        events.push(input_event);
-    }
-
-    while events.len() < INPUT_BATCH_MAX && event::poll(Duration::ZERO)? {
-        if let Some(input_event) = translate_terminal_event(event::read()?) {
-            events.push(input_event);
-        }
-    }
-
-    Ok(events)
-}
-
-fn translate_terminal_event(event: Event) -> Option<InputEvent> {
-    match event {
-        Event::Key(key) => Some(InputEvent::Key(key)),
-        Event::Paste(text) => Some(InputEvent::Paste(text)),
-        Event::Mouse(mouse) => handle_mouse_event(mouse),
-        Event::Resize(_, _) | Event::FocusGained => Some(InputEvent::Refresh),
-        _ => None,
-    }
-}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_key_event<F>(
@@ -635,14 +587,14 @@ fn copy_selection_to_clipboard(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn handle_mouse_click<B: ratatui::backend::Backend>(
+pub(crate) fn handle_mouse_click(
     app: &mut ChatApp,
     messages: &crate::app::components::messages::MessagesComponent,
     sidebar: &crate::app::components::sidebar::SidebarComponent,
     actions: &mut Vec<crate::app::core::AppAction>,
     x: u16,
     y: u16,
-    terminal: &ratatui::Terminal<B>,
+    terminal: &crate::app::terminal::Tui,
     settings: &Settings,
     cwd: &Path,
 ) {
@@ -907,28 +859,3 @@ pub(crate) fn load_session_messages(
     Ok(messages)
 }
 
-pub(crate) fn handle_mouse_event(mouse: MouseEvent) -> Option<InputEvent> {
-    match mouse.kind {
-        MouseEventKind::ScrollUp => Some(InputEvent::ScrollUp {
-            x: mouse.column,
-            y: mouse.row,
-        }),
-        MouseEventKind::ScrollDown => Some(InputEvent::ScrollDown {
-            x: mouse.column,
-            y: mouse.row,
-        }),
-        MouseEventKind::Down(crossterm::event::MouseButton::Left) => Some(InputEvent::MouseClick {
-            x: mouse.column,
-            y: mouse.row,
-        }),
-        MouseEventKind::Drag(crossterm::event::MouseButton::Left) => Some(InputEvent::MouseDrag {
-            x: mouse.column,
-            y: mouse.row,
-        }),
-        MouseEventKind::Up(crossterm::event::MouseButton::Left) => Some(InputEvent::MouseRelease {
-            x: mouse.column,
-            y: mouse.row,
-        }),
-        _ => None,
-    }
-}

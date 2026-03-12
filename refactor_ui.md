@@ -221,13 +221,13 @@ Handlers are pure controllers around side effects and domain operations.
 *   **Description**: Consolidate overlapping input modules so the loop consumes only `app::events::InputEvent`.
 *   **Principle**: Single boundary type for terminal input.
 *   **Todos**:
-    - [ ] Declare `app::events::InputEvent` as canonical and migrate `AppAction::Input` to use it.
-    - [ ] Remove duplicate enum definitions from `src/app/input.rs` after migration.
-    - [ ] Route `run_interactive_chat_loop` to the canonical `read_input_batch` path.
+    - [x] Declare `app::events::InputEvent` as canonical and migrate `AppAction::Input` to use it.
+    - [x] Remove duplicate enum definitions from `src/app/input.rs` after migration.
+    - [x] Route `run_interactive_chat_loop` to the canonical `read_input_batch` path.
     - [ ] Migrate key/paste/mouse handlers to consume canonical events without legacy adapters.
-    - [ ] Delete obsolete input translation utilities.
-    - [ ] Exit criteria: exactly one `enum InputEvent` remains under `src/app`.
-    - [ ] Verification: run `cargo test` focused on input normalization and key handling.
+    - [x] Delete obsolete input translation utilities.
+    - [x] Exit criteria: exactly one `enum InputEvent` remains under `src/app`.
+    - [x] Verification: run `cargo test` focused on input normalization and key handling.
 
 ### Phase 10: Enforce Handler and Dispatch Boundaries
 *   **Goal**: Ensure side effects are orchestrated through `App::dispatch` contracts.
@@ -235,7 +235,7 @@ Handlers are pure controllers around side effects and domain operations.
 *   **Principle**: Components/input translators emit intent; handlers perform side effects.
 *   **Todos**:
     - [ ] Define missing intent actions for submit, scroll, session ops, and cancellation.
-    - [ ] Remove direct side-effect calls from `src/app/mod.rs` input loop (`handle_key_event`, `apply_paste`, `handle_area_scroll`, `handle_mouse_click`, `handle_mouse_drag`, `handle_mouse_release`) by routing through dispatch + handlers.
+    - [x] Remove direct side-effect calls from `src/app/mod.rs` input loop (`handle_key_event`, `apply_paste`, `handle_area_scroll`, `handle_mouse_click`, `handle_mouse_drag`, `handle_mouse_release`) by routing through dispatch + handlers.
     - [ ] Move remaining direct side-effect calls out of `src/app/input.rs` into handler entrypoints.
     - [ ] Ensure handler outputs are represented as `AppAction`/`TuiEvent` and reduced centrally.
     - [ ] Add regression tests for dispatch ordering (reducer -> handlers -> components).

@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::app::core::{AppAction, Component};
-use crate::app::input::InputEvent;
+use crate::app::events::InputEvent;
 
 pub struct InputActionComponent;
 

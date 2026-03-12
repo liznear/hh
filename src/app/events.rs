@@ -14,14 +14,14 @@ const INPUT_BATCH_MAX: usize = 64;
 
 #[derive(Debug, Clone)]
 pub enum InputEvent {
-    KeyPress(crossterm::event::KeyEvent),
+    Key(crossterm::event::KeyEvent),
     Paste(String),
     ScrollUp { x: u16, y: u16 },
     ScrollDown { x: u16, y: u16 },
-    Click { x: u16, y: u16 },
-    Drag { x: u16, y: u16 },
+    MouseClick { x: u16, y: u16 },
+    MouseDrag { x: u16, y: u16 },
     MouseRelease { x: u16, y: u16 },
-    Resize,
+    Refresh,
 }
 
 #[derive(Debug, Clone)]
@@ -206,7 +206,7 @@ pub fn normalize_terminal_event(event: Event) -> Option<InputEvent> {
             if key.kind == KeyEventKind::Release {
                 None
             } else {
-                Some(InputEvent::KeyPress(key))
+                Some(InputEvent::Key(key))
             }
         }
         Event::Paste(text) => Some(InputEvent::Paste(text)),
@@ -219,11 +219,11 @@ pub fn normalize_terminal_event(event: Event) -> Option<InputEvent> {
                 x: mouse.column,
                 y: mouse.row,
             }),
-            MouseEventKind::Down(_) => Some(InputEvent::Click {
+            MouseEventKind::Down(_) => Some(InputEvent::MouseClick {
                 x: mouse.column,
                 y: mouse.row,
             }),
-            MouseEventKind::Drag(_) => Some(InputEvent::Drag {
+            MouseEventKind::Drag(_) => Some(InputEvent::MouseDrag {
                 x: mouse.column,
                 y: mouse.row,
             }),
@@ -233,7 +233,7 @@ pub fn normalize_terminal_event(event: Event) -> Option<InputEvent> {
             }),
             _ => None,
         },
-        Event::Resize(_, _) | Event::FocusGained => Some(InputEvent::Resize),
+        Event::Resize(_, _) | Event::FocusGained => Some(InputEvent::Refresh),
         _ => None,
     }
 }

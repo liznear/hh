@@ -17,11 +17,7 @@ use tokio::sync::mpsc;
 
 use crate::app::chat_state::ChatApp;
 use crate::app::core::AppAction;
-use crate::app::events::{ScopedTuiEvent, TuiEvent, TuiEventSender};
-use crate::app::input::{
-    InputEvent, apply_paste, handle_area_scroll, handle_input_batch, handle_key_event,
-    handle_mouse_click, handle_mouse_drag, handle_mouse_release, load_session_messages,
-};
+use crate::app::events::{InputEvent, ScopedTuiEvent, TuiEvent, TuiEventSender, read_input_batch};
 use crate::app::state::{App as MvuApp, AppState};
 use crate::cli::agent_init;
 use crate::config::Settings;
@@ -101,28 +97,22 @@ async fn run_interactive_chat_loop(
                 flush_stream_before_draw = false;
             }
             tui_guard.get().draw(|f| {
-                crate::app::render::render_app(f, &mvu_app.state.legacy_chat_app, &mvu_app);
-                mvu_app.render_components(f, f.area());
+                mvu_app.render_root(f);
             })?;
         }
 
         tokio::select! {
-            input_result = handle_input_batch() => {
+            input_result = read_input_batch() => {
                 let input_events = input_result?;
                 let mut handled_any_input = false;
-                let mut actions = Vec::new();
                 for input_event in input_events {
                     handled_any_input = true;
                     mvu_app.dispatch(AppAction::Input(input_event.clone()));
                     mvu_app.handle_input_event(&input_event);
                     match input_event {
                     InputEvent::Key(key_event) => {
-                        // For handle_key_event we actually don't pass the whole mvu_app. Wait, we pass mvu_app? We shouldn't. Let's fix input.rs handle_key_event to not take mvu_app.
-                        handle_key_event(
+                        mvu_app.process_key_event(
                             key_event,
-                            &mut mvu_app.state.legacy_chat_app,
-                            &mvu_app.messages,
-                            &mut actions,
                             runner.settings,
                             runner.cwd,
                             runner.event_sender,
@@ -131,17 +121,9 @@ async fn run_interactive_chat_loop(
                                 Ok((size.width, size.height))
                             },
                         )?;
-                        mvu_app.dispatch(AppAction::UpdateInput(
-                            mvu_app.state.legacy_chat_app.input.clone(),
-                            mvu_app.state.legacy_chat_app.cursor,
-                        ));
                     }
                     InputEvent::Paste(text) => {
-                        apply_paste(&mut mvu_app.state.legacy_chat_app, text);
-                        mvu_app.dispatch(AppAction::UpdateInput(
-                            mvu_app.state.legacy_chat_app.input.clone(),
-                            mvu_app.state.legacy_chat_app.cursor,
-                        ));
+                        mvu_app.process_paste(text);
                     }
                     InputEvent::ScrollUp { x, y } => {
                         let terminal_size = tui_guard.get().size()?;
@@ -151,7 +133,7 @@ async fn run_interactive_chat_loop(
                             width: terminal_size.width,
                             height: terminal_size.height,
                         };
-                        handle_area_scroll(&mut mvu_app.state.legacy_chat_app, &mvu_app.messages, &mvu_app.sidebar, &mut actions, terminal_rect, x, y, 3, 0);
+                        mvu_app.process_area_scroll(terminal_rect, x, y, 3, 0);
                     }
                     InputEvent::ScrollDown { x, y } => {
                         let terminal_size = tui_guard.get().size()?;
@@ -161,8 +143,7 @@ async fn run_interactive_chat_loop(
                             width: terminal_size.width,
                             height: terminal_size.height,
                         };
-                        handle_area_scroll(
-                            &mut mvu_app.state.legacy_chat_app, &mvu_app.messages, &mvu_app.sidebar, &mut actions,
+                        mvu_app.process_area_scroll(
                             terminal_rect,
                             x,
                             y,
@@ -175,25 +156,28 @@ async fn run_interactive_chat_loop(
                         tui_guard.get().clear()?;
                     }
                     InputEvent::MouseClick { x, y } => {
-                        handle_mouse_click(&mut mvu_app.state.legacy_chat_app, &mvu_app.messages, &mvu_app.sidebar, &mut actions, x, y, tui_guard.get(), runner.settings, runner.cwd);
+                        mvu_app.process_mouse_click(
+                            x,
+                            y,
+                            tui_guard.get(),
+                            runner.settings,
+                            runner.cwd,
+                        );
                     }
                     InputEvent::MouseDrag { x, y } => {
-                        handle_mouse_drag(&mut mvu_app.state.legacy_chat_app, &mvu_app.messages, x, y, tui_guard.get());
+                        mvu_app.process_mouse_drag(x, y, tui_guard.get());
                     }
                     InputEvent::MouseRelease { x, y } => {
-                        if let Some(action) = handle_mouse_release(&mut mvu_app.state.legacy_chat_app, &mvu_app.messages, x, y, tui_guard.get()) {
-                            mvu_app.dispatch(action);
-                        }
+                        mvu_app.process_mouse_release(x, y, tui_guard.get());
                     }
                     }
                 }
-                for a in actions { mvu_app.dispatch(a); }
                 if handled_any_input { mvu_app.dispatch(AppAction::Redraw); }
             }
             event = runner.event_rx.recv() => {
                 if let Some(event) = event
-                    && event.session_epoch == mvu_app.state.legacy_chat_app.session_epoch()
-                    && event.run_epoch == mvu_app.state.legacy_chat_app.run_epoch()
+                    && event.session_epoch == mvu_app.state.session_epoch
+                    && event.run_epoch == mvu_app.state.run_epoch
                 {
                     let mut handled_non_stream_event = false;
                     merge_or_handle_event(
@@ -208,8 +192,8 @@ async fn run_interactive_chat_loop(
                         let Ok(next_event) = runner.event_rx.try_recv() else {
                             break;
                         };
-                        if next_event.session_epoch == mvu_app.state.legacy_chat_app.session_epoch()
-                            && next_event.run_epoch == mvu_app.state.legacy_chat_app.run_epoch()
+                        if next_event.session_epoch == mvu_app.state.session_epoch
+                            && next_event.run_epoch == mvu_app.state.run_epoch
                         {
                             merge_or_handle_event(
                                 &mut mvu_app,
@@ -239,25 +223,11 @@ async fn run_interactive_chat_loop(
                 }
             }
             _ = render_tick.tick() => {
-                mvu_app.dispatch(AppAction::PeriodicTick);
-                if let Some(subagent_view) = mvu_app.state.legacy_chat_app.active_subagent_session()
-                    && let Ok(messages) = load_session_messages(
-                        runner.settings,
-                        runner.cwd,
-                        &subagent_view.session_id,
-                    )
-                {
-                    mvu_app.state.legacy_chat_app.replace_active_subagent_messages(messages);
-                    mvu_app.dispatch(AppAction::Redraw);
-                }
-
-                if mvu_app.state.legacy_chat_app.on_periodic_tick() {
-                    mvu_app.dispatch(AppAction::Redraw);
-                }
+                mvu_app.process_periodic_tick(runner.settings, runner.cwd);
             }
         }
 
-        if mvu_app.state.legacy_chat_app.should_quit || mvu_app.state.should_quit {
+        if mvu_app.state.should_quit {
             break;
         }
     }

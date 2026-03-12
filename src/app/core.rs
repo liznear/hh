@@ -1,8 +1,7 @@
 use ratatui::layout::Rect;
 
 use crate::app::components::commands::SlashCommand;
-use crate::app::events::TuiEvent;
-use crate::app::input::InputEvent;
+use crate::app::events::{InputEvent, TuiEvent};
 use crate::core::MessageAttachment;
 
 pub trait Component {
