@@ -213,17 +213,20 @@ Handlers are pure controllers around side effects and domain operations.
     - [ ] Move session/run epoch, message transcript, processing flags, and selection state into canonical `AppState` fields.
     - [ ] Replace `legacy_chat_app.handle_event(...)` reducer path with explicit `AppAction` reducers.
     - [ ] Remove `legacy_chat_app` from `AppState` once all call sites are migrated.
+    - [ ] Exit criteria: `rg "legacy_chat_app" src/app` returns no production call sites (allow tests only if explicitly justified).
     - [ ] Verification: run `cargo check` and targeted reducer tests.
 
 ### Phase 9: Unify Input Normalization Pipeline
 *   **Goal**: Use one `InputEvent` model and one terminal normalization path.
-*   **Description**: Consolidate overlapping input modules so the loop consumes only `app::events::InputEvent` (or a renamed canonical equivalent).
+*   **Description**: Consolidate overlapping input modules so the loop consumes only `app::events::InputEvent`.
 *   **Principle**: Single boundary type for terminal input.
 *   **Todos**:
-    - [ ] Choose canonical input event enum and remove duplicate enum definitions.
+    - [ ] Declare `app::events::InputEvent` as canonical and migrate `AppAction::Input` to use it.
+    - [ ] Remove duplicate enum definitions from `src/app/input.rs` after migration.
     - [ ] Route `run_interactive_chat_loop` to the canonical `read_input_batch` path.
     - [ ] Migrate key/paste/mouse handlers to consume canonical events without legacy adapters.
     - [ ] Delete obsolete input translation utilities.
+    - [ ] Exit criteria: exactly one `enum InputEvent` remains under `src/app`.
     - [ ] Verification: run `cargo test` focused on input normalization and key handling.
 
 ### Phase 10: Enforce Handler and Dispatch Boundaries
@@ -232,9 +235,11 @@ Handlers are pure controllers around side effects and domain operations.
 *   **Principle**: Components/input translators emit intent; handlers perform side effects.
 *   **Todos**:
     - [ ] Define missing intent actions for submit, scroll, session ops, and cancellation.
-    - [ ] Move direct side-effect calls out of `src/app/input.rs` into handler entrypoints.
+    - [ ] Remove direct side-effect calls from `src/app/mod.rs` input loop (`handle_key_event`, `apply_paste`, `handle_area_scroll`, `handle_mouse_click`, `handle_mouse_drag`, `handle_mouse_release`) by routing through dispatch + handlers.
+    - [ ] Move remaining direct side-effect calls out of `src/app/input.rs` into handler entrypoints.
     - [ ] Ensure handler outputs are represented as `AppAction`/`TuiEvent` and reduced centrally.
     - [ ] Add regression tests for dispatch ordering (reducer -> handlers -> components).
+    - [ ] Exit criteria: input plumbing emits intent only; no direct runner/session mutation outside reducers/handlers.
     - [ ] Verification: run `cargo check` and dispatch integration tests.
 
 ### Phase 11: Align Rendering with Component + `SessionContext` Contract
@@ -245,7 +250,9 @@ Handlers are pure controllers around side effects and domain operations.
     - [ ] Change `Component::render` to take `&SessionContext` (or equivalent render snapshot), not full `&AppState`.
     - [ ] Move message/sidebar/input/popup rendering ownership behind component `render` implementations.
     - [ ] Keep layout composition at root, but remove direct `ChatApp`-centric rendering dependencies.
+    - [ ] Remove legacy `crate::app::render::render_app(...)` path after component rendering owns layout/content.
     - [ ] Add tests for component render behavior where practical.
+    - [ ] Exit criteria: root render path composes components only; no direct `ChatApp` rendering dependency.
     - [ ] Verification: run `cargo check` and targeted render tests.
 
 ### Phase 12: Remove Interior-Mutability Cache Workarounds
@@ -257,6 +264,7 @@ Handlers are pure controllers around side effects and domain operations.
     - [ ] Refactor message viewport cache (`viewport_cache.rs`) to explicit mutable ownership via component update/render flow.
     - [ ] Remove stale cache fields from `chat_state.rs` after ownership migration.
     - [ ] Document cache keys + invalidation triggers per component in code comments/docstrings.
+    - [ ] Exit criteria: no `RefCell|Cell` in component cache paths unless accompanied by explicit in-code justification.
     - [ ] Verification: run `cargo check`, `cargo clippy -- -D warnings`, and `cargo test`.
 
 ### Phase 13: Final Architecture Conformance Pass
