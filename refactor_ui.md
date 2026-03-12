@@ -1,6 +1,42 @@
 # TUI Refactoring Plan
 
-Status: Completed (all phases and verification items checked).
+Status: In progress (structure largely migrated, core MVU boundary migration incomplete).
+Last reviewed: 2026-03-12.
+
+## Current Alignment Audit (vs `docs/designs/tui.md`)
+
+### What is aligned
+- Target module layout is mostly in place (`src/theme`, `src/app/components`, `src/app/handlers`).
+- Legacy `src/cli/tui` and `src/cli/chat` directories are removed.
+- `App::dispatch` is queue-based with an overflow guard (`MAX_ACTIONS_PER_TICK`).
+- Normalized terminal-input abstraction exists in `src/app/events.rs`.
+
+### Gaps still open
+1. **Legacy runtime coupling remains central**
+   - `AppState` still contains `legacy_chat_app: ChatApp` (`src/app/state.rs`).
+   - Main loop and reducers still read/write `legacy_chat_app` directly (`src/app/mod.rs`, `src/app/state.rs`).
+   - This keeps a bridge architecture rather than a pure MVU source of truth.
+
+2. **Input pipeline split across two models**
+   - `src/app/events.rs` defines one normalized `InputEvent` model.
+   - `src/app/input.rs` defines a second `InputEvent` model and is what the loop currently uses.
+   - This diverges from the documented single normalization pipeline.
+
+3. **Handler boundary not consistently enforced**
+   - Input path in `src/app/input.rs` invokes action/runner behavior directly and mutates `ChatApp` state.
+   - Not all side effects flow through `App::dispatch` + handler outcomes as `AppAction`.
+
+4. **Render contract mismatch**
+   - `Component::render` currently takes `&AppState` instead of a narrow read-only `SessionContext`.
+   - Most rendering remains centralized in `src/app/render.rs` over `ChatApp`; component-local render ownership is partial.
+
+5. **Interior mutability still present in render caches**
+   - `RefCell`/`Cell` remain in sidebar and viewport cache paths (`src/app/components/sidebar.rs`, `viewport_cache.rs`) and in `chat_state` cache fields.
+   - This conflicts with the original “remove RefCell rendering workarounds” goal.
+
+### Practical interpretation
+- **Phase completion in this document should be treated as historical migration progress, not final architecture conformance.**
+- The codebase has completed most filesystem/module migration work, but not the full boundary cleanup required by the architecture contracts.
 
 ## 1. High-Level Goal
 Transform the monolithic `ChatApp` into a decoupled, Elm-style Model-View-Update (MVU) architecture with strict boundaries between state, rendering, and business logic. This will eliminate "God Object" anti-patterns, remove the need for `RefCell` caching workarounds in rendering, and ensure the UI layer is scalable, testable, and maintainable.
@@ -167,3 +203,68 @@ Handlers are pure controllers around side effects and domain operations.
     - [x] Update `src/cli/mod.rs` to point to `crate::app::run_interactive_chat` instead of `crate::cli::chat::run_chat`.
     - [x] Delete `src/cli/tui/` and `src/cli/chat/` directories entirely.
     - [x] Run `cargo check`, `cargo clippy`, and `cargo test` to ensure stability and correctness.
+
+### Phase 8: Remove `legacy_chat_app` as Runtime Source of Truth
+*   **Goal**: Make `AppState` the only mutable orchestration state.
+*   **Description**: Migrate remaining `ChatApp`-owned state and behavior into `AppState` + component-local state, then delete the bridge field.
+*   **Principle**: No parallel state containers for the same UI/runtime concepts.
+*   **Todos**:
+    - [ ] Inventory all `legacy_chat_app` reads/writes in `src/app/mod.rs` and `src/app/state.rs`.
+    - [ ] Move session/run epoch, message transcript, processing flags, and selection state into canonical `AppState` fields.
+    - [ ] Replace `legacy_chat_app.handle_event(...)` reducer path with explicit `AppAction` reducers.
+    - [ ] Remove `legacy_chat_app` from `AppState` once all call sites are migrated.
+    - [ ] Verification: run `cargo check` and targeted reducer tests.
+
+### Phase 9: Unify Input Normalization Pipeline
+*   **Goal**: Use one `InputEvent` model and one terminal normalization path.
+*   **Description**: Consolidate overlapping input modules so the loop consumes only `app::events::InputEvent` (or a renamed canonical equivalent).
+*   **Principle**: Single boundary type for terminal input.
+*   **Todos**:
+    - [ ] Choose canonical input event enum and remove duplicate enum definitions.
+    - [ ] Route `run_interactive_chat_loop` to the canonical `read_input_batch` path.
+    - [ ] Migrate key/paste/mouse handlers to consume canonical events without legacy adapters.
+    - [ ] Delete obsolete input translation utilities.
+    - [ ] Verification: run `cargo test` focused on input normalization and key handling.
+
+### Phase 10: Enforce Handler and Dispatch Boundaries
+*   **Goal**: Ensure side effects are orchestrated through `App::dispatch` contracts.
+*   **Description**: Remove direct runtime/command side effects from input plumbing and route intent through `AppAction` -> handlers -> outcome actions.
+*   **Principle**: Components/input translators emit intent; handlers perform side effects.
+*   **Todos**:
+    - [ ] Define missing intent actions for submit, scroll, session ops, and cancellation.
+    - [ ] Move direct side-effect calls out of `src/app/input.rs` into handler entrypoints.
+    - [ ] Ensure handler outputs are represented as `AppAction`/`TuiEvent` and reduced centrally.
+    - [ ] Add regression tests for dispatch ordering (reducer -> handlers -> components).
+    - [ ] Verification: run `cargo check` and dispatch integration tests.
+
+### Phase 11: Align Rendering with Component + `SessionContext` Contract
+*   **Goal**: Make rendering component-owned and snapshot-driven.
+*   **Description**: Narrow render inputs to read-only `SessionContext` and reduce monolithic `render.rs` responsibilities.
+*   **Principle**: Components render from local state + read-only context; root orchestrates composition only.
+*   **Todos**:
+    - [ ] Change `Component::render` to take `&SessionContext` (or equivalent render snapshot), not full `&AppState`.
+    - [ ] Move message/sidebar/input/popup rendering ownership behind component `render` implementations.
+    - [ ] Keep layout composition at root, but remove direct `ChatApp`-centric rendering dependencies.
+    - [ ] Add tests for component render behavior where practical.
+    - [ ] Verification: run `cargo check` and targeted render tests.
+
+### Phase 12: Remove Interior-Mutability Cache Workarounds
+*   **Goal**: Eliminate `RefCell`-based render caches where feasible, or explicitly justify retained uses.
+*   **Description**: Replace interior mutability with explicit mutable cache ownership in component state/update paths.
+*   **Principle**: Prefer explicit mutability and deterministic invalidation over hidden mutable state.
+*   **Todos**:
+    - [ ] Refactor sidebar cache (`sidebar.rs`) to avoid `RefCell`/`Cell` for routine render updates.
+    - [ ] Refactor message viewport cache (`viewport_cache.rs`) to explicit mutable ownership via component update/render flow.
+    - [ ] Remove stale cache fields from `chat_state.rs` after ownership migration.
+    - [ ] Document cache keys + invalidation triggers per component in code comments/docstrings.
+    - [ ] Verification: run `cargo check`, `cargo clippy -- -D warnings`, and `cargo test`.
+
+### Phase 13: Final Architecture Conformance Pass
+*   **Goal**: Reconcile implementation with `docs/designs/tui.md` and close this plan.
+*   **Description**: Perform a final audit and mark completion only when all contracts are satisfied.
+*   **Principle**: Documentation status must match verified code reality.
+*   **Todos**:
+    - [ ] Re-audit all architecture contracts in section 3 against code.
+    - [ ] Update `docs/designs/tui.md` and this plan for any intentional deviations.
+    - [ ] Run full verification suite: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`, `cargo check`.
+    - [ ] Mark status as completed only after passing checks and audit.
