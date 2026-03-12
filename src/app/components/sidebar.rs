@@ -1,9 +1,9 @@
 use ratatui::{
-    Frame,
     prelude::Stylize,
     style::Style,
     text::{Line, Span, Text},
     widgets::{Block, Paragraph, Wrap},
+    Frame,
 };
 use serde_json::Value;
 
@@ -19,6 +19,7 @@ pub struct SidebarComponent {
     pub folded_sections: HashSet<String>,
     pub cached_lines: RefCell<Vec<Line<'static>>>,
     pub cached_width: Cell<u16>,
+    pub cached_app_generation: Cell<u64>,
     pub needs_rebuild: Cell<bool>,
 }
 
@@ -29,6 +30,7 @@ impl Default for SidebarComponent {
             folded_sections: HashSet::new(),
             cached_lines: RefCell::new(Vec::new()),
             cached_width: Cell::new(0),
+            cached_app_generation: Cell::new(0),
             needs_rebuild: Cell::new(true),
         }
     }
@@ -101,12 +103,15 @@ pub(crate) fn render_sidebar(
     };
     f.render_widget(block, area);
 
-    let needs_rebuild =
-        sidebar_comp.needs_rebuild.get() || sidebar_comp.cached_width.get() != content.width;
+    let app_generation = app.message_cache_generation();
+    let needs_rebuild = sidebar_comp.needs_rebuild.get()
+        || sidebar_comp.cached_width.get() != content.width
+        || sidebar_comp.cached_app_generation.get() != app_generation;
     if needs_rebuild {
         let lines = build_sidebar_lines(app, sidebar_comp, content.width);
         *sidebar_comp.cached_lines.borrow_mut() = lines;
         sidebar_comp.cached_width.set(content.width);
+        sidebar_comp.cached_app_generation.set(app_generation);
         sidebar_comp.needs_rebuild.set(false);
     }
 
