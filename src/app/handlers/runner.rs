@@ -8,10 +8,11 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::app::chat_state::{ChatApp, SubmittedInput};
+use crate::app::chat_state::SubmittedInput;
 use crate::app::events::{TuiEvent, TuiEventSender};
 use crate::app::handlers::session::{fallback_session_title, spawn_session_title_generation_task};
 use crate::app::handlers::subagent::{current_subagent_manager, map_subagent_node_event};
+use crate::app::state::AppState;
 use crate::cli::render;
 use crate::config::{Settings, upsert_local_permission_rule};
 use crate::core::agent::runner::is_cancellation_error;
@@ -512,21 +513,31 @@ pub(crate) fn create_agent_core(
 
 pub(crate) fn handle_chat_message(
     input: SubmittedInput,
-    app: &mut ChatApp,
-    _actions: &mut Vec<crate::app::core::AppAction>,
+    app: &AppState,
     settings: &Settings,
     cwd: &Path,
     event_sender: &TuiEventSender,
-) {
+) -> Vec<crate::app::core::AppAction> {
     if input.queued {
-        return;
+        return vec![];
     }
 
-    if !input.text.is_empty() || !input.attachments.is_empty() {
-        // Ensure run/session epochs are up to date before we scope events for this run.
-        app.cancel_agent_task();
+    let mut actions = Vec::new();
 
-        let scoped_sender = event_sender.scoped(app.session_epoch(), app.run_epoch());
+    if !input.text.is_empty() || !input.attachments.is_empty() {
+        // Ensure scoped events align with the run epoch after cancellation.
+        let run_epoch = if app
+            .agent_task
+            .as_ref()
+            .is_some_and(|task| !task.handle.is_finished())
+        {
+            app.run_epoch.wrapping_add(1)
+        } else {
+            app.run_epoch
+        };
+        actions.push(crate::app::core::AppAction::CancelAgentTask);
+
+        let scoped_sender = event_sender.scoped(app.session_epoch, run_epoch);
         let session_id = app.session_id.clone();
         let session_title = if session_id.is_none() {
             Some(fallback_session_title(&input.text))
@@ -536,16 +547,19 @@ pub(crate) fn handle_chat_message(
 
         let current_session_id = session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         if app.session_id.is_none() {
-            app.session_id = Some(current_session_id.clone());
-            if let Some(t) = &session_title {
-                app.session_name = t.clone();
-            }
+            let session_name_for_state = session_title
+                .clone()
+                .unwrap_or_else(|| crate::app::utils::build_session_name(cwd));
+            actions.push(crate::app::core::AppAction::SetSessionIdentity {
+                session_id: current_session_id.clone(),
+                session_name: session_name_for_state,
+            });
             if !input.text.trim().is_empty() {
                 spawn_session_title_generation_task(
                     settings,
                     cwd,
                     current_session_id.clone(),
-                    app.selected_model_ref().to_string(),
+                    app.current_model_ref.clone(),
                     input.text.clone(),
                     &scoped_sender,
                 );
@@ -565,7 +579,7 @@ pub(crate) fn handle_chat_message(
             settings,
             cwd,
             message,
-            app.selected_model_ref().to_string(),
+            app.current_model_ref.clone(),
             &scoped_sender,
             subagent_manager,
             AgentRunOptions {
@@ -574,10 +588,12 @@ pub(crate) fn handle_chat_message(
                 allow_questions: true,
             },
         );
-        app.set_agent_task_with_cancel(handle, cancel_tx);
+        actions.push(crate::app::core::AppAction::SetAgentTask { handle, cancel_tx });
     } else {
-        app.set_processing(false);
+        actions.push(crate::app::core::AppAction::SetProcessing(false));
     }
+
+    actions
 }
 
 pub(crate) async fn run_single_prompt(

@@ -5,10 +5,9 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 
-use crate::app::chat_state::ChatApp;
 use crate::app::chat_state::{ScrollState, TextSelection};
-
 use crate::app::components::viewport_cache::MessageViewportCache;
+use crate::app::state::AppState;
 
 pub struct MessagesComponent {
     pub viewport: MessageViewportCache,
@@ -47,13 +46,24 @@ impl Component for MessagesComponent {
     }
 }
 
+impl MessagesComponent {
+    pub(crate) fn render_messages(
+        &mut self,
+        f: &mut Frame,
+        app: &AppState,
+        area: ratatui::layout::Rect,
+    ) {
+        render_messages_local(f, app, self, area);
+    }
+}
+
 use crate::app::core::{AppAction, Component};
 use crate::theme::colors::*;
 
-pub(crate) fn render_messages(
+fn render_messages_local(
     f: &mut Frame,
-    app: &ChatApp,
-    messages: &MessagesComponent,
+    app: &AppState,
+    messages: &mut MessagesComponent,
     area: ratatui::layout::Rect,
 ) {
     let panel = Block::default().style(Style::default().bg(PAGE_BG));
@@ -71,13 +81,12 @@ pub(crate) fn render_messages(
     let scroll_offset = app
         .message_scroll
         .effective_offset(total_lines, visible_height);
-    drop(lines);
 
     let rendered_lines =
         messages
             .viewport
             .get_visible_lines(app, wrap_width, visible_height, scroll_offset);
-    let text = Text::from(rendered_lines.to_vec());
+    let text = Text::from(rendered_lines.clone());
     let paragraph = Paragraph::new(text)
         .style(Style::default().bg(PAGE_BG).fg(TEXT_PRIMARY))
         .scroll((0, 0));
@@ -87,7 +96,7 @@ pub(crate) fn render_messages(
 
 pub(crate) fn apply_selection_highlight(
     lines: &mut [Line<'static>],
-    app: &ChatApp,
+    app: &AppState,
     line_offset: usize,
 ) {
     let Some((start, end)) = app.text_selection.get_range() else {

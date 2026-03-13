@@ -20,8 +20,13 @@ pub trait Component {
     /// Return an AppAction when global coordination is needed.
     fn handle_event(&mut self, event: &InputEvent) -> Option<AppAction> { None }
 
-    /// Draw the component state.
-    fn render(&self, f: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect);
+    /// Draw the component state from a read-only render snapshot.
+    fn render(
+        &self,
+        f: &mut ratatui::Frame<'_>,
+        area: ratatui::layout::Rect,
+        state: &SessionContext,
+    );
 }
 ```
 
@@ -46,9 +51,16 @@ pub enum AppAction {
     // Agent callbacks (boundary event wrapped for dispatch)
     AgentEvent(TuiEvent),
 
-    // Navigation
+    // Navigation + layout
     ScrollMessages(i32),
+    ScrollSidebar(i32),
     SelectSession(String),
+
+    // Runtime/session coordination
+    QueueUserMessage { .. },
+    OpenSubagentSession { .. },
+    ResumeSessionLoaded { .. },
+    SetSessionIdentity { .. },
 }
 ```
 
@@ -90,7 +102,10 @@ Components can mutate only their own local state.
 **Important boundary rule**: components do not send `RunnerInput` directly.
 
 ## Dispatch Contract and Safety
-- `App::dispatch` is queue-based (`VecDeque<AppAction>`), not recursive.
+- Dispatch execution is queue-based (`VecDeque<AppAction>`), not recursive.
+- There are two entrypoints over one queue engine:
+  - `dispatch(...)` for pure UI/reducer/component action flow.
+  - `dispatch_with_runtime(...)` for actions that require runtime handler context (settings/cwd/event sender).
 - For each dequeued action:
   1. Apply root reducer/orchestrator state changes.
   2. Run handlers (side effects, runtime, DB, subprocesses).
@@ -98,6 +113,8 @@ Components can mutate only their own local state.
 - Follow-up actions are appended to the queue.
 - Enforce `MAX_ACTIONS_PER_TICK` as a convergence guard.
 - On overflow: log an error, enqueue a visible user-facing error state/event, and drop remaining queued actions for that tick.
+
+Implementation note: task-handle installation (`SetAgentTask`) is applied in queue plumbing before reducer matching because the action payload owns non-cloneable runtime handles.
 
 ## Application Structure
 
@@ -125,10 +142,10 @@ Handler boundaries:
 - Handlers emit outcomes as actions/events; `App::dispatch` maps outcomes to state/UI updates.
 
 ### Root Orchestrator (`src/app/state.rs` and `mod.rs`)
-`App` binds components + handlers and owns dispatch.
+`App` binds components + handlers and owns queue dispatch.
 
 Main loop shape:
 1. `terminal.draw()`
 2. `tokio::select!` on normalized user input vs boundary runner events
 3. Route to components or wrap as actions
-4. `app.dispatch(...)`
+4. `app.dispatch(...)` or `app.dispatch_with_runtime(...)` depending on side-effect needs

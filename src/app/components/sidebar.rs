@@ -1,26 +1,30 @@
 use ratatui::{
+    Frame,
     prelude::Stylize,
     style::Style,
     text::{Line, Span, Text},
     widgets::{Block, Paragraph, Wrap},
-    Frame,
 };
 use serde_json::Value;
 
 use crate::app::chat_state::ScrollState;
-use crate::app::chat_state::{ChatApp, ChatMessage, TodoItemView, TodoStatus};
+use crate::app::chat_state::{ChatMessage, TodoItemView, TodoStatus};
 use crate::app::core::{AppAction, Component};
+use crate::app::state::AppState;
 use crate::theme::colors::*;
-use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
 pub struct SidebarComponent {
     pub scroll: ScrollState,
     pub folded_sections: HashSet<String>,
-    pub cached_lines: RefCell<Vec<Line<'static>>>,
-    pub cached_width: Cell<u16>,
-    pub cached_app_generation: Cell<u64>,
-    pub needs_rebuild: Cell<bool>,
+    // Cache key inputs: `cached_width` + `cached_app_generation` + `needs_rebuild`.
+    // Invalidated by: fold/unfold actions (mark_dirty), message generation changes,
+    // and width changes observed at render time.
+    // Fallback behavior: rebuild full sidebar lines from current AppState.
+    pub cached_lines: Vec<Line<'static>>,
+    pub cached_width: u16,
+    pub cached_app_generation: u64,
+    pub needs_rebuild: bool,
 }
 
 impl Default for SidebarComponent {
@@ -28,10 +32,10 @@ impl Default for SidebarComponent {
         Self {
             scroll: ScrollState::new(false),
             folded_sections: HashSet::new(),
-            cached_lines: RefCell::new(Vec::new()),
-            cached_width: Cell::new(0),
-            cached_app_generation: Cell::new(0),
-            needs_rebuild: Cell::new(true),
+            cached_lines: Vec::new(),
+            cached_width: 0,
+            cached_app_generation: 0,
+            needs_rebuild: true,
         }
     }
 }
@@ -41,8 +45,38 @@ impl SidebarComponent {
         self.folded_sections.contains(section_id)
     }
 
-    pub fn mark_dirty(&self) {
-        self.needs_rebuild.set(true);
+    pub fn mark_dirty(&mut self) {
+        self.needs_rebuild = true;
+    }
+
+    pub(crate) fn render_sidebar(
+        &mut self,
+        f: &mut Frame,
+        app: &AppState,
+        area: ratatui::layout::Rect,
+    ) {
+        render_sidebar_local(f, app, self, area);
+    }
+
+    pub(crate) fn render_sidebar_clipped_to_bottom(
+        &mut self,
+        f: &mut Frame,
+        app: &AppState,
+        sidebar_area: ratatui::layout::Rect,
+        bottom_y: u16,
+    ) {
+        let clipped_sidebar_area = ratatui::layout::Rect {
+            x: sidebar_area.x,
+            y: sidebar_area.y,
+            width: sidebar_area.width,
+            height: bottom_y.saturating_sub(sidebar_area.y),
+        };
+
+        if clipped_sidebar_area.width == 0 || clipped_sidebar_area.height == 0 {
+            return;
+        }
+
+        self.render_sidebar(f, app, clipped_sidebar_area);
     }
 }
 
@@ -87,10 +121,10 @@ pub(crate) struct SidebarSectionHeaderHitbox {
     pub(crate) title_width: u16,
 }
 
-pub(crate) fn render_sidebar(
+fn render_sidebar_local(
     f: &mut Frame,
-    app: &ChatApp,
-    sidebar_comp: &SidebarComponent,
+    app: &AppState,
+    sidebar_comp: &mut SidebarComponent,
     area: ratatui::layout::Rect,
 ) {
     let block = Block::default().style(Style::default().bg(SIDEBAR_BG));
@@ -104,18 +138,18 @@ pub(crate) fn render_sidebar(
     f.render_widget(block, area);
 
     let app_generation = app.message_cache_generation();
-    let needs_rebuild = sidebar_comp.needs_rebuild.get()
-        || sidebar_comp.cached_width.get() != content.width
-        || sidebar_comp.cached_app_generation.get() != app_generation;
+    let needs_rebuild = sidebar_comp.needs_rebuild
+        || sidebar_comp.cached_width != content.width
+        || sidebar_comp.cached_app_generation != app_generation;
     if needs_rebuild {
         let lines = build_sidebar_lines(app, sidebar_comp, content.width);
-        *sidebar_comp.cached_lines.borrow_mut() = lines;
-        sidebar_comp.cached_width.set(content.width);
-        sidebar_comp.cached_app_generation.set(app_generation);
-        sidebar_comp.needs_rebuild.set(false);
+        sidebar_comp.cached_lines = lines;
+        sidebar_comp.cached_width = content.width;
+        sidebar_comp.cached_app_generation = app_generation;
+        sidebar_comp.needs_rebuild = false;
     }
 
-    let lines_ref = sidebar_comp.cached_lines.borrow();
+    let lines_ref = &sidebar_comp.cached_lines;
     let scroll_offset = sidebar_comp
         .scroll
         .effective_offset(lines_ref.len(), content.height as usize);
@@ -128,7 +162,7 @@ pub(crate) fn render_sidebar(
 }
 
 pub(crate) fn build_sidebar_lines(
-    app: &ChatApp,
+    app: &AppState,
     sidebar: &SidebarComponent,
     content_width: u16,
 ) -> Vec<Line<'static>> {
@@ -136,7 +170,7 @@ pub(crate) fn build_sidebar_lines(
 }
 
 pub(crate) fn sidebar_section_header_hitboxes(
-    app: &ChatApp,
+    app: &AppState,
     sidebar: &SidebarComponent,
     content_width: u16,
 ) -> Vec<SidebarSectionHeaderHitbox> {
@@ -162,7 +196,7 @@ struct SidebarRenderModel {
 }
 
 fn build_sidebar_model(
-    app: &ChatApp,
+    app: &AppState,
     sidebar: &SidebarComponent,
     content_width: u16,
 ) -> SidebarRenderModel {
@@ -185,7 +219,7 @@ fn build_sidebar_model(
     };
 
     let directory_text =
-        format_sidebar_directory(&app.working_directory, app.git_branch.as_deref());
+        format_sidebar_directory(&app.cwd.display().to_string(), app.git_branch.as_deref());
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
     let mut hitboxes = Vec::new();
 

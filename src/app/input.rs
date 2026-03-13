@@ -6,21 +6,16 @@ use base64::Engine;
 use crossterm::event::{self, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 
-use crate::app::chat_state::{ChatApp, ChatMessage, QuestionKeyResult};
-use crate::app::events::TuiEventSender;
-use crate::config::Settings;
+use crate::app::chat_state::QuestionKeyResult;
+use crate::app::state::AppState;
 use crate::core::{Message, MessageAttachment, Role};
-use crate::session::{SessionEvent, SessionStore};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_key_event<F>(
     key_event: event::KeyEvent,
-    app: &mut ChatApp,
-    messages: &crate::app::components::messages::MessagesComponent,
+    app: &mut AppState,
+    messages: &mut crate::app::components::messages::MessagesComponent,
     actions: &mut Vec<crate::app::core::AppAction>,
-    settings: &Settings,
-    cwd: &Path,
-    event_sender: &TuiEventSender,
     mut terminal_size: F,
 ) -> anyhow::Result<()>
 where
@@ -60,16 +55,15 @@ where
         return Ok(());
     }
 
-    if app.is_processing && key_event.code != KeyCode::Esc {
+    if app.context.is_processing && key_event.code != KeyCode::Esc {
         app.clear_pending_esc_interrupt();
     }
 
     if app.has_pending_question() {
         let handled = app.handle_question_key(key_event);
-        if handled == QuestionKeyResult::Dismissed && app.is_processing {
+        if handled == QuestionKeyResult::Dismissed && app.context.is_processing {
             if app.should_interrupt_on_esc() {
-                app.cancel_agent_task();
-                app.set_processing(false);
+                actions.push(crate::app::core::AppAction::CancelExecution);
             } else {
                 app.arm_esc_interrupt();
             }
@@ -83,7 +77,7 @@ where
         if app.input.is_empty() {
             app.should_quit = true;
         } else {
-            mutate_input(app, ChatApp::clear_input);
+            mutate_input(app, AppState::clear_input);
         }
         return Ok(());
     }
@@ -106,27 +100,26 @@ where
             }
         }
         KeyCode::Backspace => {
-            mutate_input(app, ChatApp::backspace);
+            mutate_input(app, AppState::backspace);
         }
         KeyCode::Enter if key_event.modifiers.contains(KeyModifiers::SHIFT) => {
             mutate_input(app, |app| app.insert_char('\n'));
         }
         KeyCode::Enter => {
-            handle_enter_key(app, actions, settings, cwd, event_sender);
+            handle_enter_key(app, actions);
         }
         KeyCode::Tab => {
             app.cycle_agent();
         }
         KeyCode::Esc => {
-            if app.is_processing {
+            if app.context.is_processing {
                 if app.should_interrupt_on_esc() {
-                    app.cancel_agent_task();
-                    app.set_processing(false);
+                    actions.push(crate::app::core::AppAction::CancelExecution);
                 } else {
                     app.arm_esc_interrupt();
                 }
             } else {
-                mutate_input(app, ChatApp::clear_input);
+                mutate_input(app, AppState::clear_input);
             }
         }
         KeyCode::Up => {
@@ -184,8 +177,8 @@ where
 }
 
 fn scroll_down_once(
-    app: &mut ChatApp,
-    messages: &crate::app::components::messages::MessagesComponent,
+    app: &mut AppState,
+    messages: &mut crate::app::components::messages::MessagesComponent,
     width: u16,
     height: u16,
 ) {
@@ -193,8 +186,8 @@ fn scroll_down_once(
 }
 
 pub(crate) fn scroll_up_steps(
-    app: &mut ChatApp,
-    messages: &crate::app::components::messages::MessagesComponent,
+    app: &mut AppState,
+    messages: &mut crate::app::components::messages::MessagesComponent,
     width: u16,
     height: u16,
     steps: usize,
@@ -209,8 +202,8 @@ pub(crate) fn scroll_up_steps(
 }
 
 fn scroll_down_steps(
-    app: &mut ChatApp,
-    messages: &crate::app::components::messages::MessagesComponent,
+    app: &mut AppState,
+    messages: &mut crate::app::components::messages::MessagesComponent,
     width: u16,
     height: u16,
     steps: usize,
@@ -224,12 +217,12 @@ fn scroll_down_steps(
         .scroll_down_steps(total_lines, visible_height, steps);
 }
 
-fn mutate_input(app: &mut ChatApp, mutator: impl FnOnce(&mut ChatApp)) {
+fn mutate_input(app: &mut AppState, mutator: impl FnOnce(&mut AppState)) {
     mutator(app);
     app.update_command_filtering();
 }
 
-pub(crate) fn apply_paste(app: &mut ChatApp, pasted: String) {
+pub(crate) fn apply_paste(app: &mut AppState, pasted: String) {
     let mut prepared = prepare_paste(&pasted);
     if prepared.attachments.is_empty()
         && let Some(clipboard_image) = prepare_clipboard_image_paste()
@@ -239,7 +232,7 @@ pub(crate) fn apply_paste(app: &mut ChatApp, pasted: String) {
     apply_prepared_paste(app, prepared);
 }
 
-fn apply_prepared_paste(app: &mut ChatApp, prepared: PreparedPaste) {
+fn apply_prepared_paste(app: &mut AppState, prepared: PreparedPaste) {
     mutate_input(app, |app| {
         app.insert_str(&prepared.insert_text);
         for attachment in prepared.attachments {
@@ -305,7 +298,7 @@ fn prepare_image_file_paste(pasted: &str) -> Option<PreparedPaste> {
     })
 }
 
-fn maybe_handle_paste_shortcut(key_event: event::KeyEvent, app: &mut ChatApp) -> bool {
+fn maybe_handle_paste_shortcut(key_event: event::KeyEvent, app: &mut AppState) -> bool {
     if !is_paste_shortcut(key_event) {
         return false;
     }
@@ -480,24 +473,21 @@ fn is_image_path(path: &str) -> bool {
     .any(|ext| lower.ends_with(ext))
 }
 
-fn selected_command_name(app: &ChatApp) -> Option<String> {
+fn selected_command_name(app: &AppState) -> Option<String> {
     app.filtered_commands
         .get(app.selected_command_index)
         .map(|command| command.name.clone())
 }
 
-fn submit_and_handle(
-    app: &mut ChatApp,
-    actions: &mut Vec<crate::app::core::AppAction>,
-    settings: &Settings,
-    cwd: &Path,
-    event_sender: &TuiEventSender,
-) {
+fn submit_and_handle(app: &mut AppState, actions: &mut Vec<crate::app::core::AppAction>) {
     let input = app.submit_input();
     app.update_command_filtering();
 
     if input.queued {
-        event_sender.enqueue_queued_user_message(crate::core::QueuedUserMessage {
+        let Some(message_index) = input.message_index else {
+            return;
+        };
+        actions.push(crate::app::core::AppAction::QueueUserMessage {
             message: Message {
                 role: Role::User,
                 content: input.text,
@@ -505,30 +495,18 @@ fn submit_and_handle(
                 tool_call_id: None,
                 tool_calls: Vec::new(),
             },
-            message_index: input.message_index,
+            message_index,
         });
         return;
     }
 
-    for action in crate::app::handlers::actions::handle_submitted_input(
-        input,
-        app,
-        actions,
-        settings,
-        cwd,
-        event_sender,
-    ) {
-        actions.push(action);
-    }
+    actions.push(crate::app::core::AppAction::SubmitInput(
+        input.text,
+        input.attachments,
+    ));
 }
 
-fn handle_enter_key(
-    app: &mut ChatApp,
-    actions: &mut Vec<crate::app::core::AppAction>,
-    settings: &Settings,
-    cwd: &Path,
-    event_sender: &TuiEventSender,
-) {
+fn handle_enter_key(app: &mut AppState, actions: &mut Vec<crate::app::core::AppAction>) {
     if let Some(name) = selected_command_name(app)
         && app.input != name
     {
@@ -536,12 +514,12 @@ fn handle_enter_key(
         return;
     }
 
-    submit_and_handle(app, actions, settings, cwd, event_sender);
+    submit_and_handle(app, actions);
 }
 
 fn scroll_page_down(
-    app: &mut ChatApp,
-    messages: &crate::app::components::messages::MessagesComponent,
+    app: &mut AppState,
+    messages: &mut crate::app::components::messages::MessagesComponent,
     width: u16,
     height: u16,
 ) {
@@ -554,8 +532,8 @@ fn scroll_page_down(
 }
 
 fn scroll_bounds(
-    app: &ChatApp,
-    messages: &crate::app::components::messages::MessagesComponent,
+    app: &AppState,
+    messages: &mut crate::app::components::messages::MessagesComponent,
     width: u16,
     height: u16,
 ) -> (usize, usize) {
@@ -563,18 +541,17 @@ fn scroll_bounds(
     let wrap_width = app.message_wrap_width(width);
     let lines = messages.viewport.get_lines(app, wrap_width);
     let total_lines = lines.len();
-    drop(lines);
     (total_lines, visible_height)
 }
 
 fn copy_selection_to_clipboard(
-    app: &ChatApp,
-    messages: &crate::app::components::messages::MessagesComponent,
+    app: &AppState,
+    messages: &mut crate::app::components::messages::MessagesComponent,
     terminal_width: u16,
 ) -> bool {
     let wrap_width = app.message_wrap_width(terminal_width);
     let lines = messages.viewport.get_lines(app, wrap_width);
-    let selected_text = app.get_selected_text(&lines);
+    let selected_text = app.get_selected_text(lines);
 
     if !selected_text.is_empty()
         && let Ok(mut clipboard) = arboard::Clipboard::new()
@@ -588,15 +565,13 @@ fn copy_selection_to_clipboard(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_mouse_click(
-    app: &mut ChatApp,
-    messages: &crate::app::components::messages::MessagesComponent,
+    app: &mut AppState,
+    messages: &mut crate::app::components::messages::MessagesComponent,
     sidebar: &crate::app::components::sidebar::SidebarComponent,
     actions: &mut Vec<crate::app::core::AppAction>,
     x: u16,
     y: u16,
     terminal: &crate::app::terminal::Tui,
-    settings: &Settings,
-    cwd: &Path,
 ) {
     if let Some(section_id) = screen_to_sidebar_header(app, sidebar, x, y, terminal) {
         actions.push(crate::app::core::AppAction::ToggleSidebarSection(
@@ -609,17 +584,13 @@ pub(crate) fn handle_mouse_click(
         && let Ok(size) = terminal.size()
     {
         let wrap_width = app.message_wrap_width(size.width);
-        if let Some(target) = app.task_session_target_at_visual_line(wrap_width, line)
-            && let Ok(messages) = load_session_messages(settings, cwd, &target.session_id)
-        {
-            let messages = if messages.is_empty() {
-                vec![ChatMessage::Assistant(
-                    "Subagent is queued or has not emitted messages yet. This view updates automatically once output is available.".to_string(),
-                )]
-            } else {
-                messages
-            };
-            app.open_subagent_session(target.task_id, target.session_id, target.name, messages);
+
+        if let Some(target) = app.task_session_target_at_visual_line(wrap_width, line) {
+            actions.push(crate::app::core::AppAction::OpenSubagentSession {
+                task_id: target.task_id,
+                session_id: target.session_id,
+                name: target.name,
+            });
             return;
         }
     }
@@ -630,8 +601,8 @@ pub(crate) fn handle_mouse_click(
 }
 
 pub(crate) fn handle_mouse_drag(
-    app: &mut ChatApp,
-    messages: &crate::app::components::messages::MessagesComponent,
+    app: &mut AppState,
+    messages: &mut crate::app::components::messages::MessagesComponent,
     x: u16,
     y: u16,
     terminal: &crate::app::terminal::Tui,
@@ -642,8 +613,8 @@ pub(crate) fn handle_mouse_drag(
 }
 
 pub(crate) fn handle_mouse_release(
-    app: &mut ChatApp,
-    messages: &crate::app::components::messages::MessagesComponent,
+    app: &mut AppState,
+    messages: &mut crate::app::components::messages::MessagesComponent,
     x: u16,
     y: u16,
     terminal: &crate::app::terminal::Tui,
@@ -665,15 +636,16 @@ pub(crate) fn handle_mouse_release(
 }
 
 fn screen_to_message_coords<B: ratatui::backend::Backend>(
-    app: &ChatApp,
-    messages: &crate::app::components::messages::MessagesComponent,
+    app: &AppState,
+    messages: &mut crate::app::components::messages::MessagesComponent,
     x: u16,
     y: u16,
     terminal: &ratatui::Terminal<B>,
 ) -> Option<(usize, usize)> {
     let size = terminal.size().ok()?;
     let terminal_rect = Rect::new(0, 0, size.width, size.height);
-    let layout_rects = crate::app::render::compute_layout_rects(terminal_rect, app, &app.input);
+    let layout_rects =
+        crate::app::components::layout::compute_layout_rects(terminal_rect, app, &app.input);
 
     let main_messages = layout_rects.main_messages?;
     if !point_in_rect(x, y, main_messages) {
@@ -697,7 +669,7 @@ fn screen_to_message_coords<B: ratatui::backend::Backend>(
 }
 
 fn screen_to_sidebar_header<B: ratatui::backend::Backend>(
-    app: &ChatApp,
+    app: &AppState,
     sidebar: &crate::app::components::sidebar::SidebarComponent,
     x: u16,
     y: u16,
@@ -705,7 +677,8 @@ fn screen_to_sidebar_header<B: ratatui::backend::Backend>(
 ) -> Option<&'static str> {
     let size = terminal.size().ok()?;
     let terminal_rect = Rect::new(0, 0, size.width, size.height);
-    let layout_rects = crate::app::render::compute_layout_rects(terminal_rect, app, &app.input);
+    let layout_rects =
+        crate::app::components::layout::compute_layout_rects(terminal_rect, app, &app.input);
     let sidebar_content = layout_rects.sidebar_content?;
 
     if !point_in_rect(x, y, sidebar_content) {
@@ -716,27 +689,33 @@ fn screen_to_sidebar_header<B: ratatui::backend::Backend>(
     let relative_x = x - sidebar_content.x;
 
     let scroll_offset = {
-        let lines = crate::app::render::build_sidebar_lines(app, sidebar, sidebar_content.width);
+        let lines = crate::app::components::sidebar::build_sidebar_lines(
+            app,
+            sidebar,
+            sidebar_content.width,
+        );
         sidebar
             .scroll
             .effective_offset(lines.len(), sidebar_content.height as usize)
     };
     let line_index = scroll_offset.saturating_add(relative_y);
 
-    crate::app::render::sidebar_section_header_hitboxes(app, sidebar, sidebar_content.width)
-        .into_iter()
-        .find(|hitbox| {
-            hitbox.line_index == line_index
-                && relative_x < hitbox.title_width
-                && hitbox.title_width > 0
-        })
-        .map(|hitbox| hitbox.section_id)
+    crate::app::components::sidebar::sidebar_section_header_hitboxes(
+        app,
+        sidebar,
+        sidebar_content.width,
+    )
+    .into_iter()
+    .find(|hitbox| {
+        hitbox.line_index == line_index && relative_x < hitbox.title_width && hitbox.title_width > 0
+    })
+    .map(|hitbox| hitbox.section_id)
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_area_scroll(
-    app: &mut ChatApp,
-    messages: &crate::app::components::messages::MessagesComponent,
+    app: &mut AppState,
+    messages: &mut crate::app::components::messages::MessagesComponent,
     sidebar: &crate::app::components::sidebar::SidebarComponent,
     actions: &mut Vec<crate::app::core::AppAction>,
     terminal_size: Rect,
@@ -745,13 +724,18 @@ pub(crate) fn handle_area_scroll(
     up_steps: usize,
     down_steps: usize,
 ) -> bool {
-    let layout_rects = crate::app::render::compute_layout_rects(terminal_size, app, &app.input);
+    let layout_rects =
+        crate::app::components::layout::compute_layout_rects(terminal_size, app, &app.input);
 
     if let Some(sidebar_content) = layout_rects.sidebar_content
         && point_in_rect(x, y, sidebar_content)
     {
-        let total_lines =
-            crate::app::render::build_sidebar_lines(app, sidebar, sidebar_content.width).len();
+        let total_lines = crate::app::components::sidebar::build_sidebar_lines(
+            app,
+            sidebar,
+            sidebar_content.width,
+        )
+        .len();
         let visible_height = sidebar_content.height as usize;
 
         if total_lines > visible_height {
@@ -794,68 +778,3 @@ pub(crate) fn handle_area_scroll(
 fn point_in_rect(x: u16, y: u16, rect: Rect) -> bool {
     x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()
 }
-
-pub(crate) fn load_session_messages(
-    settings: &Settings,
-    cwd: &Path,
-    session_id: &str,
-) -> anyhow::Result<Vec<ChatMessage>> {
-    let store = SessionStore::new(&settings.session.root, cwd, Some(session_id), None)?;
-    let events = store.replay_events()?;
-    let mut messages = Vec::new();
-
-    for event in events {
-        match event {
-            SessionEvent::Message { message, .. } => {
-                let chat_msg = match message.role {
-                    crate::core::Role::User => ChatMessage::User {
-                        text: message.content,
-                        queued: false,
-                    },
-                    crate::core::Role::Assistant => ChatMessage::Assistant(message.content),
-                    _ => continue,
-                };
-                messages.push(chat_msg);
-            }
-            SessionEvent::ToolCall { call } => {
-                messages.push(ChatMessage::ToolCall {
-                    name: call.name,
-                    args: call.arguments.to_string(),
-                    output: None,
-                    is_error: None,
-                });
-            }
-            SessionEvent::ToolResult {
-                is_error,
-                output,
-                result,
-                ..
-            } => {
-                for message in messages.iter_mut().rev() {
-                    if let ChatMessage::ToolCall {
-                        output: existing_output,
-                        is_error: existing_status,
-                        ..
-                    } = message
-                        && existing_output.is_none()
-                    {
-                        *existing_status = Some(is_error);
-                        *existing_output =
-                            Some(result.clone().map_or(output, |value| value.output));
-                        break;
-                    }
-                }
-            }
-            SessionEvent::Thinking { content, .. } => {
-                messages.push(ChatMessage::Thinking(content));
-            }
-            SessionEvent::Compact { summary, .. } => {
-                messages.push(ChatMessage::Compaction(summary));
-            }
-            _ => {}
-        }
-    }
-
-    Ok(messages)
-}
-

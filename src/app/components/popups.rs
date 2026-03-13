@@ -5,12 +5,10 @@ use ratatui::{
     widgets::{Block, Clear, List, ListItem, Padding, Paragraph, Wrap},
 };
 
-use crate::app::chat_state::ChatApp;
 use crate::theme::colors::*;
 
 use crate::app::chat_state::ClipboardNotice;
 use crate::app::core::{AppAction, Component};
-use crate::app::state::AppState;
 
 #[derive(Default)]
 pub struct PopupComponent {
@@ -41,8 +39,54 @@ impl Component for PopupComponent {
         }
     }
 
-    fn render(&self, f: &mut ratatui::Frame<'_>, _area: ratatui::layout::Rect, _state: &AppState) {
+    fn render(
+        &self,
+        f: &mut ratatui::Frame<'_>,
+        _area: ratatui::layout::Rect,
+        _state: &crate::app::state::SessionContext,
+    ) {
         render_clipboard_notice_local(f, &self.clipboard_notice);
+    }
+}
+
+impl PopupComponent {
+    pub(crate) fn render_command_palette_above_input(
+        &self,
+        f: &mut Frame,
+        input_comp: &crate::app::components::input::InputComponent,
+        input_area: ratatui::layout::Rect,
+        layout: UiLayout,
+    ) {
+        if input_comp.filtered_commands.is_empty() {
+            return;
+        }
+
+        let item_count = input_comp.filtered_commands.len().min(5) as u16;
+        let popup_height = item_count;
+        let input_left = input_area
+            .x
+            .saturating_add(layout.user_bubble_indent() as u16);
+        let input_width = input_area
+            .width
+            .saturating_sub(layout.user_bubble_indent() as u16);
+        let popup_area = ratatui::layout::Rect {
+            x: input_left,
+            y: input_area.y.saturating_sub(popup_height),
+            width: input_width,
+            height: popup_height,
+        };
+
+        self.render_command_palette(f, input_comp, popup_area, layout);
+    }
+
+    pub(crate) fn render_command_palette(
+        &self,
+        f: &mut Frame,
+        input_comp: &crate::app::components::input::InputComponent,
+        area: ratatui::layout::Rect,
+        layout: UiLayout,
+    ) {
+        render_command_palette_local(f, input_comp, area, layout);
     }
 }
 
@@ -88,9 +132,9 @@ pub(crate) fn render_clipboard_notice_local(
     );
 }
 
-pub(crate) fn render_command_palette(
+fn render_command_palette_local(
     f: &mut Frame,
-    app: &ChatApp,
+    input_comp: &crate::app::components::input::InputComponent,
     area: ratatui::layout::Rect,
     layout: UiLayout,
 ) {
@@ -100,7 +144,7 @@ pub(crate) fn render_command_palette(
         area,
     );
 
-    let name_width = app
+    let name_width = input_comp
         .filtered_commands
         .iter()
         .take(5)
@@ -115,13 +159,13 @@ pub(crate) fn render_command_palette(
     let left_padding = " ".repeat(list_left_padding);
     let description_width = content_width.saturating_sub(list_left_padding + name_width + 1);
 
-    let items: Vec<ListItem> = app
+    let items: Vec<ListItem> = input_comp
         .filtered_commands
         .iter()
         .take(5)
         .enumerate()
         .map(|(i, cmd)| {
-            let style = if i == app.selected_command_index {
+            let style = if i == input_comp.selected_command_index {
                 Style::default().fg(Color::White).bg(ACCENT)
             } else {
                 Style::default().fg(TEXT_PRIMARY).bg(COMMAND_PALETTE_BG)
@@ -135,7 +179,7 @@ pub(crate) fn render_command_palette(
                 Span::raw(" "),
                 Span::styled(
                     description,
-                    if i == app.selected_command_index {
+                    if i == input_comp.selected_command_index {
                         Style::default().fg(Color::White)
                     } else {
                         Style::default().fg(TEXT_SECONDARY)

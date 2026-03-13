@@ -3,13 +3,15 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use crate::app::chat_state::{ChatApp, ChatMessage, SubagentItemView, SubagentStatusView};
+use crate::app::chat_state::{ChatMessage, SubagentItemView, SubagentStatusView};
 use crate::app::events::{TuiEvent, TuiEventSender};
+use crate::app::state::AppState;
 use crate::config::Settings;
 use crate::core::Message;
 #[cfg(not(test))]
 use crate::provider::openai_compatible::OpenAiCompatibleProvider;
 use crate::session::{SessionEvent, SessionStore, event_id};
+use crate::theme::tool_render::render_tool_result;
 
 pub(super) async fn compact_session_with_llm(
     settings: Settings,
@@ -36,6 +38,110 @@ pub(super) async fn compact_session_with_llm(
         .context("Failed to append compact marker")?;
 
     Ok(summary)
+}
+
+pub(crate) fn load_session_messages(
+    settings: &Settings,
+    cwd: &Path,
+    session_id: &str,
+) -> anyhow::Result<Vec<ChatMessage>> {
+    let store = SessionStore::new(&settings.session.root, cwd, Some(session_id), None)?;
+    let events = store.replay_events()?;
+    let mut messages = Vec::new();
+
+    for event in events {
+        match event {
+            SessionEvent::Message { message, .. } => {
+                let chat_msg = match message.role {
+                    crate::core::Role::User => ChatMessage::User {
+                        text: message.content,
+                        queued: false,
+                    },
+                    crate::core::Role::Assistant => ChatMessage::Assistant(message.content),
+                    _ => continue,
+                };
+                messages.push(chat_msg);
+            }
+            SessionEvent::ToolCall { call } => {
+                messages.push(ChatMessage::ToolCall {
+                    name: call.name,
+                    args: call.arguments.to_string(),
+                    output: None,
+                    is_error: None,
+                });
+            }
+            SessionEvent::ToolResult {
+                is_error,
+                output,
+                result,
+                ..
+            } => {
+                for message in messages.iter_mut().rev() {
+                    if let ChatMessage::ToolCall {
+                        output: existing_output,
+                        is_error: existing_status,
+                        ..
+                    } = message
+                        && existing_output.is_none()
+                    {
+                        *existing_status = Some(is_error);
+                        *existing_output =
+                            Some(result.clone().map_or(output, |value| value.output));
+                        break;
+                    }
+                }
+            }
+            SessionEvent::Thinking { content, .. } => {
+                messages.push(ChatMessage::Thinking(content));
+            }
+            SessionEvent::Compact { summary, .. } => {
+                messages.push(ChatMessage::Compaction(summary));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(messages)
+}
+
+pub(crate) fn load_subagent_session_action(
+    settings: &Settings,
+    cwd: &Path,
+    task_id: String,
+    session_id: String,
+    name: String,
+) -> Option<crate::app::core::AppAction> {
+    let Ok(messages) = load_session_messages(settings, cwd, &session_id) else {
+        return None;
+    };
+
+    let messages = if messages.is_empty() {
+        vec![ChatMessage::Assistant(
+            "Subagent is queued or has not emitted messages yet. This view updates automatically once output is available.".to_string(),
+        )]
+    } else {
+        messages
+    };
+
+    Some(crate::app::core::AppAction::SubagentSessionLoaded {
+        task_id,
+        session_id,
+        name,
+        messages,
+    })
+}
+
+pub(crate) fn load_active_subagent_session_action(
+    app: &AppState,
+    settings: &Settings,
+    cwd: &Path,
+) -> Option<crate::app::core::AppAction> {
+    let session_id = app.active_subagent_session()?.session_id.clone();
+    let Ok(messages) = load_session_messages(settings, cwd, &session_id) else {
+        return None;
+    };
+
+    Some(crate::app::core::AppAction::ActiveSubagentMessagesLoaded { messages })
 }
 
 async fn generate_compaction_summary(
@@ -104,8 +210,7 @@ async fn generate_compaction_summary(
 
 pub(crate) fn handle_session_selection(
     input: String,
-    app: &mut ChatApp,
-    _actions: &mut Vec<crate::app::core::AppAction>,
+    app: &AppState,
     settings: &Settings,
     cwd: &Path,
 ) -> anyhow::Result<Vec<crate::app::core::AppAction>> {
@@ -116,20 +221,14 @@ pub(crate) fn handle_session_selection(
     }
 
     let session = app.available_sessions[idx - 1].clone();
-    app.bump_session_epoch();
-    app.session_id = Some(session.id.clone());
-    app.session_name = session.title.clone();
-    app.last_context_tokens = None;
-    app.is_picking_session = false;
 
     let store = SessionStore::new(&settings.session.root, cwd, Some(&session.id), None)
         .context("Failed to load session store")?;
 
     let events = store.replay_events().context("Failed to replay session")?;
 
-    app.messages.clear();
-    app.todo_items.clear();
-    app.subagent_items.clear();
+    let mut messages = Vec::new();
+    let mut todo_items = Vec::new();
     let mut subagent_items_by_task: HashMap<String, SubagentItemView> = HashMap::new();
     for event in events {
         match event {
@@ -142,10 +241,10 @@ pub(crate) fn handle_session_selection(
                     crate::core::Role::Assistant => ChatMessage::Assistant(message.content),
                     _ => continue,
                 };
-                app.messages.push(chat_msg);
+                messages.push(chat_msg);
             }
             SessionEvent::ToolCall { call } => {
-                app.messages.push(ChatMessage::ToolCall {
+                messages.push(ChatMessage::ToolCall {
                     name: call.name,
                     args: call.arguments.to_string(),
                     output: None,
@@ -158,7 +257,7 @@ pub(crate) fn handle_session_selection(
                 output,
                 result,
             } => {
-                let pending_tool_name = app.messages.iter().rev().find_map(|msg| match msg {
+                let pending_tool_name = messages.iter().rev().find_map(|msg| match msg {
                     ChatMessage::ToolCall { name, output, .. } if output.is_none() => {
                         Some(name.clone())
                     }
@@ -172,17 +271,34 @@ pub(crate) fn handle_session_selection(
                             crate::tool::ToolResult::ok_text("ok", output)
                         }
                     });
-                    app.handle_event(&TuiEvent::ToolEnd {
-                        name,
-                        result: replayed_result,
-                    });
+
+                    let rendered = render_tool_result(&name, &replayed_result);
+                    if let Some(todos) = rendered.todos {
+                        todo_items = todos;
+                    }
+
+                    for message in messages.iter_mut().rev() {
+                        if let ChatMessage::ToolCall {
+                            name: tool_name,
+                            is_error: status,
+                            output: out,
+                            ..
+                        } = message
+                            && tool_name == &name
+                            && status.is_none()
+                        {
+                            *status = Some(replayed_result.is_error);
+                            *out = Some(rendered.text.clone());
+                            break;
+                        }
+                    }
                 }
             }
             SessionEvent::Thinking { content, .. } => {
-                app.messages.push(ChatMessage::Thinking(content));
+                messages.push(ChatMessage::Thinking(content));
             }
             SessionEvent::Compact { summary, .. } => {
-                app.messages.push(ChatMessage::Compaction(summary));
+                messages.push(ChatMessage::Compaction(summary));
             }
             SessionEvent::SubAgentStart {
                 id,
@@ -256,8 +372,8 @@ pub(crate) fn handle_session_selection(
             _ => {}
         }
     }
-    app.subagent_items = subagent_items_by_task.into_values().collect();
-    for item in &mut app.subagent_items {
+    let mut subagent_items = subagent_items_by_task.into_values().collect::<Vec<_>>();
+    for item in &mut subagent_items {
         if item.status.is_active() {
             item.status = SubagentStatusView::Failed;
             if item.summary.is_none() {
@@ -265,9 +381,14 @@ pub(crate) fn handle_session_selection(
             }
         }
     }
-    app.mark_dirty();
 
-    Ok(vec![])
+    Ok(vec![crate::app::core::AppAction::ResumeSessionLoaded {
+        session_id: session.id,
+        session_name: session.title,
+        messages,
+        todo_items,
+        subagent_items,
+    }])
 }
 
 pub(crate) fn fallback_session_title(prompt: &str) -> String {

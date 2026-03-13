@@ -108,7 +108,12 @@ async fn run_interactive_chat_loop(
                 for input_event in input_events {
                     handled_any_input = true;
                     mvu_app.dispatch(AppAction::Input(input_event.clone()));
-                    mvu_app.handle_input_event(&input_event);
+                    mvu_app.handle_input_event_with_runtime(
+                        &input_event,
+                        Some(runner.settings),
+                        Some(runner.cwd),
+                        Some(runner.event_sender),
+                    );
                     match input_event {
                     InputEvent::Key(key_event) => {
                         mvu_app.process_key_event(
@@ -162,6 +167,7 @@ async fn run_interactive_chat_loop(
                             tui_guard.get(),
                             runner.settings,
                             runner.cwd,
+                            runner.event_sender,
                         );
                     }
                     InputEvent::MouseDrag { x, y } => {
@@ -223,7 +229,7 @@ async fn run_interactive_chat_loop(
                 }
             }
             _ = render_tick.tick() => {
-                mvu_app.process_periodic_tick(runner.settings, runner.cwd);
+                mvu_app.process_periodic_tick(runner.settings, runner.cwd, runner.event_sender);
             }
         }
 

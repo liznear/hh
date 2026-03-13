@@ -1,6 +1,5 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
     prelude::Stylize,
     style::{Color, Style},
     text::{Line, Span},
@@ -10,14 +9,13 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::iter::Peekable;
 
-use crate::app::chat_state::{ChatApp, ChatMessage, SubagentStatusView};
-use crate::app::components::{input, messages, popups, sidebar};
+use crate::app::chat_state::ChatMessage;
+use crate::app::core::Component;
+use crate::app::state::AppState;
+pub(crate) use crate::theme::colors::UiLayout;
 use crate::theme::colors::*;
-pub(crate) use crate::theme::colors::{AppLayoutRects, UiLayout};
 use crate::theme::markdown::markdown_to_lines_with_indent;
 use crate::theme::tool_presentation::render_tool_start;
-
-pub(crate) use crate::app::components::sidebar::SidebarSectionHeaderHitbox;
 
 #[derive(Debug, Deserialize)]
 struct EditToolOutput {
@@ -41,381 +39,89 @@ struct TaskToolRenderOutput {
     finished_at: Option<u64>,
 }
 
-pub fn render_app(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App) {
+pub(crate) fn render_root_layout(f: &mut Frame, mvu_app: &mut crate::app::state::App) {
     let layout = UiLayout::default();
     f.render_widget(
         Block::default().style(Style::default().bg(PAGE_BG)),
         f.area(),
     );
 
-    let app_area = inset_rect(
-        f.area(),
-        layout.main_outer_padding_x,
-        layout.main_outer_padding_y,
-    );
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(40),
-            Constraint::Length(layout.left_column_right_margin),
-            Constraint::Length(layout.sidebar_width),
-        ])
-        .split(app_area);
+    let root_layout = crate::app::components::layout::split_root_columns(f.area(), layout);
+    let main_area = root_layout.main_area;
+    let sidebar_area = root_layout.sidebar_area;
 
-    let main_area = columns[0];
-    let sidebar_area = if columns.len() > 2 {
-        Some(columns[2])
-    } else {
-        None
-    };
+    if mvu_app.state.is_viewing_subagent_session() {
+        let subagent_layout = crate::app::components::layout::build_subagent_layout(main_area);
 
-    if app.is_viewing_subagent_session() {
-        let main_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(3),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ])
-            .split(main_area);
-
-        render_messages(f, app, mvu_app, main_chunks[0]);
-        render_subagent_back_indicator(f, app, main_chunks[2], layout);
+        mvu_app
+            .messages
+            .render_messages(f, &mvu_app.state, subagent_layout.messages_area);
+        mvu_app.input.render_subagent_back_indicator(
+            f,
+            &mvu_app.state,
+            subagent_layout.back_indicator_area,
+            layout,
+        );
 
         if let Some(area) = sidebar_area {
-            let sidebar_bottom = main_chunks[2].bottom();
-            let clipped_sidebar_area = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: sidebar_bottom.saturating_sub(area.y),
-            };
-            render_sidebar(f, app, mvu_app, clipped_sidebar_area);
+            mvu_app.sidebar.render_sidebar_clipped_to_bottom(
+                f,
+                &mvu_app.state,
+                area,
+                subagent_layout.back_indicator_area.bottom(),
+            );
         }
 
+        mvu_app.popups.render(f, f.area(), &mvu_app.state.context);
+
         return;
     }
 
-    let input_content_width = main_area
-        .width
-        .saturating_sub(layout.user_bubble_indent() as u16 + 3)
-        as usize;
-    let input_line_count =
-        input_line_count(&mvu_app.input.text, input_content_width).clamp(1, MAX_INPUT_LINES);
-    let input_area_height = if app.has_pending_question() {
-        (question_prompt_line_count(app, input_content_width) + 2) as u16
-    } else {
-        (input_line_count + 4) as u16
-    };
+    let main_layout = crate::app::components::layout::build_main_layout(
+        &mvu_app.state,
+        &mvu_app.input.text,
+        main_area,
+    );
 
-    let main_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),
-            Constraint::Length(1),                 // Space above progress
-            Constraint::Length(1),                 // Global processing indicator
-            Constraint::Length(1),                 // Space above input
-            Constraint::Length(input_area_height), // Input area
-        ])
-        .split(main_area);
+    mvu_app
+        .messages
+        .render_messages(f, &mvu_app.state, main_layout.messages_area);
+    mvu_app.input.render_processing_indicator(
+        f,
+        &mvu_app.state,
+        main_layout.processing_area,
+        layout,
+    );
+    mvu_app
+        .input
+        .render_input(f, &mvu_app.state, main_layout.input_area, layout);
 
-    render_messages(f, app, mvu_app, main_chunks[0]);
-    render_processing_indicator(f, app, main_chunks[2], layout);
-    render_input(f, app, mvu_app, main_chunks[4], layout);
-
-    if !app.filtered_commands.is_empty() {
-        let item_count = app.filtered_commands.len().min(5) as u16;
-        let popup_height = item_count;
-        let input_left = main_chunks[4]
-            .x
-            .saturating_add(layout.user_bubble_indent() as u16);
-        let input_width = main_chunks[4]
-            .width
-            .saturating_sub(layout.user_bubble_indent() as u16);
-        let popup_area = Rect {
-            x: input_left,
-            y: main_chunks[4].y.saturating_sub(popup_height),
-            width: input_width,
-            height: popup_height,
-        };
-        render_command_palette(f, app, popup_area, layout);
-    }
+    mvu_app.popups.render_command_palette_above_input(
+        f,
+        &mvu_app.input,
+        main_layout.input_area,
+        layout,
+    );
 
     if let Some(area) = sidebar_area {
-        let sidebar_bottom = main_chunks[4].bottom();
-        let clipped_sidebar_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: sidebar_bottom.saturating_sub(area.y),
-        };
-        render_sidebar(f, app, mvu_app, clipped_sidebar_area);
-    }
-}
-
-fn render_subagent_back_indicator(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
-    let Some(view) = app.active_subagent_session() else {
-        return;
-    };
-
-    let subagent_item = app
-        .subagent_items
-        .iter()
-        .find(|item| item.task_id == view.task_id);
-    let duration_secs = subagent_item
-        .map(|item| {
-            let end = item.finished_at.unwrap_or_else(now_unix_secs);
-            end.saturating_sub(item.started_at)
-        })
-        .unwrap_or(0);
-
-    let is_terminal = subagent_item.is_some_and(|item| item.status.is_terminal());
-    if is_terminal {
-        render_subagent_footer_line(f, app, area, layout, duration_secs, subagent_item);
-        return;
+        mvu_app.sidebar.render_sidebar_clipped_to_bottom(
+            f,
+            &mvu_app.state,
+            area,
+            main_layout.input_area.bottom(),
+        );
     }
 
-    let mut spans: Vec<Span<'static>> = vec![Span::raw(layout.message_indent())];
-    let bar_len = area.width.saturating_sub(44).clamp(6, 10) as usize;
-    let head = scanner_position(now_step(85), bar_len, 6);
-    let base_color = app
-        .selected_agent()
-        .and_then(|agent| agent.color.as_ref())
-        .and_then(|color_str| crate::agent::parse_color(color_str))
-        .unwrap_or(PROGRESS_HEAD);
-
-    for idx in 0..bar_len {
-        let distance = head.abs_diff(idx);
-        let (glyph, style) = if distance == 0 {
-            (
-                "■",
-                Style::default()
-                    .fg(base_color)
-                    .add_modifier(ratatui::style::Modifier::BOLD),
-            )
-        } else if distance == 1 {
-            (
-                "■",
-                Style::default().fg(blend_color_with_white(base_color, 0.30)),
-            )
-        } else if distance == 2 {
-            (
-                "■",
-                Style::default().fg(blend_color_with_white(base_color, 0.40)),
-            )
-        } else {
-            (
-                "⬝",
-                Style::default().fg(blend_color_with_white(base_color, 0.52)),
-            )
-        };
-        spans.push(Span::styled(glyph, style));
-    }
-
-    spans.push(Span::raw(PROCESSING_STATUS_GAP));
-    spans.push(Span::styled(
-        format_elapsed_seconds(duration_secs),
-        Style::default().fg(TEXT_MUTED),
-    ));
-    spans.push(Span::raw(PROCESSING_STATUS_GAP));
-    spans.push(Span::styled("esc", Style::default().fg(TEXT_MUTED)));
-    let back_label = if app.subagent_session_depth() > 1 {
-        " back to upper subagent"
-    } else {
-        " back to main agent"
-    };
-    spans.push(Span::styled(back_label, Style::default().fg(TEXT_MUTED)));
-
-    let paragraph =
-        ratatui::widgets::Paragraph::new(Line::from(spans)).style(Style::default().bg(PAGE_BG));
-    f.render_widget(paragraph, area);
-}
-
-fn render_subagent_footer_line(
-    f: &mut Frame,
-    app: &ChatApp,
-    area: Rect,
-    layout: UiLayout,
-    duration_secs: u64,
-    item: Option<&crate::app::chat_state::SubagentItemView>,
-) {
-    let agent = app.selected_agent();
-    let agent_color = agent
-        .and_then(|a| a.color.as_ref())
-        .and_then(|c| crate::agent::parse_color(c))
-        .unwrap_or(TEXT_PRIMARY);
-
-    let provider_name = app
-        .available_models
-        .iter()
-        .find(|model| model.full_id == app.selected_model_ref())
-        .map(|model| model.provider_name.clone())
-        .unwrap_or_default();
-    let model_name = app
-        .available_models
-        .iter()
-        .find(|model| model.full_id == app.selected_model_ref())
-        .map(|model| model.model_name.clone())
-        .unwrap_or_default();
-
-    let is_failed = item.is_some_and(|row| {
-        matches!(
-            row.status,
-            SubagentStatusView::Failed | SubagentStatusView::Cancelled
-        )
-    });
-    let (status_symbol, status_color) = if is_failed {
-        ("✗", Color::Red)
-    } else {
-        ("✓", Color::Rgb(25, 110, 61))
-    };
-
-    let mut spans = vec![
-        Span::raw(layout.message_indent()),
-        Span::styled(status_symbol, Style::default().fg(status_color)),
-        Span::raw("  "),
-        Span::styled(
-            app.selected_agent()
-                .map(|a| a.display_name.clone())
-                .unwrap_or_else(|| "Agent".to_string()),
-            Style::default().fg(agent_color),
-        ),
-        Span::raw("  "),
-        Span::styled(provider_name, Style::default().fg(TEXT_MUTED)),
-        Span::raw(" "),
-        Span::styled(model_name, Style::default().fg(TEXT_MUTED)),
-        Span::raw("  "),
-        Span::styled(
-            format_elapsed_seconds(duration_secs),
-            Style::default().fg(TEXT_PRIMARY),
-        ),
-    ];
-
-    if is_failed {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled("interrupted", Style::default().fg(Color::Red)));
-    }
-
-    let paragraph =
-        ratatui::widgets::Paragraph::new(Line::from(spans)).style(Style::default().bg(PAGE_BG));
-    f.render_widget(paragraph, area);
-}
-
-fn now_unix_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs())
-}
-
-fn now_step(interval_ms: u128) -> usize {
-    let elapsed_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis());
-    let interval = interval_ms.max(1);
-    (elapsed_ms / interval) as usize
-}
-
-fn scanner_position(step: usize, width: usize, hold_frames: usize) -> usize {
-    if width <= 1 {
-        return 0;
-    }
-
-    let travel = width - 1;
-    let cycle = hold_frames + travel + hold_frames + travel;
-    let phase = step % cycle;
-
-    if phase < hold_frames {
-        0
-    } else if phase < hold_frames + travel {
-        phase - hold_frames
-    } else if phase < hold_frames + travel + hold_frames {
-        travel
-    } else {
-        travel - (phase - hold_frames - travel - hold_frames)
-    }
-}
-
-fn blend_color_with_white(color: Color, amount: f64) -> Color {
-    let amount = amount.clamp(0.0, 1.0);
-    let to_rgb = match color {
-        Color::Rgb(r, g, b) => Some((r, g, b)),
-        Color::Black => Some((0, 0, 0)),
-        Color::Red => Some((255, 0, 0)),
-        Color::Green => Some((0, 200, 0)),
-        Color::Yellow => Some((220, 180, 0)),
-        Color::Blue => Some((0, 102, 255)),
-        Color::Magenta => Some((200, 0, 200)),
-        Color::Cyan => Some((0, 180, 200)),
-        Color::White => Some((255, 255, 255)),
-        Color::Gray | Color::DarkGray => Some((128, 128, 128)),
-        Color::LightRed => Some((255, 110, 103)),
-        Color::LightGreen => Some((105, 255, 105)),
-        Color::LightYellow => Some((255, 255, 105)),
-        Color::LightBlue => Some((98, 114, 164)),
-        Color::LightMagenta => Some((246, 108, 181)),
-        Color::LightCyan => Some((114, 159, 207)),
-        Color::Indexed(_) | Color::Reset => None,
-    };
-
-    if let Some((r, g, b)) = to_rgb {
-        Color::Rgb(
-            (r as f64 + (255.0 - r as f64) * amount).round() as u8,
-            (g as f64 + (255.0 - g as f64) * amount).round() as u8,
-            (b as f64 + (255.0 - b as f64) * amount).round() as u8,
-        )
-    } else {
-        color
-    }
-}
-
-fn render_command_palette(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
-    popups::render_command_palette(f, app, area, layout);
-}
-
-fn render_sidebar(f: &mut Frame, app: &ChatApp, mvu_app: &crate::app::state::App, area: Rect) {
-    sidebar::render_sidebar(f, app, &mvu_app.sidebar, area);
-}
-
-pub(crate) fn build_sidebar_lines(
-    app: &ChatApp,
-    sidebar: &sidebar::SidebarComponent,
-    content_width: u16,
-) -> Vec<Line<'static>> {
-    sidebar::build_sidebar_lines(app, sidebar, content_width)
-}
-
-pub(crate) fn sidebar_section_header_hitboxes(
-    app: &ChatApp,
-    sidebar: &sidebar::SidebarComponent,
-    content_width: u16,
-) -> Vec<SidebarSectionHeaderHitbox> {
-    sidebar::sidebar_section_header_hitboxes(app, sidebar, content_width)
-}
-
-fn render_messages(
-    f: &mut Frame,
-    app: &ChatApp,
-    mvu_app: &crate::app::state::App,
-    area: ratatui::layout::Rect,
-) {
-    messages::render_messages(f, app, &mvu_app.messages, area);
-}
-
-pub(crate) fn apply_selection_highlight(
-    lines: &mut [Line<'static>],
-    app: &ChatApp,
-    line_offset: usize,
-) {
-    messages::apply_selection_highlight(lines, app, line_offset);
+    mvu_app.popups.render(f, f.area(), &mvu_app.state.context);
 }
 
 /// Build message lines (used for caching and scroll bounds)
-pub fn build_message_lines(app: &ChatApp, width: usize) -> Vec<Line<'static>> {
+pub fn build_message_lines(app: &AppState, width: usize) -> Vec<Line<'static>> {
     build_message_lines_with_starts(app, width).0
 }
 
 pub(crate) fn build_message_lines_with_starts(
-    app: &ChatApp,
+    app: &AppState,
     width: usize,
 ) -> (Vec<Line<'static>>, Vec<usize>) {
     build_message_lines_impl(app, width, UiLayout::default())
@@ -423,7 +129,7 @@ pub(crate) fn build_message_lines_with_starts(
 
 pub(crate) fn append_message_lines_for_index(
     lines: &mut Vec<Line<'static>>,
-    app: &ChatApp,
+    app: &AppState,
     width: usize,
     idx: usize,
 ) {
@@ -465,7 +171,7 @@ pub(crate) fn append_message_lines_for_index(
 }
 
 fn build_message_lines_impl(
-    app: &ChatApp,
+    app: &AppState,
     width: usize,
     layout: UiLayout,
 ) -> (Vec<Line<'static>>, Vec<usize>) {
@@ -519,7 +225,7 @@ struct MessageRenderContext<'a> {
 
 fn render_message_line_item(
     lines: &mut Vec<Line<'static>>,
-    app: &ChatApp,
+    app: &AppState,
     idx: usize,
     msg: &ChatMessage,
     render_context: MessageRenderContext<'_>,
@@ -1117,116 +823,6 @@ fn title_case(name: &str) -> String {
         }
     }
     result.trim().to_string()
-}
-
-fn render_input(
-    f: &mut Frame,
-    app: &ChatApp,
-    mvu_app: &crate::app::state::App,
-    area: Rect,
-    layout: UiLayout,
-) {
-    input::render_input(f, app, &mvu_app.input, area, layout);
-}
-
-fn question_prompt_line_count(app: &ChatApp, _width: usize) -> usize {
-    input::question_prompt_line_count(app, _width)
-}
-
-fn input_line_count(input: &str, width: usize) -> usize {
-    input::input_line_count(input, width)
-}
-
-fn render_processing_indicator(f: &mut Frame, app: &ChatApp, area: Rect, layout: UiLayout) {
-    input::render_processing_indicator(f, app, area, layout);
-}
-
-fn inset_rect(area: Rect, padding_x: u16, padding_y: u16) -> Rect {
-    Rect {
-        x: area.x.saturating_add(padding_x),
-        y: area.y.saturating_add(padding_y),
-        width: area.width.saturating_sub(padding_x.saturating_mul(2)),
-        height: area.height.saturating_sub(padding_y.saturating_mul(2)),
-    }
-}
-
-pub(crate) fn compute_layout_rects(area: Rect, app: &ChatApp, input_text: &str) -> AppLayoutRects {
-    let layout = UiLayout::default();
-    let app_area = inset_rect(
-        area,
-        layout.main_outer_padding_x,
-        layout.main_outer_padding_y,
-    );
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(40),
-            Constraint::Length(layout.left_column_right_margin),
-            Constraint::Length(layout.sidebar_width),
-        ])
-        .split(app_area);
-
-    let main_area = columns[0];
-    let sidebar_area = if columns.len() > 2 {
-        Some(columns[2])
-    } else {
-        None
-    };
-
-    let input_content_width = main_area
-        .width
-        .saturating_sub(layout.user_bubble_indent() as u16 + 3)
-        as usize;
-    let input_line_count =
-        input_line_count(input_text, input_content_width).clamp(1, MAX_INPUT_LINES);
-    let input_area_height = if app.has_pending_question() {
-        (question_prompt_line_count(app, input_content_width) + 2) as u16
-    } else {
-        (input_line_count + 4) as u16
-    };
-    let main_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(input_area_height),
-        ])
-        .split(main_area);
-
-    let sidebar_content = sidebar_area.and_then(|sidebar_area| {
-        let sidebar_bottom = main_chunks[4].bottom();
-        let clipped_sidebar_area = Rect {
-            x: sidebar_area.x,
-            y: sidebar_area.y,
-            width: sidebar_area.width,
-            height: sidebar_bottom.saturating_sub(sidebar_area.y),
-        };
-        if clipped_sidebar_area.width == 0 || clipped_sidebar_area.height == 0 {
-            return None;
-        }
-
-        let block = Block::default().style(Style::default().bg(SIDEBAR_BG));
-        let inner = block.inner(clipped_sidebar_area);
-        let content = inset_rect(inner, 2, 0);
-        if content.width == 0 || content.height == 0 {
-            None
-        } else {
-            Some(content)
-        }
-    });
-
-    let main_messages = if main_chunks[0].height > 0 {
-        Some(main_chunks[0])
-    } else {
-        None
-    };
-
-    AppLayoutRects {
-        main_messages,
-        sidebar_content,
-    }
 }
 
 fn render_edit_diff_block(
