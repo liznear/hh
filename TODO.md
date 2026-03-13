@@ -25,3 +25,6 @@
 - [ ] Queue message
 - [ ] Run bash command using "!"
 - [ ] Change TODO title to "TODO (x / y)"
+- [ ] Support /btw
+- [ ] Tune prompts
+- [ ] Shortify path
