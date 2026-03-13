@@ -72,5 +72,5 @@ Output must include
 - A High level goal for the whole plan
 - Core principles while executing the plan
 - Detailed phases in order. One phase should not depend on later phase.
-- For each phase, include goal / principles / todo items / completion criteria.
+- For each phase, include goal / testing plan / principles / todo items / completion criteria.
 - Each todo item should be self-contained and fine-grained. It's OK to create nested items if applicable.
