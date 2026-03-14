@@ -28,3 +28,4 @@
 - [ ] Support /btw
 - [ ] Tune prompts
 - [ ] Shortify path
+- [ ] Support @ to show file names
