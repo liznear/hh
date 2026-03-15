@@ -1,5 +1,5 @@
 use hh_widgets::{
-    codediff::{CodeDiffBlock, CodeDiffLineKind, CodeDiffOptions, render_unified_diff},
+    codediff::{CodeDiff, CodeDiffLineKind},
     markdown::markdown_to_lines_with_indent,
 };
 use ratatui::{
@@ -898,13 +898,9 @@ fn render_edit_diff_block_single_column(
 ) -> bool {
     let child_indent = layout.message_child_indent();
 
-    let mut options = CodeDiffOptions::default();
-    options.max_rendered_lines = MAX_RENDERED_DIFF_LINES;
-    options.max_rendered_chars = MAX_RENDERED_DIFF_CHARS;
-    options.show_file_headers = true;
-    let rendered = render_unified_diff(&CodeDiffBlock::new(diff), &options);
+    let rendered = CodeDiff::from_unified_diff(diff);
 
-    for line in rendered.lines {
+    for line in rendered.rendered_lines() {
         let shown = truncate_chars(&line.text, available_width);
         let style = match line.kind {
             CodeDiffLineKind::Add => Style::default().fg(DIFF_ADD_FG).bg(DIFF_ADD_BG),
@@ -919,7 +915,7 @@ fn render_edit_diff_block_single_column(
         ]));
     }
 
-    if rendered.truncated {
+    if rendered.is_truncated() {
         lines.push(Line::from(vec![
             Span::raw(child_indent.clone()),
             Span::styled(

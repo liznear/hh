@@ -30,7 +30,7 @@ pub trait Render {
 #[non_exhaustive]
 pub enum WidgetNode {
     Markdown(crate::markdown::MarkdownBlock),
-    CodeDiff(crate::codediff::CodeDiffBlock),
+    CodeDiff(crate::codediff::CodeDiff),
     Spacer(u16),
 }
 
@@ -43,13 +43,7 @@ impl WidgetNode {
                     crate::markdown::markdown_to_lines_with_indent(&block.source, wrap_width, "");
                 u16::try_from(lines.len()).unwrap_or(u16::MAX)
             }
-            Self::CodeDiff(block) => {
-                if block.unified_diff.is_empty() {
-                    0
-                } else {
-                    u16::try_from(block.unified_diff.lines().count()).unwrap_or(u16::MAX)
-                }
-            }
+            Self::CodeDiff(diff) => diff.measured_height(),
             Self::Spacer(height) => *height,
         }
     }

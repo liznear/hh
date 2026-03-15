@@ -3,7 +3,7 @@ use std::hint::black_box;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use hh_widgets::codediff::{CodeDiffBlock, CodeDiffOptions, render_unified_diff};
+use hh_widgets::codediff::CodeDiff;
 
 static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
 
@@ -52,12 +52,7 @@ impl Default for Config {
 fn main() {
     let config = parse_args(std::env::args().skip(1).collect());
     let diff = build_large_diff(config.files, config.hunks_per_file, config.lines_per_hunk);
-    let block = CodeDiffBlock::new(diff);
-
-    let mut options = CodeDiffOptions::default();
-    options.max_rendered_lines = 120;
-    options.max_rendered_chars = 8_000;
-    options.show_file_headers = true;
+    let diff_source = diff;
 
     let mut duration_samples = Vec::with_capacity(config.iterations);
     let mut alloc_samples = Vec::with_capacity(config.iterations);
@@ -65,9 +60,9 @@ fn main() {
     for _ in 0..config.iterations {
         ALLOCATED_BYTES.store(0, Ordering::Relaxed);
         let started = Instant::now();
-        let rendered = render_unified_diff(&block, &options);
-        black_box(rendered.lines.len());
-        black_box(rendered.truncated);
+        let rendered = CodeDiff::from_unified_diff(&diff_source);
+        black_box(rendered.rendered_lines().len());
+        black_box(rendered.is_truncated());
         duration_samples.push(started.elapsed());
         alloc_samples.push(ALLOCATED_BYTES.load(Ordering::Relaxed));
     }
@@ -81,7 +76,7 @@ fn main() {
         config.files, config.hunks_per_file, config.lines_per_hunk, config.iterations
     );
     println!(
-        "render_unified_diff: mean={:.3}ms median={:.3}ms p95={:.3}ms max={:.3}ms",
+        "codediff_from_unified_diff: mean={:.3}ms median={:.3}ms p95={:.3}ms max={:.3}ms",
         duration_stats.mean_ms,
         duration_stats.median_ms,
         duration_stats.p95_ms,

@@ -3,9 +3,9 @@ use std::hint::black_box;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use hh_widgets::codediff::CodeDiffBlock;
+use hh_widgets::codediff::CodeDiff;
 use hh_widgets::markdown::MarkdownBlock;
-use hh_widgets::scrollable::{ScrollableState, max_offset_for, measure_children, visible_range};
+use hh_widgets::scrollable::{max_offset_for, measure_children, visible_range, ScrollableState};
 use hh_widgets::widget::WidgetNode;
 
 static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -182,7 +182,7 @@ fn build_children(children: usize) -> Vec<WidgetNode> {
             0 => WidgetNode::Markdown(MarkdownBlock::new(format!(
                 "### Item {i}\n\n- alpha\n- beta\n- gamma\n"
             ))),
-            1 => WidgetNode::CodeDiff(CodeDiffBlock::new(format!(
+            1 => WidgetNode::CodeDiff(CodeDiff::from_unified_diff(format!(
                 "--- a/file_{i}.rs\n+++ b/file_{i}.rs\n@@ -1 +1 @@\n-old\n+new\n"
             ))),
             _ => WidgetNode::Spacer((i % 5 + 1) as u16),

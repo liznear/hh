@@ -14,6 +14,9 @@ ratatui = "0.29"
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 syntect-tui = "3.0"
 
+[dev-dependencies]
+crossterm = "0.28"
+
 [[bench]]
 name = "scrollable_perf_probe"
 harness = false

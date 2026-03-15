@@ -5,6 +5,23 @@ Reusable terminal UI widget primitives for `ratatui` applications.
 This crate provides extraction-friendly building blocks for markdown, popup geometry,
 scrollable composition, and codediff rendering.
 
+## Running examples
+
+From the workspace root:
+
+```bash
+cargo run -p hh-widgets --example codediff_example
+```
+
+The example opens an interactive terminal preview in an alternate screen.
+Press `q`, `Esc`, or `Enter` to exit.
+
+From the `hh-widgets` crate directory:
+
+```bash
+cargo run --example codediff_example
+```
+
 ## Examples
 
 ### Standalone markdown widget model
@@ -21,7 +38,7 @@ assert!(!lines.is_empty());
 ### Scrollable with mixed children
 
 ```rust
-use hh_widgets::codediff::CodeDiffBlock;
+use hh_widgets::codediff::CodeDiff;
 use hh_widgets::markdown::MarkdownBlock;
 use hh_widgets::scrollable::{ScrollableState, measure_children, visible_range};
 use hh_widgets::widget::WidgetNode;
@@ -29,7 +46,7 @@ use hh_widgets::widget::WidgetNode;
 let children = vec![
     WidgetNode::Markdown(MarkdownBlock::new("hello")),
     WidgetNode::Spacer(1),
-    WidgetNode::CodeDiff(CodeDiffBlock::new("--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new")),
+    WidgetNode::CodeDiff(CodeDiff::from_unified_diff("--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new")),
 ];
 let layout = measure_children(&children, 80);
 let mut state = ScrollableState::default();
@@ -65,11 +82,11 @@ assert!(popup.height <= viewport.height);
 ### Codediff rendering
 
 ```rust
-use hh_widgets::codediff::{CodeDiffBlock, CodeDiffOptions, render_unified_diff};
+use hh_widgets::codediff::{CodeDiff, CodeDiffLayout};
 
-let block = CodeDiffBlock::new("--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new");
-let rendered = render_unified_diff(&block, &CodeDiffOptions::default());
-assert!(!rendered.lines.is_empty());
+let diff = CodeDiff::from_unified_diff("--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new")
+    .with_layout(CodeDiffLayout::SideBySide);
+assert!(!diff.rendered_lines().is_empty());
 ```
 
 ## Stability and Versioning Policy

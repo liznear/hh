@@ -147,11 +147,11 @@ pub fn visible_children<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::{codediff::CodeDiffBlock, markdown::MarkdownBlock, widget::WidgetNode};
+    use crate::{codediff::CodeDiff, markdown::MarkdownBlock, widget::WidgetNode};
 
     use super::{
-        ScrollableState, StateChange, max_offset_for, measure_children, visible_children,
-        visible_range,
+        max_offset_for, measure_children, visible_children, visible_range, ScrollableState,
+        StateChange,
     };
 
     #[test]
@@ -180,7 +180,9 @@ mod tests {
         let children = vec![
             WidgetNode::Spacer(2),
             WidgetNode::Markdown(MarkdownBlock::new("a\nb")),
-            WidgetNode::CodeDiff(CodeDiffBlock::new("--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new")),
+            WidgetNode::CodeDiff(CodeDiff::from_unified_diff(
+                "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new",
+            )),
         ];
 
         let layout = measure_children(&children, 40);
