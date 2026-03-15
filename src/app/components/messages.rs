@@ -5,6 +5,10 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 
+use hh_widgets::scrollable::VisibleRange;
+use hh_widgets::scrollable::{ScrollableState, measure_children, visible_range};
+use hh_widgets::widget::WidgetNode;
+
 use crate::app::chat_state::{ScrollState, TextSelection};
 use crate::app::components::viewport_cache::MessageViewportCache;
 use crate::app::state::AppState;
@@ -75,23 +79,98 @@ fn render_messages_local(
     let wrap_width = content.width as usize;
     let visible_height = content.height as usize;
 
-    let lines = messages.viewport.get_lines(app, wrap_width);
+    let lines = messages.viewport.get_lines(app, wrap_width).clone();
+    let starts = messages
+        .viewport
+        .get_message_starts(app, wrap_width)
+        .clone();
     let total_lines = lines.len();
 
     let scroll_offset = app
         .message_scroll
         .effective_offset(total_lines, visible_height);
 
-    let rendered_lines =
-        messages
-            .viewport
-            .get_visible_lines(app, wrap_width, visible_height, scroll_offset);
-    let text = Text::from(rendered_lines.clone());
+    let scroll_slice = compute_scroll_slice(
+        &starts,
+        total_lines,
+        scroll_offset,
+        visible_height,
+        content.width,
+        app.message_scroll.auto_follow,
+    );
+
+    let (rendered_lines, line_offset) = build_visible_lines_from_message_range(
+        &lines,
+        &starts,
+        total_lines,
+        scroll_slice.visible_height,
+        scroll_slice.line_offset,
+        scroll_slice.message_range,
+    );
+
+    let mut rendered_lines = rendered_lines;
+    apply_selection_highlight(&mut rendered_lines, app, line_offset);
+
+    let text = Text::from(rendered_lines);
     let paragraph = Paragraph::new(text)
         .style(Style::default().bg(PAGE_BG).fg(TEXT_PRIMARY))
         .scroll((0, 0));
 
     f.render_widget(paragraph, content);
+}
+
+fn build_visible_lines_from_message_range(
+    lines: &[Line<'static>],
+    starts: &[usize],
+    total_lines: usize,
+    visible_height: usize,
+    scroll_offset: usize,
+    visible_messages: VisibleRange,
+) -> (Vec<Line<'static>>, usize) {
+    let default_end = scroll_offset
+        .saturating_add(visible_height)
+        .min(total_lines);
+    if visible_messages.start >= visible_messages.end || starts.is_empty() {
+        return (lines[scroll_offset..default_end].to_vec(), scroll_offset);
+    }
+
+    let mut rendered = Vec::with_capacity(visible_height);
+    let mut remaining = visible_height;
+    let mut cursor = scroll_offset;
+    let mut first_line_index = None;
+
+    for msg_index in visible_messages.start..visible_messages.end {
+        if remaining == 0 {
+            break;
+        }
+
+        let msg_start = starts[msg_index];
+        let msg_end = starts.get(msg_index + 1).copied().unwrap_or(total_lines);
+        if msg_start >= msg_end || cursor >= msg_end {
+            continue;
+        }
+
+        let take_start = cursor.max(msg_start);
+        let available = msg_end.saturating_sub(take_start);
+        let take_count = available.min(remaining);
+        if take_count == 0 {
+            continue;
+        }
+
+        if first_line_index.is_none() {
+            first_line_index = Some(take_start);
+        }
+
+        rendered.extend_from_slice(&lines[take_start..take_start + take_count]);
+        cursor = take_start.saturating_add(take_count);
+        remaining = remaining.saturating_sub(take_count);
+    }
+
+    if rendered.is_empty() {
+        (lines[scroll_offset..default_end].to_vec(), scroll_offset)
+    } else {
+        (rendered, first_line_index.unwrap_or(scroll_offset))
+    }
 }
 
 pub(crate) fn apply_selection_highlight(
@@ -194,4 +273,47 @@ fn char_slice(input: &str, start: usize, end: usize) -> String {
         .skip(start)
         .take(end.saturating_sub(start))
         .collect()
+}
+
+#[derive(Debug, Clone)]
+struct ScrollSlice {
+    pub message_range: VisibleRange,
+    pub line_offset: usize,
+    pub visible_height: usize,
+}
+
+fn measure_message_height_nodes(starts: &[usize], total_lines: usize) -> Vec<WidgetNode> {
+    starts
+        .iter()
+        .enumerate()
+        .map(|(index, start)| {
+            let end = starts.get(index + 1).copied().unwrap_or(total_lines);
+            let height = end.saturating_sub(*start);
+            WidgetNode::Spacer(height.min(u16::MAX as usize) as u16)
+        })
+        .collect()
+}
+
+fn compute_scroll_slice(
+    starts: &[usize],
+    total_lines: usize,
+    scroll_offset: usize,
+    visible_height: usize,
+    width: u16,
+    auto_follow: bool,
+) -> ScrollSlice {
+    let children = measure_message_height_nodes(starts, total_lines);
+    let layout = measure_children(&children, width.max(1));
+
+    let mut state = ScrollableState::default();
+    state.offset = scroll_offset.min(u16::MAX as usize) as u16;
+    state.viewport_height = visible_height.min(u16::MAX as usize) as u16;
+    state.auto_follow = auto_follow;
+
+    let range = visible_range(&layout, &state);
+    ScrollSlice {
+        message_range: range,
+        line_offset: scroll_offset,
+        visible_height,
+    }
 }

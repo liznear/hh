@@ -141,6 +141,11 @@ impl MessageViewportCache {
         &self.cached_visible_lines
     }
 
+    pub fn get_message_starts(&mut self, app: &AppState, width: usize) -> &Vec<usize> {
+        self.get_lines(app, width);
+        &self.cached_message_starts
+    }
+
     pub fn mark_full_dirty(&mut self) {
         self.needs_rebuild = true;
         self.message_dirty_hint = MessageDirtyHint::Full;

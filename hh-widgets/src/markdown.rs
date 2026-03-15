@@ -12,6 +12,38 @@ use syntect::{
 };
 use syntect_tui::translate_style;
 
+/// Immutable markdown view model.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct MarkdownBlock {
+    pub source: String,
+}
+
+impl MarkdownBlock {
+    pub fn new(source: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+        }
+    }
+}
+
+/// Markdown rendering options.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MarkdownOptions {
+    pub wrap: bool,
+    pub tab_width: u16,
+}
+
+impl Default for MarkdownOptions {
+    fn default() -> Self {
+        Self {
+            wrap: true,
+            tab_width: 4,
+        }
+    }
+}
+
 pub fn markdown_to_lines_with_indent(
     markdown: &str,
     width: usize,

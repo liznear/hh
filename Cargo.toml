@@ -6,6 +6,9 @@ description = "A terminal-based coding agent runtime"
 license = "MIT"
 repository = "https://github.com/liznear/hh"
 
+[workspace]
+members = [".", "hh-widgets"]
+
 [[bin]]
 name = "hh"
 path = "src/main.rs"
@@ -34,6 +37,7 @@ urlencoding = "2.1"
 base64 = "0.22"
 arboard = { version = "3.6", features = ["wayland-data-control"] }
 png = "0.18"
+hh-widgets = { path = "hh-widgets" }
 
 [dev-dependencies]
 tempfile = "3.15"
