@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -10,7 +11,7 @@ use crate::app::chat_state::{
     AgentOptionView, PendingQuestionView, QuestionKeyResult, QuestionOptionView, ScrollState,
     SubagentItemView, SubagentStatusView, TaskSessionTarget, TextSelection,
 };
-use crate::app::components::commands::SlashCommand;
+use crate::app::components::commands::{SlashCommand, get_default_commands};
 use crate::app::core::{AppAction, Component};
 use crate::app::events::{SubagentEventItem, TuiEvent};
 use crate::core::MessageAttachment;
@@ -80,90 +81,79 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(cwd: PathBuf, mut seed_chat_app: crate::app::chat_state::ChatApp) -> Self {
-        let messages = std::mem::take(&mut seed_chat_app.messages);
-        let message_scroll = seed_chat_app.message_scroll;
-        let text_selection = seed_chat_app.text_selection.clone();
-        let message_cache_generation = 0;
-        let is_picking_session = seed_chat_app.is_picking_session;
-        let available_sessions = std::mem::take(&mut seed_chat_app.available_sessions);
-        let session_id = seed_chat_app.session_id.clone();
-        let session_name = seed_chat_app.session_name.clone();
-        let session_epoch = seed_chat_app.session_epoch();
-        let run_epoch = seed_chat_app.run_epoch();
-        let current_model_ref = seed_chat_app.current_model_ref.clone();
-        let available_models = seed_chat_app.available_models.clone();
-        let current_agent_name = seed_chat_app.current_agent_name.clone();
-        let available_agents = seed_chat_app.available_agents.clone();
-        let is_processing = seed_chat_app.is_processing;
-
-        let todo_items = seed_chat_app.todo_items.clone();
-        let subagent_items = seed_chat_app.subagent_items.clone();
-        let subagent_session_stack = seed_chat_app.subagent_session_stack.clone();
-        let esc_interrupt_pending = seed_chat_app.esc_interrupt_pending;
-        let last_run_duration = seed_chat_app.last_run_duration.clone();
-        let last_run_interrupted = seed_chat_app.last_run_interrupted;
-        let pending_question = seed_chat_app.pending_question.take();
-        let agent_task = seed_chat_app.agent_task.take();
-        let processing_started_at = seed_chat_app.processing_started_at;
-        let last_timer_refresh_second = seed_chat_app.last_timer_refresh_second;
-        let last_context_tokens = seed_chat_app.last_context_tokens;
-        let git_branch = seed_chat_app.git_branch.clone();
-        let context_budget = seed_chat_app.context_budget;
-        let input = std::mem::take(&mut seed_chat_app.input);
-        let cursor = seed_chat_app.cursor;
-        let commands = seed_chat_app.commands.clone();
-        let filtered_commands = seed_chat_app.filtered_commands.clone();
-        let selected_command_index = seed_chat_app.selected_command_index;
-        let pending_attachments = std::mem::take(&mut seed_chat_app.pending_attachments);
-        let preferred_column = seed_chat_app.preferred_column;
+    pub fn new(cwd: PathBuf) -> Self {
+        let session_name = crate::app::utils::build_session_name(&cwd);
+        let current_model_ref = String::new();
+        let git_branch = detect_git_branch(&cwd);
 
         Self {
             cwd,
             should_quit: false,
             needs_redraw: true,
             context: SessionContext {
-                active_session_id: session_id.clone(),
+                active_session_id: None,
                 model_label: current_model_ref.clone(),
-                is_processing,
+                is_processing: false,
             },
             last_error: None,
-            messages,
-            input,
-            cursor,
-            message_scroll,
-            text_selection,
-            message_cache_generation,
-            is_picking_session,
-            available_sessions,
-            session_id,
+            messages: Vec::new(),
+            input: String::new(),
+            cursor: 0,
+            message_scroll: ScrollState::new(true),
+            text_selection: TextSelection::None,
+            message_cache_generation: 0,
+            is_picking_session: false,
+            available_sessions: Vec::new(),
+            session_id: None,
             session_name,
-            session_epoch,
-            run_epoch,
+            session_epoch: 0,
+            run_epoch: 0,
             current_model_ref,
-            available_models,
-            current_agent_name,
-            available_agents,
-            todo_items,
-            subagent_items,
-            subagent_session_stack,
-            esc_interrupt_pending,
-            last_run_duration,
-            last_run_interrupted,
-            pending_question,
-            agent_task,
-            processing_started_at,
-            last_timer_refresh_second,
-            last_context_tokens,
+            available_models: Vec::new(),
+            current_agent_name: None,
+            available_agents: Vec::new(),
+            todo_items: Vec::new(),
+            subagent_items: Vec::new(),
+            subagent_session_stack: Vec::new(),
+            pending_question: None,
+            esc_interrupt_pending: false,
+            last_run_duration: None,
+            last_run_interrupted: false,
+            agent_task: None,
+            processing_started_at: None,
+            last_timer_refresh_second: None,
+            last_context_tokens: None,
             git_branch,
-            context_budget,
+            context_budget: DEFAULT_CONTEXT_LIMIT,
             cached_context_usage_estimate: RefCell::new(None),
-            commands,
-            filtered_commands,
-            selected_command_index,
-            pending_attachments,
-            preferred_column,
+            commands: get_default_commands(),
+            filtered_commands: Vec::new(),
+            selected_command_index: 0,
+            pending_attachments: Vec::new(),
+            preferred_column: None,
         }
+    }
+
+    pub fn configure_models(
+        &mut self,
+        current_model_ref: String,
+        available_models: Vec<crate::app::chat_state::ModelOptionView>,
+    ) {
+        self.current_model_ref = current_model_ref;
+        self.context.model_label = self.current_model_ref.clone();
+        self.available_models = available_models;
+        self.context_budget = self
+            .available_models
+            .iter()
+            .find(|model| model.full_id == self.current_model_ref)
+            .map(|model| model.max_context_size)
+            .unwrap_or(DEFAULT_CONTEXT_LIMIT);
+        self.last_context_tokens = None;
+    }
+
+    pub fn set_agents(&mut self, agents: Vec<AgentOptionView>, selected: Option<String>) {
+        self.available_agents = agents;
+        self.current_agent_name = selected;
     }
 
     pub fn bump_session_epoch(&mut self) {
@@ -2116,19 +2106,46 @@ fn line_bounds_by_index(input: &str, target_line: usize) -> Option<(usize, usize
     None
 }
 
+fn detect_git_branch(cwd: &std::path::Path) -> Option<String> {
+    let branch = run_git_command(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if branch == "HEAD" {
+        return run_git_command(cwd, &["rev-parse", "--short", "HEAD"])
+            .map(|hash| format!("detached@{hash}"));
+    }
+    Some(branch)
+}
+
+fn run_git_command(cwd: &std::path::Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8(output.stdout).ok()?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(trimmed.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
 
-    use crate::app::chat_state::{ChatApp, ChatMessage};
+    use crate::app::chat_state::ChatMessage;
     use crate::app::events::TuiEvent;
 
     fn build_app() -> App {
-        App::new(AppState::new(
-            Path::new(".").to_path_buf(),
-            ChatApp::default(),
-        ))
+        App::new(AppState::new(Path::new(".").to_path_buf()))
     }
 
     #[test]

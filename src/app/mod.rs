@@ -15,7 +15,6 @@ use std::time::Duration;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 
-use crate::app::chat_state::ChatApp;
 use crate::app::core::AppAction;
 use crate::app::events::{InputEvent, ScopedTuiEvent, TuiEvent, TuiEventSender, read_input_batch};
 use crate::app::state::{App as MvuApp, AppState};
@@ -26,7 +25,7 @@ pub async fn run_interactive_chat(settings: Settings, cwd: &Path) -> anyhow::Res
     let terminal = terminal::setup_terminal()?;
     let mut tui_guard = terminal::TuiGuard::new(terminal);
 
-    let mut app = ChatApp::new(utils::build_session_name(cwd), cwd);
+    let mut app = AppState::new(cwd.to_path_buf());
     app.configure_models(
         settings.selected_model_ref().to_string(),
         utils::build_model_options(&settings),
@@ -75,12 +74,12 @@ struct InteractiveChatRunner<'a> {
 
 async fn run_interactive_chat_loop(
     tui_guard: &mut terminal::TuiGuard,
-    app: ChatApp,
+    app: AppState,
     runner: InteractiveChatRunner<'_>,
 ) -> anyhow::Result<()> {
     let mut render_tick = tokio::time::interval(Duration::from_millis(100));
     let mut stream_flush_tick = tokio::time::interval(STREAM_CHUNK_FLUSH_INTERVAL);
-    let mut mvu_app = MvuApp::new(AppState::new(runner.cwd.to_path_buf(), app));
+    let mut mvu_app = MvuApp::new(app);
     mvu_app.dispatch(AppAction::Redraw);
     let mut flush_stream_before_draw = false;
     let mut pending_assistant_delta = String::new();

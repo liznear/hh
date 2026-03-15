@@ -149,10 +149,7 @@ mod tests {
 
     #[test]
     fn compute_layout_rects_returns_main_and_sidebar_regions() {
-        let app = AppState::new(
-            std::path::Path::new(".").to_path_buf(),
-            crate::app::chat_state::ChatApp::default(),
-        );
+        let app = AppState::new(std::path::Path::new(".").to_path_buf());
 
         let rects = compute_layout_rects(Rect::new(0, 0, 140, 40), &app, "hello");
         assert!(rects.main_messages.is_some());
@@ -161,10 +158,7 @@ mod tests {
 
     #[test]
     fn compute_layout_rects_handles_small_terminal_without_panicking() {
-        let app = AppState::new(
-            std::path::Path::new(".").to_path_buf(),
-            crate::app::chat_state::ChatApp::default(),
-        );
+        let app = AppState::new(std::path::Path::new(".").to_path_buf());
 
         let rects = compute_layout_rects(Rect::new(0, 0, 20, 6), &app, "x");
         assert!(rects.main_messages.is_some() || rects.sidebar_content.is_none());

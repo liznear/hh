@@ -1,8 +1,10 @@
 use std::hint::black_box;
-use std::path::Path;
 use std::time::{Duration, Instant};
 
-use hh_cli::cli::tui::{ChatApp, ChatMessage, TuiEvent};
+use hh_cli::app::chat_state::ChatMessage;
+use hh_cli::app::components::viewport_cache::MessageViewportCache;
+use hh_cli::app::events::TuiEvent;
+use hh_cli::app::state::AppState;
 
 #[derive(Debug, Clone, Copy)]
 struct Config {
@@ -28,23 +30,32 @@ impl Default for Config {
 fn main() {
     let config = parse_args(std::env::args().skip(1).collect());
     let mut app = build_app_with_history(config.history_pairs);
+    let mut viewport = MessageViewportCache::new();
 
-    warm_cache(&mut app, config.wrap_width, config.visible_height);
+    warm_cache(
+        &mut app,
+        &mut viewport,
+        config.wrap_width,
+        config.visible_height,
+    );
 
     let typing = measure_typing_path(
         &mut app,
+        &mut viewport,
         config.typing_steps,
         config.wrap_width,
         config.visible_height,
     );
     let streaming = measure_stream_path(
         &mut app,
+        &mut viewport,
         config.stream_steps,
         config.wrap_width,
         config.visible_height,
     );
     let coalesced = measure_stream_path_coalesced(
         &mut app,
+        &mut viewport,
         config.stream_steps,
         config.wrap_width,
         config.visible_height,
@@ -110,18 +121,24 @@ fn parse_args(args: Vec<String>) -> Config {
     config
 }
 
-fn warm_cache(app: &mut ChatApp, wrap_width: usize, visible_height: usize) {
+fn warm_cache(
+    app: &mut AppState,
+    viewport: &mut MessageViewportCache,
+    wrap_width: usize,
+    visible_height: usize,
+) {
     let total = {
-        let lines = app.get_lines(wrap_width);
+        let lines = viewport.get_lines(app, wrap_width);
         lines.len()
     };
     let offset = app.message_scroll.effective_offset(total, visible_height);
-    let visible = app.get_visible_lines(wrap_width, visible_height, offset);
+    let visible = viewport.get_visible_lines(app, wrap_width, visible_height, offset);
     black_box(visible.len());
 }
 
 fn measure_typing_path(
-    app: &mut ChatApp,
+    app: &mut AppState,
+    viewport: &mut MessageViewportCache,
     steps: usize,
     wrap_width: usize,
     visible_height: usize,
@@ -133,11 +150,11 @@ fn measure_typing_path(
         app.insert_char('x');
 
         let total = {
-            let lines = app.get_lines(wrap_width);
+            let lines = viewport.get_lines(app, wrap_width);
             lines.len()
         };
         let offset = app.message_scroll.effective_offset(total, visible_height);
-        let visible = app.get_visible_lines(wrap_width, visible_height, offset);
+        let visible = viewport.get_visible_lines(app, wrap_width, visible_height, offset);
         black_box(visible.len());
 
         durations.push(started.elapsed());
@@ -147,7 +164,8 @@ fn measure_typing_path(
 }
 
 fn measure_stream_path(
-    app: &mut ChatApp,
+    app: &mut AppState,
+    viewport: &mut MessageViewportCache,
     steps: usize,
     wrap_width: usize,
     visible_height: usize,
@@ -156,16 +174,16 @@ fn measure_stream_path(
 
     for i in 0..steps {
         let started = Instant::now();
-        app.handle_event(&TuiEvent::AssistantDelta(format!(
+        app.handle_agent_event(&TuiEvent::AssistantDelta(format!(
             "delta #{i}: synthetic stream payload for render-path timing.\n"
         )));
 
         let total = {
-            let lines = app.get_lines(wrap_width);
+            let lines = viewport.get_lines(app, wrap_width);
             lines.len()
         };
         let offset = app.message_scroll.effective_offset(total, visible_height);
-        let visible = app.get_visible_lines(wrap_width, visible_height, offset);
+        let visible = viewport.get_visible_lines(app, wrap_width, visible_height, offset);
         black_box(visible.len());
 
         durations.push(started.elapsed());
@@ -175,7 +193,8 @@ fn measure_stream_path(
 }
 
 fn measure_stream_path_coalesced(
-    app: &mut ChatApp,
+    app: &mut AppState,
+    viewport: &mut MessageViewportCache,
     steps: usize,
     wrap_width: usize,
     visible_height: usize,
@@ -194,14 +213,14 @@ fn measure_stream_path_coalesced(
         }
 
         let started = Instant::now();
-        app.handle_event(&TuiEvent::AssistantDelta(std::mem::take(&mut pending)));
+        app.handle_agent_event(&TuiEvent::AssistantDelta(std::mem::take(&mut pending)));
 
         let total = {
-            let lines = app.get_lines(wrap_width);
+            let lines = viewport.get_lines(app, wrap_width);
             lines.len()
         };
         let offset = app.message_scroll.effective_offset(total, visible_height);
-        let visible = app.get_visible_lines(wrap_width, visible_height, offset);
+        let visible = viewport.get_visible_lines(app, wrap_width, visible_height, offset);
         black_box(visible.len());
 
         durations.push(started.elapsed());
@@ -209,13 +228,13 @@ fn measure_stream_path_coalesced(
 
     if !pending.is_empty() {
         let started = Instant::now();
-        app.handle_event(&TuiEvent::AssistantDelta(std::mem::take(&mut pending)));
+        app.handle_agent_event(&TuiEvent::AssistantDelta(std::mem::take(&mut pending)));
         let total = {
-            let lines = app.get_lines(wrap_width);
+            let lines = viewport.get_lines(app, wrap_width);
             lines.len()
         };
         let offset = app.message_scroll.effective_offset(total, visible_height);
-        let visible = app.get_visible_lines(wrap_width, visible_height, offset);
+        let visible = viewport.get_visible_lines(app, wrap_width, visible_height, offset);
         black_box(visible.len());
         durations.push(started.elapsed());
     }
@@ -242,14 +261,17 @@ fn print_stats(name: &str, samples: &[Duration]) {
     println!("{name}: mean={mean:.3}ms median={median:.3}ms p95={p95:.3}ms max={max:.3}ms");
 }
 
-fn build_app_with_history(message_pairs: usize) -> ChatApp {
-    let mut app = ChatApp::new("perf-probe".to_string(), Path::new("."));
+fn build_app_with_history(message_pairs: usize) -> AppState {
+    let mut app = AppState::new(std::path::Path::new(".").to_path_buf());
     app.input = "measure typing latency under long history".to_string();
 
     for i in 0..message_pairs {
-        app.messages.push(ChatMessage::User(format!(
-            "User message #{i}: explain why history depth matters for render and input latency."
-        )));
+        app.messages.push(ChatMessage::User {
+            text: format!(
+                "User message #{i}: explain why history depth matters for render and input latency."
+            ),
+            queued: false,
+        });
 
         app.messages
             .push(ChatMessage::Assistant(sample_assistant_markdown(i)));
