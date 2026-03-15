@@ -1,3 +1,7 @@
+use hh_widgets::{
+    codediff::{CodeDiffBlock, CodeDiffLineKind, CodeDiffOptions, render_unified_diff},
+    markdown::markdown_to_lines_with_indent,
+};
 use ratatui::{
     Frame,
     prelude::Stylize,
@@ -14,7 +18,6 @@ use crate::app::core::Component;
 use crate::app::state::AppState;
 pub(crate) use crate::theme::colors::UiLayout;
 use crate::theme::colors::*;
-use crate::theme::markdown::markdown_to_lines_with_indent;
 use crate::theme::tool_presentation::render_tool_start;
 
 #[derive(Debug, Deserialize)]
@@ -331,10 +334,6 @@ fn parse_markdown_lines(text: &str, width: usize, indent: &str) -> Vec<Line<'sta
     markdown_to_lines_with_indent(text, width, indent)
 }
 
-fn parse_markdown_lines_unindented(text: &str, width: usize) -> Vec<Line<'static>> {
-    markdown_to_lines_with_indent(text, width, "")
-}
-
 fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usize, indent: &str) {
     ensure_single_blank_line(lines);
 
@@ -342,7 +341,7 @@ fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usiz
 
     let label = format!("{indent}Thinking: ");
     let label_width = label.chars().count();
-    let wrapped = parse_markdown_lines_unindented(text, width.saturating_sub(label_width).max(1));
+    let wrapped = parse_markdown_lines(text, width.saturating_sub(label_width).max(1), "");
 
     if wrapped.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -897,32 +896,21 @@ fn render_edit_diff_block_single_column(
     available_width: usize,
     layout: UiLayout,
 ) -> bool {
-    let mut rendered_chars = 0;
-    let mut truncated = false;
     let child_indent = layout.message_child_indent();
 
-    for (rendered_lines, raw_line) in diff.lines().enumerate() {
-        let line_chars = raw_line.chars().count();
-        if rendered_lines >= MAX_RENDERED_DIFF_LINES
-            || rendered_chars + line_chars > MAX_RENDERED_DIFF_CHARS
-        {
-            truncated = true;
-            break;
-        }
-        rendered_chars += line_chars;
+    let mut options = CodeDiffOptions::default();
+    options.max_rendered_lines = MAX_RENDERED_DIFF_LINES;
+    options.max_rendered_chars = MAX_RENDERED_DIFF_CHARS;
+    options.show_file_headers = true;
+    let rendered = render_unified_diff(&CodeDiffBlock::new(diff), &options);
 
-        let shown = truncate_chars(raw_line, available_width);
-        let style = if raw_line.starts_with('+') && !raw_line.starts_with("+++") {
-            Style::default().fg(DIFF_ADD_FG).bg(DIFF_ADD_BG)
-        } else if raw_line.starts_with('-') && !raw_line.starts_with("---") {
-            Style::default().fg(DIFF_REMOVE_FG).bg(DIFF_REMOVE_BG)
-        } else if raw_line.starts_with("@@")
-            || raw_line.starts_with("---")
-            || raw_line.starts_with("+++")
-        {
-            Style::default().fg(DIFF_META_FG)
-        } else {
-            Style::default().fg(TEXT_MUTED)
+    for line in rendered.lines {
+        let shown = truncate_chars(&line.text, available_width);
+        let style = match line.kind {
+            CodeDiffLineKind::Add => Style::default().fg(DIFF_ADD_FG).bg(DIFF_ADD_BG),
+            CodeDiffLineKind::Remove => Style::default().fg(DIFF_REMOVE_FG).bg(DIFF_REMOVE_BG),
+            CodeDiffLineKind::Meta => Style::default().fg(DIFF_META_FG),
+            CodeDiffLineKind::Context => Style::default().fg(TEXT_MUTED),
         };
 
         lines.push(Line::from(vec![
@@ -931,7 +919,7 @@ fn render_edit_diff_block_single_column(
         ]));
     }
 
-    if truncated {
+    if rendered.truncated {
         lines.push(Line::from(vec![
             Span::raw(child_indent.clone()),
             Span::styled(

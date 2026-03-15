@@ -9,6 +9,8 @@ use crate::theme::colors::*;
 
 use crate::app::chat_state::ClipboardNotice;
 use crate::app::core::{AppAction, Component};
+use hh_widgets::popup::{Anchor, Offset, PopupOptions, PopupRequest, popup_from_request};
+use hh_widgets::widget::Area;
 
 #[derive(Default)]
 pub struct PopupComponent {
@@ -69,12 +71,14 @@ impl PopupComponent {
         let input_width = input_area
             .width
             .saturating_sub(layout.user_bubble_indent() as u16);
-        let popup_area = ratatui::layout::Rect {
-            x: input_left,
-            y: input_area.y.saturating_sub(popup_height),
-            width: input_width,
-            height: popup_height,
-        };
+
+        let popup_area = command_palette_popup_area(
+            input_left,
+            input_area.y,
+            input_width,
+            popup_height,
+            f.area(),
+        );
 
         self.render_command_palette(f, input_comp, popup_area, layout);
     }
@@ -107,16 +111,7 @@ pub(crate) fn render_clipboard_notice_local(
         return;
     }
 
-    let max_x = area.right().saturating_sub(width);
-    let max_y = area.bottom().saturating_sub(height);
-    let x = notice.x.saturating_add(1).clamp(area.x, max_x);
-    let y = notice.y.saturating_sub(1).clamp(area.y, max_y);
-    let popup = ratatui::layout::Rect {
-        x,
-        y,
-        width,
-        height,
-    };
+    let popup = clipboard_popup_area(notice.x, notice.y, width, height, area);
 
     f.render_widget(Clear, popup);
     let block = Block::default()
@@ -196,4 +191,71 @@ fn render_command_palette_local(
 
 fn truncate_chars(input: &str, max_chars: usize) -> String {
     input.chars().take(max_chars).collect()
+}
+
+fn compute_popup_area(
+    request: PopupRequest,
+    viewport: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
+    let mut area = Area::default();
+    area.x = viewport.x;
+    area.y = viewport.y;
+    area.width = viewport.width;
+    area.height = viewport.height;
+
+    let popup = popup_from_request(request, area);
+    ratatui::layout::Rect {
+        x: popup.x,
+        y: popup.y,
+        width: popup.width,
+        height: popup.height,
+    }
+}
+
+fn command_palette_popup_area(
+    input_left: u16,
+    input_top: u16,
+    popup_width: u16,
+    popup_height: u16,
+    viewport: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
+    let mut options = PopupOptions::default();
+    options.anchor = Anchor::BottomLeft;
+    options.clear_background = true;
+
+    let mut request = PopupRequest::default();
+    request.anchor_x = input_left;
+    request.anchor_y = input_top.saturating_sub(1);
+    request.width = popup_width;
+    request.height = popup_height;
+    request.options = options;
+    request.offset = Offset::default();
+
+    compute_popup_area(request, viewport)
+}
+
+fn clipboard_popup_area(
+    anchor_x: u16,
+    anchor_y: u16,
+    width: u16,
+    height: u16,
+    viewport: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
+    let mut options = PopupOptions::default();
+    options.anchor = Anchor::TopLeft;
+    options.clear_background = true;
+
+    let mut offset = Offset::default();
+    offset.dx = 1;
+    offset.dy = -1;
+
+    let mut request = PopupRequest::default();
+    request.anchor_x = anchor_x;
+    request.anchor_y = anchor_y;
+    request.width = width;
+    request.height = height;
+    request.options = options;
+    request.offset = offset;
+
+    compute_popup_area(request, viewport)
 }

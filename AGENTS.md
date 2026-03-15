@@ -43,70 +43,66 @@ Design intent: keep a single source of truth for LLM semantics, while letting pe
 
 ## Debugging TUI
 
-The TUI can be debugged in both interactive and single-prompt modes by dumping frames to a directory.
+The `--debug` and `replay` flows are no longer available.
 
-### Single-Prompt Debug Mode
+Use tmux-based capture with `cargo run` instead.
 
-Run a single prompt and capture screen dumps:
+### Single-Prompt Capture Mode
 
-```bash
-# Basic usage
-hh run "list files in current directory" --debug ./debug
-
-# With custom output directory
-hh run "what is 2+2?" --debug ./my-debug
-```
-
-This creates numbered screen dump files (`screen-000.txt`, `screen-001.txt`, etc.) in the output directory.
-
-### Interactive Debug Mode
-
-Dump frames while running the interactive TUI:
+Run a single prompt in a dedicated tmux session and capture pane output:
 
 ```bash
-hh chat --debug ./debug-session
+# Start clean session
+tmux kill-session -t hh-capture || true
+tmux new-session -d -s hh-capture
+tmux set-option -t hh-capture remain-on-exit on
+
+# Execute prompt through local binary
+tmux send-keys -t hh-capture 'cargo run -- run "what is 2+2?"' C-m
+
+# Wait for completion, then capture output
+sleep 5
+tmux capture-pane -p -t hh-capture -S -300 > ./artifacts/tmux-run.txt
 ```
 
-Frames are written continuously while you interact with the TUI.
+Use `cargo run -- ...` so tests and captures reflect the local workspace build, not a `hh` binary from `$PATH`.
 
-### Replay Debug Frames
+### Interactive Capture Mode
 
-View captured frames:
+Capture an interactive chat session with tmux:
 
 ```bash
-# Basic replay (100ms delay between frames)
-hh replay ./my-debug
+tmux kill-session -t hh-chat || true
+tmux new-session -d -s hh-chat
+tmux set-option -t hh-chat remain-on-exit on
+tmux send-keys -t hh-chat 'cargo run -- chat' C-m
 
-# Faster replay
-hh replay ./my-debug --delay 50
+# Attach to interact manually
+tmux attach -t hh-chat
 
-# Loop continuously
-hh replay ./my-debug --loop
+# After interaction, from another shell:
+tmux capture-pane -p -t hh-chat -S -500 > ./artifacts/tmux-chat.txt
 ```
 
-When running in a terminal:
-- Press `q` to quit
-- Press `p` to pause/resume
+Store captures under a stable path (for example, `docs/artifacts/...`) when they are used as parity baselines.
 
 ### Debugging Workflow for AI
 
-1. Run the problematic prompt in single-prompt debug mode:
+1. Run the problematic prompt via tmux and `cargo run`:
    ```bash
-   hh run "your problematic prompt" --debug ./debug
+   tmux kill-session -t hh-case || true
+   tmux new-session -d -s hh-case
+   tmux set-option -t hh-case remain-on-exit on
+   tmux send-keys -t hh-case 'cargo run -- run "your problematic prompt"' C-m
    ```
 
-2. Read the screen dumps to understand what happened:
+2. Capture pane output and inspect it:
    ```bash
-   cat ./debug/screen-000.txt
-   cat ./debug/screen-final.txt
+   tmux capture-pane -p -t hh-case -S -400 > ./artifacts/hh-case.txt
+   cat ./artifacts/hh-case.txt
    ```
 
-3. Or replay all frames to see the animation:
-   ```bash
-   hh replay ./debug --delay 200
-   ```
-
-4. Fix the issue based on what you observed in the screen dumps.
+3. Fix the issue based on what you observed in the captured terminal output.
 
 ## TUI UI Learnings
 

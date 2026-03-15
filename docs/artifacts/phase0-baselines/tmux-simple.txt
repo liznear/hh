@@ -1,0 +1,24 @@
+cargo run -- run "Respond with exactly: baseline-simple"
+
+components on  components [?] is 📦 v0.1.3 via 🦀 v1.89.0 via ❄️  impure (nix-s
+hell-env)
+❯ cargo run -- run "Respond with exactly: baseline-simple"
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running `target/debug/hh run 'Respond with exactly: baseline-simple'`
+assistant> baseline-simple
+
+components on  components [?] is 📦 v0.1.3 via 🦀 v1.89.0 via ❄️  impure (nix-s
+hell-env) took 3s
+❯
+
+
+
+
+
+
+
+
+
+
+
+
