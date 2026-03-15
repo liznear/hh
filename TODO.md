@@ -29,3 +29,4 @@
 - [ ] Tune prompts
 - [ ] Shortify path
 - [ ] Support @ to show file names
+- [ ] Add a list modal for resume / model selection.
