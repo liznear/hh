@@ -1089,7 +1089,8 @@ fn suggested_permission_rule(call: &ToolCall) -> Option<String> {
             if command.is_empty() {
                 return None;
             }
-            Some(format!("Bash({command}*)"))
+            let program = command.split_whitespace().next()?;
+            Some(format!("Bash({program} *)"))
         }
         "write" | "edit" => {
             let path = call.arguments.get("path")?.as_str()?.trim();

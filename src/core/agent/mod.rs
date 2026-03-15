@@ -377,13 +377,13 @@ mod tests {
                         tool_calls: vec![ToolCall {
                             id: "call-2".to_string(),
                             name: "bash".to_string(),
-                            arguments: json!({ "command": "printf second", "timeout_ms": 1000 }),
+                            arguments: json!({ "command": "echo second", "timeout_ms": 1000 }),
                         }],
                     },
                     tool_calls: vec![ToolCall {
                         id: "call-2".to_string(),
                         name: "bash".to_string(),
-                        arguments: json!({ "command": "printf second", "timeout_ms": 1000 }),
+                        arguments: json!({ "command": "echo second", "timeout_ms": 1000 }),
                     }],
                     done: false,
                     thinking: None,
