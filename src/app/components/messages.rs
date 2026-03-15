@@ -1,15 +1,19 @@
 use ratatui::{
-    Frame,
     style::{Color, Style},
     text::{Line, Span, Text},
     widgets::{Block, Paragraph},
+    Frame,
 };
 
 use hh_widgets::scrollable::VisibleRange;
-use hh_widgets::scrollable::{ScrollableState, measure_children, visible_range};
+use hh_widgets::scrollable::{measure_children, visible_range, ScrollableState};
 use hh_widgets::widget::WidgetNode;
 
 use crate::app::chat_state::{ScrollState, TextSelection};
+use crate::app::components::messages_blocks::{
+    build_legacy_blocks_from_starts, measured_heights, visible_message_range,
+};
+use crate::app::components::messages_layout::compute_layout;
 use crate::app::components::viewport_cache::MessageViewportCache;
 use crate::app::state::AppState;
 
@@ -91,6 +95,7 @@ fn render_messages_local(
         .effective_offset(total_lines, visible_height);
 
     let scroll_slice = compute_scroll_slice(
+        app,
         &starts,
         total_lines,
         scroll_offset,
@@ -295,6 +300,7 @@ fn measure_message_height_nodes(starts: &[usize], total_lines: usize) -> Vec<Wid
 }
 
 fn compute_scroll_slice(
+    app: &AppState,
     starts: &[usize],
     total_lines: usize,
     scroll_offset: usize,
@@ -302,6 +308,16 @@ fn compute_scroll_slice(
     width: u16,
     auto_follow: bool,
 ) -> ScrollSlice {
+    if app.ui_renderer_mode == crate::config::UiRendererMode::WidgetBlocks {
+        return compute_scroll_slice_widget(
+            starts,
+            total_lines,
+            scroll_offset,
+            visible_height,
+            width,
+        );
+    }
+
     let children = measure_message_height_nodes(starts, total_lines);
     let layout = measure_children(&children, width.max(1));
 
@@ -315,5 +331,72 @@ fn compute_scroll_slice(
         message_range: range,
         line_offset: scroll_offset,
         visible_height,
+    }
+}
+
+fn compute_scroll_slice_widget(
+    starts: &[usize],
+    total_lines: usize,
+    scroll_offset: usize,
+    visible_height: usize,
+    width: u16,
+) -> ScrollSlice {
+    let blocks = build_legacy_blocks_from_starts(starts, total_lines);
+    let heights = measured_heights(&blocks, width.max(1));
+    let layout = compute_layout(&heights, scroll_offset, visible_height);
+
+    ScrollSlice {
+        message_range: {
+            let range = visible_message_range(&layout.rows, layout.visible_range);
+            VisibleRange {
+                start: range.start,
+                end: range.end,
+            }
+        },
+        line_offset: scroll_offset,
+        visible_height,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scroll_slice_widget_matches_legacy_visible_range_for_same_input() {
+        let starts = vec![0usize, 2, 5, 6, 9];
+        let total_lines = 12usize;
+        let scroll_offset = 3usize;
+        let visible_height = 4usize;
+        let width = 80u16;
+
+        let mut app = AppState::new(std::path::PathBuf::from("."));
+
+        app.ui_renderer_mode = crate::config::UiRendererMode::LegacyLines;
+        let legacy = compute_scroll_slice(
+            &app,
+            &starts,
+            total_lines,
+            scroll_offset,
+            visible_height,
+            width,
+            false,
+        );
+
+        app.ui_renderer_mode = crate::config::UiRendererMode::WidgetBlocks;
+        let widget = compute_scroll_slice(
+            &app,
+            &starts,
+            total_lines,
+            scroll_offset,
+            visible_height,
+            width,
+            false,
+        );
+
+        assert_eq!(legacy.message_range.start, widget.message_range.start);
+        assert_eq!(legacy.message_range.end, widget.message_range.end);
+        assert_eq!(legacy.line_offset, widget.line_offset);
+        assert_eq!(legacy.visible_height, widget.visible_height);
     }
 }

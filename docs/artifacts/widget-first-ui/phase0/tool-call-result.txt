@@ -1,0 +1,24 @@
+cargo run -- run "Use the read tool to read src/app/mod.rs and report the first
+line"
+
+components on  components [!?] is 📦 v0.1.3 via 🦀 v1.89.0 via ❄️  impure (nix-
+shell-env)
+❯ cargo run -- run "Use the read tool to read src/app/mod.rs and report the firs
+t line"
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running `target/debug/hh run 'Use the read tool to read src/app/mod.rs and
+report the first line'`
+thinking… (toggle with :thinking)
+tool:read> start {"end":1,"path":"src/app/mod.rs","start":0}
+tool:read> ok ok
+assistant> First line of `src/app/mod.rs`:
+
+`pub mod chat_state;`
+
+components on  components [!?] is 📦 v0.1.3 via 🦀 v1.89.0 via ❄️  impure (nix-
+shell-env) took 5s
+❯
+

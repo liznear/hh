@@ -78,6 +78,7 @@ pub struct AppState {
     pub selected_command_index: usize,
     pub pending_attachments: Vec<MessageAttachment>,
     pub preferred_column: Option<usize>,
+    pub ui_renderer_mode: crate::config::UiRendererMode,
 }
 
 impl AppState {
@@ -131,7 +132,12 @@ impl AppState {
             selected_command_index: 0,
             pending_attachments: Vec::new(),
             preferred_column: None,
+            ui_renderer_mode: crate::config::UiRendererMode::LegacyLines,
         }
+    }
+
+    pub fn set_ui_renderer_mode(&mut self, mode: crate::config::UiRendererMode) {
+        self.ui_renderer_mode = mode;
     }
 
     pub fn configure_models(

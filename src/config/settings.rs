@@ -19,6 +19,30 @@ pub struct Settings {
     pub selected_agent: Option<String>,
     #[serde(default)]
     pub agents: BTreeMap<String, AgentSpecificSettings>,
+    #[serde(default)]
+    pub ui: UiSettings,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum UiRendererMode {
+    #[default]
+    LegacyLines,
+    WidgetBlocks,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiSettings {
+    #[serde(default)]
+    pub renderer_mode: UiRendererMode,
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            renderer_mode: UiRendererMode::LegacyLines,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

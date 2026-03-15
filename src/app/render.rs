@@ -1,17 +1,18 @@
 use hh_widgets::{
-    codediff::{CodeDiff, CodeDiffLineKind},
+    codediff::{CodeDiff, CodeDiffFrame, CodeDiffLayout, CodeDiffStyles},
     markdown::markdown_to_lines_with_indent,
 };
 use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
     Frame,
     prelude::Stylize,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Block,
+    widgets::{Block, Widget},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::iter::Peekable;
 
 use crate::app::chat_state::ChatMessage;
 use crate::app::core::Component;
@@ -20,14 +21,14 @@ pub(crate) use crate::theme::colors::UiLayout;
 use crate::theme::colors::*;
 use crate::theme::tool_presentation::render_tool_start;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct EditToolOutput {
     path: String,
     summary: EditDiffSummary,
     diff: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct EditDiffSummary {
     added_lines: usize,
     removed_lines: usize,
@@ -852,80 +853,82 @@ fn render_edit_diff_block(
         ),
     ]));
 
-    let (left_width, right_width) = diff_column_widths(available_width);
-    if left_width < MIN_DIFF_COLUMN_WIDTH || right_width < MIN_DIFF_COLUMN_WIDTH {
-        return render_edit_diff_block_single_column(lines, &parsed.diff, available_width, layout);
-    }
+    let left_right = available_width.saturating_sub(7);
+    let use_side_by_side = left_right / 2 >= MIN_DIFF_COLUMN_WIDTH;
+    let layout_mode = if use_side_by_side {
+        CodeDiffLayout::SideBySide
+    } else {
+        CodeDiffLayout::Unified
+    };
 
-    let mut rendered_chars = 0;
-    let mut truncated = false;
+    let code_diff = CodeDiff::from_unified_diff(parsed.diff)
+        .with_layout(layout_mode)
+        .with_styles(CodeDiffStyles {
+            add: Style::default().fg(DIFF_ADD_FG).bg(DIFF_ADD_BG),
+            remove: Style::default().fg(DIFF_REMOVE_FG).bg(DIFF_REMOVE_BG),
+            add_prefix: Style::default().fg(DIFF_ADD_FG).bg(DIFF_ADD_BG),
+            remove_prefix: Style::default().fg(DIFF_REMOVE_FG).bg(DIFF_REMOVE_BG),
+            meta: Style::default().fg(DIFF_META_FG),
+            context: Style::default().fg(TEXT_MUTED),
+            truncated: Style::default().fg(TEXT_MUTED).add_modifier(Modifier::ITALIC),
+        })
+        .with_frame(CodeDiffFrame {
+            panel: Style::default(),
+            padding_horizontal: 0,
+            padding_vertical: 0,
+        });
 
-    let mut raw_lines = parsed.diff.lines().peekable();
-    let mut cursor = DiffLineCursor::default();
-    let mut rendered_lines = 0;
-    while let Some(side_by_side) = next_diff_row(&mut raw_lines, &mut cursor) {
-        let line_chars = side_by_side.total_chars();
-        if rendered_lines >= MAX_RENDERED_DIFF_LINES
-            || rendered_chars + line_chars > MAX_RENDERED_DIFF_CHARS
-        {
-            truncated = true;
-            break;
-        }
-        rendered_chars += line_chars;
-        rendered_lines += 1;
-
-        render_side_by_side_diff_row(lines, &side_by_side, left_width, right_width, layout);
-    }
-
-    if truncated {
-        lines.push(Line::from(vec![
-            Span::raw(child_indent.clone()),
-            Span::styled(
-                "... diff truncated",
-                Style::default().fg(TEXT_MUTED).italic(),
-            ),
-        ]));
-    }
+    append_codediff_rows(lines, &code_diff, available_width, &child_indent);
 
     true
 }
 
-fn render_edit_diff_block_single_column(
+fn append_codediff_rows(
     lines: &mut Vec<Line<'static>>,
-    diff: &str,
+    code_diff: &CodeDiff,
     available_width: usize,
-    layout: UiLayout,
-) -> bool {
-    let child_indent = layout.message_child_indent();
+    child_indent: &str,
+) {
+    let width = available_width.max(1).min(u16::MAX as usize) as u16;
+    let height = usize::from(code_diff.measured_height())
+        .max(1)
+        .min(u16::MAX as usize) as u16;
+    let area = Rect::new(0, 0, width, height);
+    let mut buffer = Buffer::empty(area);
+    code_diff.render(area, &mut buffer);
 
-    let rendered = CodeDiff::from_unified_diff(diff);
+    for y in 0..height {
+        let mut row_spans = vec![Span::raw(child_indent.to_string())];
+        let mut current_style: Option<Style> = None;
+        let mut current_text = String::new();
 
-    for line in rendered.rendered_lines() {
-        let shown = truncate_chars(&line.text, available_width);
-        let style = match line.kind {
-            CodeDiffLineKind::Add => Style::default().fg(DIFF_ADD_FG).bg(DIFF_ADD_BG),
-            CodeDiffLineKind::Remove => Style::default().fg(DIFF_REMOVE_FG).bg(DIFF_REMOVE_BG),
-            CodeDiffLineKind::Meta => Style::default().fg(DIFF_META_FG),
-            CodeDiffLineKind::Context => Style::default().fg(TEXT_MUTED),
-        };
+        for x in 0..width {
+            let cell = &buffer[(x, y)];
+            let symbol = cell.symbol();
+            let style = cell.style();
 
-        lines.push(Line::from(vec![
-            Span::raw(child_indent.clone()),
-            Span::styled(shown, style),
-        ]));
+            match current_style {
+                Some(active_style) if active_style == style => {
+                    current_text.push_str(symbol);
+                }
+                Some(active_style) => {
+                    row_spans.push(Span::styled(std::mem::take(&mut current_text), active_style));
+                    current_text.push_str(symbol);
+                    current_style = Some(style);
+                }
+                None => {
+                    current_text.push_str(symbol);
+                    current_style = Some(style);
+                }
+            }
+        }
+
+        if let Some(style) = current_style {
+            row_spans.push(Span::styled(current_text, style));
+        }
+
+        lines.push(Line::from(row_spans));
     }
-
-    if rendered.is_truncated() {
-        lines.push(Line::from(vec![
-            Span::raw(child_indent.clone()),
-            Span::styled(
-                "... diff truncated",
-                Style::default().fg(TEXT_MUTED).italic(),
-            ),
-        ]));
-    }
-
-    true
 }
 
 fn render_user_message_block(
@@ -1070,290 +1073,6 @@ fn append_tool_result_count(name: &str, label: &str, output: Option<&str>) -> St
     }
 }
 
-fn diff_column_widths(available_width: usize) -> (usize, usize) {
-    let inner_width = available_width.saturating_sub(7);
-    let left = inner_width / 2;
-    let right = inner_width.saturating_sub(left);
-    (left, right)
-}
-
-#[derive(Debug)]
-struct SideBySideDiffRow {
-    left: Option<DiffCell>,
-    right: Option<DiffCell>,
-    kind: SideBySideDiffKind,
-}
-
-impl SideBySideDiffRow {
-    fn total_chars(&self) -> usize {
-        self.left
-            .as_ref()
-            .map(|cell| cell.text.chars().count())
-            .unwrap_or(0)
-            + self
-                .right
-                .as_ref()
-                .map(|cell| cell.text.chars().count())
-                .unwrap_or(0)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct DiffCell {
-    line_number: Option<usize>,
-    marker: Option<char>,
-    text: String,
-}
-
-#[derive(Debug, Default)]
-struct DiffLineCursor {
-    left_line: Option<usize>,
-    right_line: Option<usize>,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum SideBySideDiffKind {
-    Context,
-    Removed,
-    Added,
-    Meta,
-    Changed,
-}
-
-fn next_diff_row<'a>(
-    lines: &mut Peekable<impl Iterator<Item = &'a str>>,
-    cursor: &mut DiffLineCursor,
-) -> Option<SideBySideDiffRow> {
-    let raw = lines.next()?;
-
-    if raw.starts_with("@@") || raw.starts_with("---") || raw.starts_with("+++") {
-        if let Some((left, right)) = parse_hunk_line_numbers(raw) {
-            cursor.left_line = Some(left);
-            cursor.right_line = Some(right);
-        }
-
-        return Some(SideBySideDiffRow {
-            left: Some(DiffCell {
-                line_number: None,
-                marker: None,
-                text: raw.to_string(),
-            }),
-            right: Some(DiffCell {
-                line_number: None,
-                marker: None,
-                text: raw.to_string(),
-            }),
-            kind: SideBySideDiffKind::Meta,
-        });
-    }
-
-    if let Some(context_text) = raw.strip_prefix(' ') {
-        return Some(SideBySideDiffRow {
-            left: Some(DiffCell {
-                line_number: take_next_line_number(&mut cursor.left_line),
-                marker: None,
-                text: context_text.to_string(),
-            }),
-            right: Some(DiffCell {
-                line_number: take_next_line_number(&mut cursor.right_line),
-                marker: None,
-                text: context_text.to_string(),
-            }),
-            kind: SideBySideDiffKind::Context,
-        });
-    }
-
-    if raw.starts_with('-') && !raw.starts_with("---") {
-        if let Some(next) = lines.peek()
-            && next.starts_with('+')
-            && !next.starts_with("+++")
-        {
-            let added = lines.next().unwrap_or_default().to_string();
-            let removed_text = raw.strip_prefix('-').unwrap_or(raw);
-            let added_text = added.strip_prefix('+').unwrap_or(&added);
-            return Some(SideBySideDiffRow {
-                left: Some(DiffCell {
-                    line_number: take_next_line_number(&mut cursor.left_line),
-                    marker: Some('-'),
-                    text: removed_text.to_string(),
-                }),
-                right: Some(DiffCell {
-                    line_number: take_next_line_number(&mut cursor.right_line),
-                    marker: Some('+'),
-                    text: added_text.to_string(),
-                }),
-                kind: SideBySideDiffKind::Changed,
-            });
-        }
-
-        let removed_text = raw.strip_prefix('-').unwrap_or(raw);
-
-        return Some(SideBySideDiffRow {
-            left: Some(DiffCell {
-                line_number: take_next_line_number(&mut cursor.left_line),
-                marker: Some('-'),
-                text: removed_text.to_string(),
-            }),
-            right: None,
-            kind: SideBySideDiffKind::Removed,
-        });
-    }
-
-    if raw.starts_with('+') && !raw.starts_with("+++") {
-        let added_text = raw.strip_prefix('+').unwrap_or(raw);
-        return Some(SideBySideDiffRow {
-            left: None,
-            right: Some(DiffCell {
-                line_number: take_next_line_number(&mut cursor.right_line),
-                marker: Some('+'),
-                text: added_text.to_string(),
-            }),
-            kind: SideBySideDiffKind::Added,
-        });
-    }
-
-    Some(SideBySideDiffRow {
-        left: Some(DiffCell {
-            line_number: None,
-            marker: None,
-            text: raw.to_string(),
-        }),
-        right: Some(DiffCell {
-            line_number: None,
-            marker: None,
-            text: raw.to_string(),
-        }),
-        kind: SideBySideDiffKind::Context,
-    })
-}
-
-fn parse_hunk_line_numbers(raw: &str) -> Option<(usize, usize)> {
-    if !raw.starts_with("@@") {
-        return None;
-    }
-
-    let mut parts = raw.split_whitespace();
-    let _ = parts.next()?;
-    let left = parts.next()?;
-    let right = parts.next()?;
-
-    let left_start = left
-        .strip_prefix('-')?
-        .split(',')
-        .next()?
-        .parse::<usize>()
-        .ok()?;
-    let right_start = right
-        .strip_prefix('+')?
-        .split(',')
-        .next()?
-        .parse::<usize>()
-        .ok()?;
-
-    Some((left_start, right_start))
-}
-
-fn take_next_line_number(line_number: &mut Option<usize>) -> Option<usize> {
-    match line_number {
-        Some(current) => {
-            let value = *current;
-            *current = current.saturating_add(1);
-            Some(value)
-        }
-        None => None,
-    }
-}
-
-fn render_side_by_side_diff_row(
-    lines: &mut Vec<Line<'static>>,
-    row: &SideBySideDiffRow,
-    left_width: usize,
-    right_width: usize,
-    layout: UiLayout,
-) {
-    let left_text = render_diff_cell(row.left.as_ref(), left_width);
-    let right_text = render_diff_cell(row.right.as_ref(), right_width);
-
-    let (left_style, right_style) = match row.kind {
-        SideBySideDiffKind::Context => (
-            Style::default().fg(TEXT_MUTED),
-            Style::default().fg(TEXT_MUTED),
-        ),
-        SideBySideDiffKind::Removed => (
-            Style::default().fg(DIFF_REMOVE_FG).bg(DIFF_REMOVE_BG),
-            Style::default().fg(TEXT_MUTED),
-        ),
-        SideBySideDiffKind::Added => (
-            Style::default().fg(TEXT_MUTED),
-            Style::default().fg(DIFF_ADD_FG).bg(DIFF_ADD_BG),
-        ),
-        SideBySideDiffKind::Meta => (
-            Style::default().fg(DIFF_META_FG),
-            Style::default().fg(DIFF_META_FG),
-        ),
-        SideBySideDiffKind::Changed => (
-            Style::default().fg(DIFF_REMOVE_FG).bg(DIFF_REMOVE_BG),
-            Style::default().fg(DIFF_ADD_FG).bg(DIFF_ADD_BG),
-        ),
-    };
-
-    lines.push(Line::from(vec![
-        Span::raw(layout.message_child_indent()),
-        Span::styled(left_text, left_style),
-        Span::styled(" | ", Style::default().fg(DIFF_META_FG)),
-        Span::styled(right_text, right_style),
-    ]));
-}
-
-fn pad_for_column(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-
-    let shown = truncate_for_column(text, width);
-    let shown_len = shown.chars().count();
-    if shown_len >= width {
-        shown
-    } else {
-        format!("{shown}{}", " ".repeat(width - shown_len))
-    }
-}
-
-fn render_diff_cell(cell: Option<&DiffCell>, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-
-    let Some(cell) = cell else {
-        return " ".repeat(width);
-    };
-
-    if cell.marker.is_none() && cell.line_number.is_none() {
-        return pad_for_column(&cell.text, width);
-    }
-
-    let line_number = match cell.line_number {
-        Some(n) => format!("{n:>width$}", width = DIFF_LINE_NUMBER_WIDTH),
-        None => " ".repeat(DIFF_LINE_NUMBER_WIDTH),
-    };
-    let marker = cell.marker.unwrap_or(' ');
-    let prefix = format!("{line_number} {marker} ");
-    let prefix_width = prefix.chars().count();
-
-    let combined = if width <= prefix_width {
-        truncate_for_column(&prefix, width)
-    } else {
-        let content = truncate_for_column(&cell.text, width - prefix_width);
-        format!("{prefix}{content}")
-    };
-
-    pad_for_column(&combined, width)
-}
-
-fn truncate_for_column(input: &str, max_chars: usize) -> String {
-    truncate_chars_impl(input, max_chars, TruncationMode::FixedWidth)
-}
-
 fn tool_title(name: &str) -> &'static str {
     match name {
         "edit" => "Edit",
@@ -1368,7 +1087,6 @@ fn truncate_chars(input: &str, max_chars: usize) -> String {
 
 #[derive(Clone, Copy)]
 enum TruncationMode {
-    FixedWidth,
     AppendEllipsis,
 }
 
@@ -1384,14 +1102,88 @@ fn truncate_chars_impl(input: &str, max_chars: usize, mode: TruncationMode) -> S
     }
 
     match mode {
-        TruncationMode::FixedWidth => {
-            if max_chars <= 3 {
-                ".".repeat(max_chars)
-            } else {
-                let visible: String = taken.chars().take(max_chars - 3).collect();
-                format!("{visible}...")
-            }
-        }
         TruncationMode::AppendEllipsis => format!("{taken}..."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+
+    fn sample_edit_output(diff: &str) -> String {
+        serde_json::json!({
+            "path": "src/lib.rs",
+            "summary": {
+                "added_lines": 1,
+                "removed_lines": 1
+            },
+            "diff": diff
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn edit_diff_wide_mode_hides_file_header_rows() {
+        let mut lines = Vec::new();
+        let output = sample_edit_output(
+            "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n",
+        );
+
+        assert!(render_edit_diff_block(
+            &mut lines,
+            "edit",
+            &output,
+            120,
+            UiLayout::default(),
+        ));
+
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(!rendered.contains("--- a/src/lib.rs"));
+        assert!(!rendered.contains("+++ b/src/lib.rs"));
+        assert!(rendered.contains("@@ -1 +1 @@"));
+    }
+
+    #[test]
+    fn edit_diff_keeps_tokens_without_duplication() {
+        let mut lines = Vec::new();
+        let output = sample_edit_output("@@ -1 +1 @@\n-pub\n+pub\n");
+
+        assert!(render_edit_diff_block(
+            &mut lines,
+            "edit",
+            &output,
+            120,
+            UiLayout::default(),
+        ));
+
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(!rendered.contains("pubpub"));
+    }
+
+    #[test]
+    fn edit_diff_small_width_falls_back_to_unified_with_headers() {
+        let mut lines = Vec::new();
+        let output = sample_edit_output(
+            "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n",
+        );
+
+        assert!(render_edit_diff_block(
+            &mut lines,
+            "edit",
+            &output,
+            20,
+            UiLayout::default(),
+        ));
+
+        let rendered = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(rendered.contains("--- a/src/lib.rs"));
+        assert!(rendered.contains("+++ b/src/lib.rs"));
     }
 }

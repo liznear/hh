@@ -1,0 +1,30 @@
+cargo run -- run "Return markdown with heading, bullet list, table, and rust fen
+ced code block"
+
+components on  components [!?] is 📦 v0.1.3 via 🦀 v1.89.0 via ❄️  impure (nix-
+shell-env)
+❯ cargo run -- run "Return markdown with heading, bullet list, table, and rust f
+enced code block"
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running `target/debug/hh run 'Return markdown with heading, bullet list, ta
+ble, and rust fenced code block'`
+thinking… (toggle with :thinking)
+assistant> # Markdown Demo
+
+- Item one
+- Item two
+- Item three
+
+| Feature | Example | Notes |
+|---|---|---|
+| Heading | `# Markdown Demo` | Top-level title |
+| Bullet list | `- Item` | Unordered list |
+| Code block | Rust snippet below | Fenced with ```rust |
+
+```rust
+fn main() {
+    let name = "hh";
+    println!("Hello

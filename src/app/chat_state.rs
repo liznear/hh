@@ -67,6 +67,53 @@ impl ScrollState {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::ScrollState;
+
+    #[test]
+    fn effective_offset_clamps_when_not_auto_following() {
+        let state = ScrollState {
+            offset: 50,
+            auto_follow: false,
+        };
+        assert_eq!(state.effective_offset(20, 5), 15);
+    }
+
+    #[test]
+    fn effective_offset_tracks_bottom_when_auto_following() {
+        let state = ScrollState {
+            offset: 0,
+            auto_follow: true,
+        };
+        assert_eq!(state.effective_offset(40, 10), 30);
+        assert_eq!(state.effective_offset(8, 10), 0);
+    }
+
+    #[test]
+    fn scroll_down_enables_auto_follow_at_bottom() {
+        let mut state = ScrollState {
+            offset: 2,
+            auto_follow: false,
+        };
+        state.scroll_down_steps(20, 5, 100);
+        assert_eq!(state.offset, 15);
+        assert!(state.auto_follow);
+    }
+
+    #[test]
+    fn resize_behavior_is_safe_via_effective_offset() {
+        let state = ScrollState {
+            offset: 12,
+            auto_follow: false,
+        };
+
+        assert_eq!(state.effective_offset(30, 10), 12);
+        assert_eq!(state.effective_offset(30, 25), 5);
+        assert_eq!(state.effective_offset(30, 40), 0);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TodoItemView {
     pub content: String,

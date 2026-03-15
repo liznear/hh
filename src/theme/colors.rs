@@ -3,7 +3,6 @@ use ratatui::style::Color;
 
 pub(crate) const MAX_TOOL_OUTPUT_LEN: usize = 200;
 pub(crate) const MIN_DIFF_COLUMN_WIDTH: usize = 24;
-pub(crate) const DIFF_LINE_NUMBER_WIDTH: usize = 4;
 pub(crate) const TOOL_PENDING_MARKER: &str = "→ ";
 pub(crate) const PROCESSING_STATUS_GAP: &str = "  ";
 pub(crate) const SIDEBAR_INDENT: &str = "  ";
@@ -33,8 +32,6 @@ pub(crate) const DIFF_ADD_BG: Color = Color::Rgb(226, 244, 235);
 pub(crate) const DIFF_REMOVE_FG: Color = Color::Rgb(152, 45, 45);
 pub(crate) const DIFF_REMOVE_BG: Color = Color::Rgb(252, 235, 235);
 pub(crate) const DIFF_META_FG: Color = Color::Rgb(106, 114, 128);
-pub(crate) const MAX_RENDERED_DIFF_LINES: usize = 120;
-pub(crate) const MAX_RENDERED_DIFF_CHARS: usize = 8_000;
 pub(crate) const MAX_INPUT_LINES: usize = 5;
 
 #[derive(Clone, Copy)]

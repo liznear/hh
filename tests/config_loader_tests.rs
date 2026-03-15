@@ -87,18 +87,14 @@ fn load_settings_merges_project_and_local_permissions() {
     .expect("write local settings");
 
     let loaded = load_settings(&cwd, None).expect("load settings");
-    assert!(
-        loaded
-            .permissions
-            .allow
-            .contains(&"Bash(git status)".to_string())
-    );
-    assert!(
-        loaded
-            .permissions
-            .deny
-            .contains(&"Bash(git status)".to_string())
-    );
+    assert!(loaded
+        .permissions
+        .allow
+        .contains(&"Bash(git status)".to_string()));
+    assert!(loaded
+        .permissions
+        .deny
+        .contains(&"Bash(git status)".to_string()));
 }
 
 #[test]
@@ -179,4 +175,27 @@ fn upsert_local_permission_rule_writes_hh_local_config() {
     let raw = std::fs::read_to_string(cwd.join(".hh/config.local.json")).expect("read config");
     assert!(raw.contains("Bash(git status*)"));
     assert!(raw.contains("Bash(git push*)"));
+}
+
+#[test]
+fn load_settings_reads_ui_renderer_mode_from_project_config() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = temp.path().join("workspace");
+    std::fs::create_dir_all(cwd.join(".hh")).expect("create .hh");
+
+    std::fs::write(
+        cwd.join(".hh/config.json"),
+        r#"{
+  "ui": {
+    "renderer_mode": "widget-blocks"
+  }
+}"#,
+    )
+    .expect("write project settings");
+
+    let loaded = load_settings(&cwd, None).expect("load settings");
+    assert_eq!(
+        loaded.ui.renderer_mode,
+        hh_cli::config::settings::UiRendererMode::WidgetBlocks
+    );
 }

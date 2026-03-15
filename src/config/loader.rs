@@ -75,6 +75,7 @@ pub fn load_settings(cwd: &Path, agent_name: Option<String>) -> anyhow::Result<S
         provider.api_key_env = value;
     });
     override_optional_from_env(&mut settings.agent.system_prompt, "HH_SYSTEM_PROMPT");
+    override_ui_renderer_mode(&mut settings);
 
     // Apply agent settings if specified
     if let Some(name) = agent_name {
@@ -202,6 +203,20 @@ fn override_optional_from_env(target: &mut Option<String>, key: &str) {
     if let Ok(value) = env::var(key) {
         *target = Some(value);
     }
+}
+
+fn override_ui_renderer_mode(settings: &mut Settings) {
+    let Ok(value) = env::var("HH_UI_RENDERER_MODE") else {
+        return;
+    };
+
+    let mode = match value.trim() {
+        "legacy-lines" => crate::config::settings::UiRendererMode::LegacyLines,
+        "widget-blocks" => crate::config::settings::UiRendererMode::WidgetBlocks,
+        _ => return,
+    };
+
+    settings.ui.renderer_mode = mode;
 }
 
 fn override_selected_provider_field(

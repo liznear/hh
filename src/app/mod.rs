@@ -26,6 +26,7 @@ pub async fn run_interactive_chat(settings: Settings, cwd: &Path) -> anyhow::Res
     let mut tui_guard = terminal::TuiGuard::new(terminal);
 
     let mut app = AppState::new(cwd.to_path_buf());
+    app.set_ui_renderer_mode(settings.ui.renderer_mode);
     app.configure_models(
         settings.selected_model_ref().to_string(),
         utils::build_model_options(&settings),
