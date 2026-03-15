@@ -2,20 +2,41 @@ use crate::core::{
     Message, MessageAttachment, Provider, ProviderRequest, ProviderResponse, ProviderStreamEvent,
     Role, ToolCall,
 };
-use crate::provider::StreamedToolCall;
-use anyhow::{Context, bail};
+use anyhow::Context;
 use async_trait::async_trait;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
-use serde_json::{Value, json};
+use futures::StreamExt;
+use rig::OneOrMany;
+use rig::client::CompletionClient;
+use rig::completion::{CompletionModel, CompletionRequest as RigCompletionRequest, GetTokenUsage};
+use rig::message as rig_message;
+use rig::providers::openai;
+use rig::streaming::{StreamedAssistantContent, ToolCallDeltaContent};
+use std::collections::BTreeMap;
 use std::env;
 
-const THINKING_FIELDS: [&str; 3] = ["reasoning", "thinking", "reasoning_content"];
+#[derive(Default)]
+struct StreamedToolCall {
+    id: String,
+    name: String,
+    arguments_json: String,
+}
+
+impl StreamedToolCall {
+    fn into_tool_call(self) -> ToolCall {
+        let arguments = serde_json::from_str(&self.arguments_json)
+            .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+        ToolCall {
+            id: self.id,
+            name: self.name,
+            arguments,
+        }
+    }
+}
 
 pub struct OpenAiCompatibleProvider {
     base_url: String,
     model: String,
     api_key_env: String,
-    client: reqwest::Client,
 }
 
 impl OpenAiCompatibleProvider {
@@ -24,284 +45,314 @@ impl OpenAiCompatibleProvider {
             base_url,
             model,
             api_key_env,
-            client: reqwest::Client::new(),
         }
     }
 
-    fn endpoint(&self) -> String {
-        format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
-    }
-
-    fn auth_headers(&self) -> anyhow::Result<HeaderMap> {
-        let api_key = env::var(&self.api_key_env)
-            .with_context(|| format!("missing API key env var {}", self.api_key_env))?;
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", api_key))?,
-        );
-        Ok(headers)
-    }
-
-    fn request_body(
-        &self,
-        req: &ProviderRequest,
-        stream: bool,
-        image_url_as_object: bool,
-        image_data_format: ImageDataFormat,
-        include_tools: bool,
-    ) -> Value {
-        let requested_model = if req.model.is_empty() {
+    fn resolve_model<'a>(&'a self, req: &'a ProviderRequest) -> &'a str {
+        if req.model.trim().is_empty() {
             self.model.as_str()
         } else {
             req.model.as_str()
-        };
-
-        let tools = if include_tools {
-            req.tools
-                .iter()
-                .map(|t| {
-                    json!({
-                        "type": "function",
-                        "function": {
-                            "name": t.name,
-                            "description": t.description,
-                            "parameters": t.parameters,
-                        }
-                    })
-                })
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-
-        let messages = messages_to_wire(&req.messages, image_url_as_object, image_data_format);
-
-        let mut body = json!({
-            "model": requested_model,
-            "messages": messages,
-            "stream": stream,
-        });
-        if include_tools && !tools.is_empty() {
-            body["tools"] = json!(tools);
-            body["tool_choice"] = json!("auto");
         }
-        body
     }
 
-    fn parse_chat_response(value: &Value) -> anyhow::Result<ProviderResponse> {
-        let choice = value
-            .get("choices")
-            .and_then(|v| v.as_array())
-            .and_then(|a| a.first())
-            .context("provider response missing choices[0]")?;
+    fn build_completion_model(
+        &self,
+        req: &ProviderRequest,
+    ) -> anyhow::Result<openai::completion::CompletionModel> {
+        let api_key = env::var(&self.api_key_env)
+            .with_context(|| format!("missing API key env var {}", self.api_key_env))?;
+        let client = openai::CompletionsClient::builder()
+            .api_key(api_key.as_str())
+            .base_url(self.base_url.as_str())
+            .build()
+            .context("failed to build rig OpenAI-compatible client")?;
 
-        let message = choice
-            .get("message")
-            .and_then(|m| m.as_object())
-            .context("provider response missing message")?;
+        Ok(client.completion_model(self.resolve_model(req).to_string()))
+    }
 
-        let content = message
-            .get("content")
-            .and_then(|c| c.as_str())
-            .unwrap_or_default()
-            .to_string();
+    fn to_rig_request(&self, req: ProviderRequest) -> anyhow::Result<RigCompletionRequest> {
+        let mut preamble_parts = Vec::new();
+        let mut chat_history = Vec::new();
 
-        let thinking = extract_thinking(message);
-        let tool_calls = parse_tool_calls(message)?;
-        let context_tokens = parse_context_tokens(value);
+        for message in req.messages {
+            match message.role {
+                Role::System => {
+                    if !message.content.trim().is_empty() {
+                        preamble_parts.push(message.content);
+                    }
+                }
+                _ => {
+                    chat_history.extend(message_to_rig(message)?);
+                }
+            }
+        }
 
-        Ok(ProviderResponse {
+        let chat_history = OneOrMany::many(chat_history).map_err(|_| {
+            anyhow::anyhow!("provider request requires at least one non-system message")
+        })?;
+
+        let tools = req
+            .tools
+            .into_iter()
+            .map(|tool| rig::completion::ToolDefinition {
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.parameters,
+            })
+            .collect();
+
+        Ok(RigCompletionRequest {
+            model: Some(req.model),
+            preamble: Some(preamble_parts.join("\n\n")),
+            chat_history,
+            documents: Vec::new(),
+            tools,
+            temperature: None,
+            max_tokens: None,
+            tool_choice: None,
+            additional_params: None,
+            output_schema: None,
+        })
+    }
+
+    fn parse_completion_response(
+        response: rig::completion::CompletionResponse<openai::completion::CompletionResponse>,
+    ) -> ProviderResponse {
+        let mut assistant = String::new();
+        let mut thinking = String::new();
+        let mut tool_calls = Vec::new();
+
+        for item in response.choice {
+            match item {
+                rig::message::AssistantContent::Text(text) => {
+                    assistant.push_str(text.text.as_str())
+                }
+                rig::message::AssistantContent::Reasoning(reasoning) => {
+                    let text = reasoning.display_text();
+                    if !text.is_empty() {
+                        thinking.push_str(text.as_str());
+                    }
+                }
+                rig::message::AssistantContent::ToolCall(tool_call) => {
+                    tool_calls.push(ToolCall {
+                        id: tool_call.id,
+                        name: tool_call.function.name,
+                        arguments: tool_call.function.arguments,
+                    });
+                }
+                rig::message::AssistantContent::Image(_) => {}
+            }
+        }
+
+        ProviderResponse {
             assistant_message: Message {
                 role: Role::Assistant,
-                content,
+                content: assistant,
                 attachments: Vec::new(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
             },
             done: tool_calls.is_empty(),
             tool_calls,
-            thinking,
-            context_tokens,
-        })
-    }
-
-    async fn send_request(
-        &self,
-        req: &ProviderRequest,
-        stream: bool,
-        error_context: &str,
-    ) -> anyhow::Result<reqwest::Response> {
-        struct RequestAttempt {
-            label: &'static str,
-            image_url_object: bool,
-            image_data_format: ImageDataFormat,
-            include_tools: bool,
-            requires_retryable_previous_error: bool,
-        }
-
-        let mut attempts = vec![RequestAttempt {
-            label: "primary",
-            image_url_object: true,
-            image_data_format: ImageDataFormat::DataUrl,
-            include_tools: true,
-            requires_retryable_previous_error: false,
-        }];
-
-        if has_image_attachments(req) {
-            attempts.extend([
-                RequestAttempt {
-                    label: "fallback_no_tools",
-                    image_url_object: true,
-                    image_data_format: ImageDataFormat::DataUrl,
-                    include_tools: false,
-                    requires_retryable_previous_error: true,
-                },
-                RequestAttempt {
-                    label: "fallback_raw_base64",
-                    image_url_object: true,
-                    image_data_format: ImageDataFormat::RawBase64,
-                    include_tools: false,
-                    requires_retryable_previous_error: true,
-                },
-                RequestAttempt {
-                    label: "fallback_string_image_url",
-                    image_url_object: false,
-                    image_data_format: ImageDataFormat::DataUrl,
-                    include_tools: false,
-                    requires_retryable_previous_error: false,
-                },
-            ]);
-        }
-
-        let mut failures: Vec<(String, reqwest::StatusCode, String)> = Vec::new();
-        for attempt in attempts {
-            if attempt.requires_retryable_previous_error
-                && !failures
-                    .last()
-                    .is_some_and(|(_, status, body)| should_retry_for_image_payload(*status, body))
-            {
-                break;
-            }
-
-            let body = self.request_body(
-                req,
-                stream,
-                attempt.image_url_object,
-                attempt.image_data_format,
-                attempt.include_tools,
-            );
-            let context = if attempt.label == "primary" {
-                error_context.to_string()
+            thinking: if thinking.is_empty() {
+                None
             } else {
-                format!("{} ({})", error_context, attempt.label)
+                Some(thinking)
+            },
+            context_tokens: if response.usage.input_tokens == 0 {
+                None
+            } else {
+                Some(response.usage.input_tokens as usize)
+            },
+        }
+    }
+}
+
+fn message_to_rig(message: Message) -> anyhow::Result<Vec<rig_message::Message>> {
+    match message.role {
+        Role::User => {
+            let mut content = Vec::new();
+            if !message.content.is_empty() {
+                content.push(rig_message::UserContent::Text(rig_message::Text {
+                    text: message.content,
+                }));
+            }
+            for attachment in message.attachments {
+                content.push(attachment.into());
+            }
+            let content = OneOrMany::many(content)
+                .map_err(|_| anyhow::anyhow!("user message cannot be empty"))?;
+            Ok(vec![rig_message::Message::User { content }])
+        }
+        Role::Assistant => {
+            let mut content = Vec::new();
+            if !message.content.is_empty() {
+                content.push(rig_message::AssistantContent::Text(rig_message::Text {
+                    text: message.content,
+                }));
+            }
+            for call in message.tool_calls {
+                content.push(call.into());
+            }
+            let content = OneOrMany::many(content)
+                .map_err(|_| anyhow::anyhow!("assistant message cannot be empty"))?;
+            Ok(vec![rig_message::Message::Assistant { id: None, content }])
+        }
+        Role::Tool => {
+            let content = OneOrMany::one(rig_message::ToolResultContent::Text(rig_message::Text {
+                text: message.content,
+            }));
+            let tool_result = rig_message::ToolResult {
+                id: message.tool_call_id.unwrap_or_default(),
+                call_id: None,
+                content,
             };
 
-            let response = self
-                .client
-                .post(self.endpoint())
-                .headers(self.auth_headers()?)
-                .json(&body)
-                .send()
-                .await
-                .with_context(|| context)?;
+            let content = OneOrMany::one(rig_message::UserContent::ToolResult(tool_result));
+            Ok(vec![rig_message::Message::User { content }])
+        }
+        Role::System => Ok(Vec::new()),
+    }
+}
 
-            if response.status().is_success() {
-                return Ok(response);
+impl Into<rig_message::UserContent> for MessageAttachment {
+    fn into(self) -> rig_message::UserContent {
+        match self {
+            MessageAttachment::Image {
+                media_type,
+                data_base64,
+            } => {
+                let url = format!("data:{media_type};base64,{data_base64}");
+                rig_message::UserContent::Image(rig_message::Image {
+                    data: rig_message::DocumentSourceKind::Url(url),
+                    media_type: None,
+                    detail: None,
+                    additional_params: None,
+                })
             }
-
-            let status = response.status();
-            let error = response.text().await.unwrap_or_default();
-            failures.push((attempt.label.to_string(), status, error));
         }
+    }
+}
 
-        if failures.is_empty() {
-            bail!("provider request failed without attempts")
-        }
+impl Into<rig_message::AssistantContent> for ToolCall {
+    fn into(self) -> rig_message::AssistantContent {
+        rig_message::AssistantContent::ToolCall(rig_message::ToolCall {
+            id: self.id,
+            call_id: None,
+            function: rig_message::ToolFunction {
+                name: self.name,
+                arguments: self.arguments,
+            },
+            signature: None,
+            additional_params: None,
+        })
+    }
+}
 
-        let mut details = String::new();
-        for (idx, (label, status, body)) in failures.iter().enumerate() {
-            if idx > 0 {
-                details.push(' ');
-            }
-            details.push_str(&format!("({label} {status}: {body})"));
-        }
-
-        bail!("provider request failed {details}")
+#[async_trait]
+impl Provider for OpenAiCompatibleProvider {
+    async fn complete(&self, req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
+        let model = self.build_completion_model(&req)?;
+        let request = self.to_rig_request(req)?;
+        let response = model
+            .completion(request)
+            .await
+            .context("provider request failed")?;
+        Ok(Self::parse_completion_response(response))
     }
 
-    async fn complete_stream_inner<F>(
+    async fn complete_stream<F>(
         &self,
-        req: &ProviderRequest,
+        req: ProviderRequest,
         mut on_event: F,
     ) -> anyhow::Result<ProviderResponse>
     where
         F: FnMut(ProviderStreamEvent) + Send,
     {
-        let response = self
-            .send_request(req, true, "provider stream request failed")
-            .await?;
+        let model = self.build_completion_model(&req)?;
+        let request = self.to_rig_request(req)?;
+        let mut stream = model
+            .stream(request)
+            .await
+            .context("provider stream request failed")?;
 
         let mut assistant = String::new();
         let mut thinking = String::new();
-        let mut partial_calls: Vec<StreamedToolCall> = Vec::new();
-        let mut stream_done = false;
+        let mut partial_calls: BTreeMap<String, StreamedToolCall> = BTreeMap::new();
+        let mut call_order = Vec::new();
         let mut context_tokens = None;
 
-        let mut buffer = String::new();
-        let mut resp = response;
-        while !stream_done && let Some(chunk) = resp.chunk().await.context("stream read failed")? {
-            let txt = String::from_utf8_lossy(&chunk);
-            buffer.push_str(&txt);
-
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim_end_matches('\r').to_string();
-                buffer.drain(..=pos);
-
-                match parse_stream_line(&line) {
-                    Some(StreamLine::Done) => {
-                        stream_done = true;
-                        break;
+        while let Some(item) = stream.next().await {
+            let item = item.context("provider stream parse failed")?;
+            match item {
+                StreamedAssistantContent::Text(text) => {
+                    assistant.push_str(text.text.as_str());
+                    on_event(ProviderStreamEvent::AssistantDelta(text.text));
+                }
+                StreamedAssistantContent::Reasoning(reasoning) => {
+                    let delta = reasoning.display_text();
+                    if !delta.is_empty() {
+                        thinking.push_str(delta.as_str());
+                        on_event(ProviderStreamEvent::ThinkingDelta(delta));
                     }
-                    Some(StreamLine::Payload(value)) => {
-                        if let Some(tokens) = parse_context_tokens(&value) {
-                            context_tokens = Some(tokens);
+                }
+                StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+                    thinking.push_str(reasoning.as_str());
+                    on_event(ProviderStreamEvent::ThinkingDelta(reasoning));
+                }
+                StreamedAssistantContent::ToolCall {
+                    tool_call,
+                    internal_call_id,
+                } => {
+                    if !call_order.iter().any(|id| id == internal_call_id.as_str()) {
+                        call_order.push(internal_call_id.clone());
+                    }
+
+                    let entry = partial_calls.entry(internal_call_id).or_default();
+                    entry.id = tool_call.id;
+                    entry.name = tool_call.function.name;
+                    entry.arguments_json = serde_json::to_string(&tool_call.function.arguments)
+                        .unwrap_or_else(|_| "{}".to_string());
+                }
+                StreamedAssistantContent::ToolCallDelta {
+                    id,
+                    internal_call_id,
+                    content,
+                } => {
+                    if !call_order
+                        .iter()
+                        .any(|existing| existing == internal_call_id.as_str())
+                    {
+                        call_order.push(internal_call_id.clone());
+                    }
+
+                    let entry = partial_calls.entry(internal_call_id).or_default();
+                    if entry.id.is_empty() {
+                        entry.id = id;
+                    }
+
+                    match content {
+                        ToolCallDeltaContent::Name(name) => {
+                            entry.name = name;
                         }
-                        apply_stream_chunk(
-                            &value,
-                            &mut assistant,
-                            &mut thinking,
-                            &mut partial_calls,
-                            &mut on_event,
-                        )
+                        ToolCallDeltaContent::Delta(delta) => {
+                            entry.arguments_json.push_str(delta.as_str());
+                        }
                     }
-                    None => continue,
+                }
+                StreamedAssistantContent::Final(final_response) => {
+                    if let Some(tokens) = final_response.token_usage() {
+                        context_tokens = Some(tokens.input_tokens as usize);
+                    }
                 }
             }
         }
 
-        if !stream_done {
-            match parse_stream_line(buffer.trim()) {
-                Some(StreamLine::Payload(value)) => {
-                    if let Some(tokens) = parse_context_tokens(&value) {
-                        context_tokens = Some(tokens);
-                    }
-                    apply_stream_chunk(
-                        &value,
-                        &mut assistant,
-                        &mut thinking,
-                        &mut partial_calls,
-                        &mut on_event,
-                    )
-                }
-                Some(StreamLine::Done) | None => {}
-            }
-        }
-
-        let tool_calls = partial_calls
+        let tool_calls = call_order
             .into_iter()
-            .filter(|c| !c.name.is_empty())
+            .filter_map(|key| partial_calls.remove(&key))
+            .filter(|call| !call.name.is_empty())
             .map(StreamedToolCall::into_tool_call)
             .collect::<Vec<_>>();
 
@@ -325,349 +376,20 @@ impl OpenAiCompatibleProvider {
     }
 }
 
-fn emit_response_stream_events<F>(response: &ProviderResponse, on_event: &mut F)
-where
-    F: FnMut(ProviderStreamEvent) + Send,
-{
-    if let Some(thinking) = &response.thinking {
-        on_event(ProviderStreamEvent::ThinkingDelta(thinking.clone()));
-    }
-    if !response.assistant_message.content.is_empty() {
-        on_event(ProviderStreamEvent::AssistantDelta(
-            response.assistant_message.content.clone(),
-        ));
-    }
-}
-
-enum StreamLine {
-    Done,
-    Payload(Value),
-}
-
-#[derive(Clone, Copy)]
-enum ImageDataFormat {
-    DataUrl,
-    RawBase64,
-}
-
-fn message_to_wire(
-    message: &Message,
-    image_url_as_object: bool,
-    image_data_format: ImageDataFormat,
-) -> Value {
-    let content = if message.attachments.is_empty() {
-        json!(message.content)
-    } else {
-        let mut parts = Vec::new();
-        if !message.content.is_empty() {
-            parts.push(json!({
-                "type": "text",
-                "text": message.content,
-            }));
-        }
-
-        for attachment in &message.attachments {
-            match attachment {
-                MessageAttachment::Image {
-                    media_type,
-                    data_base64,
-                } => {
-                    let image_payload = match image_data_format {
-                        ImageDataFormat::DataUrl => {
-                            format!("data:{};base64,{}", media_type, data_base64)
-                        }
-                        ImageDataFormat::RawBase64 => data_base64.clone(),
-                    };
-                    if image_url_as_object {
-                        parts.push(json!({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": image_payload,
-                            }
-                        }));
-                    } else {
-                        parts.push(json!({
-                            "type": "image_url",
-                            "image_url": image_payload,
-                        }));
-                    }
-                }
-            }
-        }
-
-        json!(parts)
-    };
-
-    let mut wire = json!({
-        "role": role_to_wire(&message.role),
-        "content": content,
-    });
-    if let Some(id) = &message.tool_call_id {
-        wire["tool_call_id"] = json!(id);
-    }
-
-    if !message.tool_calls.is_empty() {
-        let calls: Vec<Value> = message.tool_calls.iter().map(|call| {
-            json!({
-                "id": call.id,
-                "type": "function",
-                "function": {
-                    "name": call.name,
-                    "arguments": serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".to_string())
-                }
-            })
-        }).collect();
-        wire["tool_calls"] = json!(calls);
-    }
-
-    wire
-}
-
-fn messages_to_wire(
-    messages: &[Message],
-    image_url_as_object: bool,
-    image_data_format: ImageDataFormat,
-) -> Vec<Value> {
-    messages
-        .iter()
-        .map(|message| message_to_wire(message, image_url_as_object, image_data_format))
-        .collect()
-}
-
-fn has_image_attachments(req: &ProviderRequest) -> bool {
-    req.messages
-        .iter()
-        .any(|message| !message.attachments.is_empty())
-}
-
-fn should_retry_for_image_payload(status: reqwest::StatusCode, body: &str) -> bool {
-    if !status.is_client_error() {
-        return false;
-    }
-    let lower = body.to_ascii_lowercase();
-    lower.contains("invalid api parameter")
-        || lower.contains("invalid parameter")
-        || lower.contains("image_url")
-        || lower.contains("invalid type")
-}
-
-fn role_to_wire(role: &Role) -> &'static str {
-    match role {
-        Role::System => "system",
-        Role::User => "user",
-        Role::Assistant => "assistant",
-        Role::Tool => "tool",
-    }
-}
-
-fn parse_stream_line(line: &str) -> Option<StreamLine> {
-    let line = line.trim();
-    if line.is_empty() || !line.starts_with("data:") {
-        return None;
-    }
-
-    let payload = line.trim_start_matches("data:").trim();
-    if payload == "[DONE]" {
-        return Some(StreamLine::Done);
-    }
-
-    serde_json::from_str(payload).ok().map(StreamLine::Payload)
-}
-
-#[async_trait]
-impl Provider for OpenAiCompatibleProvider {
-    async fn complete(&self, req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
-        let response = self
-            .send_request(&req, false, "provider request failed")
-            .await?;
-
-        let value: Value = response.json().await.context("invalid provider JSON")?;
-        Self::parse_chat_response(&value)
-    }
-
-    async fn complete_stream<F>(
-        &self,
-        req: ProviderRequest,
-        mut on_event: F,
-    ) -> anyhow::Result<ProviderResponse>
-    where
-        F: FnMut(ProviderStreamEvent) + Send,
-    {
-        match self.complete_stream_inner(&req, &mut on_event).await {
-            Ok(response) => Ok(response),
-            Err(_) => {
-                let response = self.complete(req).await?;
-                emit_response_stream_events(&response, &mut on_event);
-                Ok(response)
-            }
-        }
-    }
-}
-
-fn parse_tool_calls(message: &serde_json::Map<String, Value>) -> anyhow::Result<Vec<ToolCall>> {
-    let mut tool_calls = Vec::new();
-    if let Some(calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
-        for call in calls {
-            let id = call
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let function = call
-                .get("function")
-                .and_then(|v| v.as_object())
-                .context("tool call missing function")?;
-            let name = function
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let args_raw = function
-                .get("arguments")
-                .and_then(|v| v.as_str())
-                .unwrap_or("{}");
-            let arguments: Value = serde_json::from_str(args_raw).unwrap_or_else(|_| json!({}));
-            tool_calls.push(ToolCall {
-                id,
-                name,
-                arguments,
-            });
-        }
-    }
-    Ok(tool_calls)
-}
-
-fn extract_thinking(message: &serde_json::Map<String, Value>) -> Option<String> {
-    THINKING_FIELDS.iter().find_map(|k| {
-        message
-            .get(*k)
-            .and_then(|v| v.as_str())
-            .filter(|v| !v.is_empty())
-            .map(ToString::to_string)
-    })
-}
-
-fn parse_context_tokens(payload: &Value) -> Option<usize> {
-    let usage = payload.get("usage")?.as_object()?;
-    usage
-        .get("prompt_tokens")
-        .or_else(|| usage.get("input_tokens"))
-        .or_else(|| usage.get("total_tokens"))
-        .and_then(|value| value.as_u64())
-        .map(|value| value as usize)
-}
-
-fn apply_stream_chunk<F>(
-    value: &Value,
-    assistant: &mut String,
-    thinking: &mut String,
-    partial_calls: &mut Vec<StreamedToolCall>,
-    on_event: &mut F,
-) where
-    F: FnMut(ProviderStreamEvent) + Send,
-{
-    let Some(choice) = value
-        .get("choices")
-        .and_then(|v| v.as_array())
-        .and_then(|a| a.first())
-    else {
-        return;
-    };
-
-    let Some(delta) = choice.get("delta").and_then(|v| v.as_object()) else {
-        return;
-    };
-
-    if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
-        assistant.push_str(content);
-        on_event(ProviderStreamEvent::AssistantDelta(content.to_string()));
-    }
-
-    for key in THINKING_FIELDS {
-        if let Some(text) = delta.get(key).and_then(|v| v.as_str()) {
-            thinking.push_str(text);
-            on_event(ProviderStreamEvent::ThinkingDelta(text.to_string()));
-        }
-    }
-
-    if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-        for call in tool_calls {
-            let index = call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            while partial_calls.len() <= index {
-                partial_calls.push(StreamedToolCall::default());
-            }
-
-            let entry = &mut partial_calls[index];
-            if let Some(id) = call.get("id").and_then(|v| v.as_str()) {
-                entry.id = id.to_string();
-            }
-            if let Some(function) = call.get("function").and_then(|v| v.as_object()) {
-                if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
-                    entry.name = name.to_string();
-                }
-                if let Some(args_piece) = function.get("arguments").and_then(|v| v.as_str()) {
-                    entry.arguments_json.push_str(args_piece);
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn messages_to_wire_inserts_synthetic_assistant_for_tool_message() {
-        let messages = vec![
-            Message {
-                role: Role::User,
-                content: "hello".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            },
-            Message {
-                role: Role::Assistant,
-                content: "".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: vec![ToolCall {
-                    id: "call_123".to_string(),
-                    name: "test".to_string(),
-                    arguments: json!({}),
-                }],
-            },
-            Message {
-                role: Role::Tool,
-                content: "ok".to_string(),
-                attachments: Vec::new(),
-                tool_call_id: Some("call_123".to_string()),
-                tool_calls: Vec::new(),
-            },
-        ];
+    fn streamed_tool_call_invalid_json_falls_back_to_object() {
+        let call = StreamedToolCall {
+            id: "call-2".to_string(),
+            name: "bash".to_string(),
+            arguments_json: "{".to_string(),
+        }
+        .into_tool_call();
 
-        let wire = messages_to_wire(&messages, true, ImageDataFormat::DataUrl);
-        assert_eq!(wire.len(), 3);
-        assert_eq!(wire[1]["role"], "assistant");
-        assert_eq!(wire[1]["tool_calls"][0]["id"], "call_123");
-        assert_eq!(wire[2]["role"], "tool");
-        assert_eq!(wire[2]["tool_call_id"], "call_123");
-    }
-
-    #[test]
-    fn messages_to_wire_skips_synthetic_when_tool_call_id_missing() {
-        let messages = vec![Message {
-            role: Role::Tool,
-            content: "ok".to_string(),
-            attachments: Vec::new(),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-        }];
-
-        let wire = messages_to_wire(&messages, true, ImageDataFormat::DataUrl);
-        assert_eq!(wire.len(), 1);
-        assert_eq!(wire[0]["role"], "tool");
-        assert!(wire[0].get("tool_call_id").is_none());
+        assert_eq!(call.arguments, json!({}));
     }
 }
