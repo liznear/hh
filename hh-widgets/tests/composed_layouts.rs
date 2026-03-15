@@ -1,7 +1,7 @@
-use hh_widgets::codediff::{CodeDiffBlock, CodeDiffLineKind, CodeDiffOptions, render_unified_diff};
+use hh_widgets::codediff::{CodeDiff, CodeDiffLineKind};
 use hh_widgets::markdown::markdown_to_lines_with_indent;
-use hh_widgets::popup::{Anchor, PopupOptions, PopupRequest, popup_from_request};
-use hh_widgets::scrollable::{ScrollableState, measure_children, visible_range};
+use hh_widgets::popup::{popup_from_request, Anchor, PopupOptions, PopupRequest};
+use hh_widgets::scrollable::{measure_children, visible_range, ScrollableState};
 use hh_widgets::widget::{Area, WidgetNode};
 
 #[test]
@@ -11,7 +11,7 @@ fn composed_layout_markdown_diff_scroll_and_popup_is_deterministic() {
             "# Title\n\n- one\n- two",
         )),
         WidgetNode::Spacer(1),
-        WidgetNode::CodeDiff(CodeDiffBlock::new(
+        WidgetNode::CodeDiff(CodeDiff::from_unified_diff(
             "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new",
         )),
     ];
@@ -49,11 +49,11 @@ fn composed_layout_markdown_diff_scroll_and_popup_is_deterministic() {
 
 #[test]
 fn codediff_composed_layout_snapshot_shape_is_stable() {
-    let diff = CodeDiffBlock::new("--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n context");
-    let rendered = render_unified_diff(&diff, &CodeDiffOptions::default());
+    let diff =
+        CodeDiff::from_unified_diff("--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n context");
 
-    let summary = rendered
-        .lines
+    let summary = diff
+        .rendered_lines()
         .iter()
         .map(|line| match line.kind {
             CodeDiffLineKind::Meta => "M",
@@ -65,14 +65,14 @@ fn codediff_composed_layout_snapshot_shape_is_stable() {
         .join("");
 
     assert_eq!(summary, "MMMRAC");
-    assert!(!rendered.truncated);
+    assert!(!diff.is_truncated());
 }
 
 #[test]
 fn widgets_work_without_hh_runtime_types() {
     let children = vec![
         WidgetNode::Markdown(hh_widgets::markdown::MarkdownBlock::new("hello")),
-        WidgetNode::CodeDiff(CodeDiffBlock::new("+new")),
+        WidgetNode::CodeDiff(CodeDiff::from_unified_diff("+new")),
     ];
     let layout = measure_children(&children, 50);
     let mut state = ScrollableState::default();
