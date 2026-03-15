@@ -33,6 +33,43 @@ impl StreamedToolCall {
     }
 }
 
+fn non_empty(value: String) -> Option<String> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn context_tokens(input_tokens: u64) -> Option<usize> {
+    if input_tokens == 0 {
+        None
+    } else {
+        Some(input_tokens as usize)
+    }
+}
+
+fn build_provider_response(
+    assistant: String,
+    thinking: String,
+    tool_calls: Vec<ToolCall>,
+    context_tokens: Option<usize>,
+) -> ProviderResponse {
+    ProviderResponse {
+        assistant_message: Message {
+            role: Role::Assistant,
+            content: assistant,
+            attachments: Vec::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        },
+        done: tool_calls.is_empty(),
+        tool_calls,
+        thinking: non_empty(thinking),
+        context_tokens,
+    }
+}
+
 pub struct OpenAiCompatibleProvider {
     base_url: String,
     model: String,
@@ -58,7 +95,7 @@ impl OpenAiCompatibleProvider {
 
     fn build_completion_model(
         &self,
-        req: &ProviderRequest,
+        model: String,
     ) -> anyhow::Result<openai::completion::CompletionModel> {
         let api_key = env::var(&self.api_key_env)
             .with_context(|| format!("missing API key env var {}", self.api_key_env))?;
@@ -68,7 +105,7 @@ impl OpenAiCompatibleProvider {
             .build()
             .context("failed to build rig OpenAI-compatible client")?;
 
-        Ok(client.completion_model(self.resolve_model(req).to_string()))
+        Ok(client.completion_model(model))
     }
 
     fn to_rig_request(&self, req: ProviderRequest) -> anyhow::Result<RigCompletionRequest> {
@@ -83,7 +120,9 @@ impl OpenAiCompatibleProvider {
                     }
                 }
                 _ => {
-                    chat_history.extend(message_to_rig(message)?);
+                    if let Some(chat_message) = message_to_rig(message)? {
+                        chat_history.push(chat_message);
+                    }
                 }
             }
         }
@@ -103,8 +142,8 @@ impl OpenAiCompatibleProvider {
             .collect();
 
         Ok(RigCompletionRequest {
-            model: Some(req.model),
-            preamble: Some(preamble_parts.join("\n\n")),
+            model: non_empty(req.model),
+            preamble: non_empty(preamble_parts.join("\n\n")),
             chat_history,
             documents: Vec::new(),
             tools,
@@ -145,31 +184,16 @@ impl OpenAiCompatibleProvider {
             }
         }
 
-        ProviderResponse {
-            assistant_message: Message {
-                role: Role::Assistant,
-                content: assistant,
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            },
-            done: tool_calls.is_empty(),
+        build_provider_response(
+            assistant,
+            thinking,
             tool_calls,
-            thinking: if thinking.is_empty() {
-                None
-            } else {
-                Some(thinking)
-            },
-            context_tokens: if response.usage.input_tokens == 0 {
-                None
-            } else {
-                Some(response.usage.input_tokens as usize)
-            },
-        }
+            context_tokens(response.usage.input_tokens),
+        )
     }
 }
 
-fn message_to_rig(message: Message) -> anyhow::Result<Vec<rig_message::Message>> {
+fn message_to_rig(message: Message) -> anyhow::Result<Option<rig_message::Message>> {
     match message.role {
         Role::User => {
             let mut content = Vec::new();
@@ -183,7 +207,7 @@ fn message_to_rig(message: Message) -> anyhow::Result<Vec<rig_message::Message>>
             }
             let content = OneOrMany::many(content)
                 .map_err(|_| anyhow::anyhow!("user message cannot be empty"))?;
-            Ok(vec![rig_message::Message::User { content }])
+            Ok(Some(rig_message::Message::User { content }))
         }
         Role::Assistant => {
             let mut content = Vec::new();
@@ -197,7 +221,7 @@ fn message_to_rig(message: Message) -> anyhow::Result<Vec<rig_message::Message>>
             }
             let content = OneOrMany::many(content)
                 .map_err(|_| anyhow::anyhow!("assistant message cannot be empty"))?;
-            Ok(vec![rig_message::Message::Assistant { id: None, content }])
+            Ok(Some(rig_message::Message::Assistant { id: None, content }))
         }
         Role::Tool => {
             let content = OneOrMany::one(rig_message::ToolResultContent::Text(rig_message::Text {
@@ -210,15 +234,15 @@ fn message_to_rig(message: Message) -> anyhow::Result<Vec<rig_message::Message>>
             };
 
             let content = OneOrMany::one(rig_message::UserContent::ToolResult(tool_result));
-            Ok(vec![rig_message::Message::User { content }])
+            Ok(Some(rig_message::Message::User { content }))
         }
-        Role::System => Ok(Vec::new()),
+        Role::System => Ok(None),
     }
 }
 
-impl Into<rig_message::UserContent> for MessageAttachment {
-    fn into(self) -> rig_message::UserContent {
-        match self {
+impl From<MessageAttachment> for rig_message::UserContent {
+    fn from(value: MessageAttachment) -> Self {
+        match value {
             MessageAttachment::Image {
                 media_type,
                 data_base64,
@@ -235,14 +259,14 @@ impl Into<rig_message::UserContent> for MessageAttachment {
     }
 }
 
-impl Into<rig_message::AssistantContent> for ToolCall {
-    fn into(self) -> rig_message::AssistantContent {
+impl From<ToolCall> for rig_message::AssistantContent {
+    fn from(value: ToolCall) -> Self {
         rig_message::AssistantContent::ToolCall(rig_message::ToolCall {
-            id: self.id,
+            id: value.id,
             call_id: None,
             function: rig_message::ToolFunction {
-                name: self.name,
-                arguments: self.arguments,
+                name: value.name,
+                arguments: value.arguments,
             },
             signature: None,
             additional_params: None,
@@ -253,7 +277,8 @@ impl Into<rig_message::AssistantContent> for ToolCall {
 #[async_trait]
 impl Provider for OpenAiCompatibleProvider {
     async fn complete(&self, req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
-        let model = self.build_completion_model(&req)?;
+        let model_name = self.resolve_model(&req).to_string();
+        let model = self.build_completion_model(model_name)?;
         let request = self.to_rig_request(req)?;
         let response = model
             .completion(request)
@@ -270,7 +295,8 @@ impl Provider for OpenAiCompatibleProvider {
     where
         F: FnMut(ProviderStreamEvent) + Send,
     {
-        let model = self.build_completion_model(&req)?;
+        let model_name = self.resolve_model(&req).to_string();
+        let model = self.build_completion_model(model_name)?;
         let request = self.to_rig_request(req)?;
         let mut stream = model
             .stream(request)
@@ -356,23 +382,12 @@ impl Provider for OpenAiCompatibleProvider {
             .map(StreamedToolCall::into_tool_call)
             .collect::<Vec<_>>();
 
-        Ok(ProviderResponse {
-            assistant_message: Message {
-                role: Role::Assistant,
-                content: assistant,
-                attachments: Vec::new(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-            },
-            done: tool_calls.is_empty(),
+        Ok(build_provider_response(
+            assistant,
+            thinking,
             tool_calls,
-            thinking: if thinking.is_empty() {
-                None
-            } else {
-                Some(thinking)
-            },
             context_tokens,
-        })
+        ))
     }
 }
 
