@@ -43,70 +43,59 @@ Design intent: keep a single source of truth for LLM semantics, while letting pe
 
 ## Debugging TUI
 
-The TUI can be debugged in both interactive and single-prompt modes by dumping frames to a directory.
+The TUI is only available in `chat` mode. The `run` command does not have a TUI.
 
-### Single-Prompt Debug Mode
+Use `cargo run -- <command>` instead of `hh <command>` to run the latest built version.
 
-Run a single prompt and capture screen dumps:
+### Using tmux for TUI Debugging
 
-```bash
-# Basic usage
-hh run "list files in current directory" --debug ./debug
-
-# With custom output directory
-hh run "what is 2+2?" --debug ./my-debug
-```
-
-This creates numbered screen dump files (`screen-000.txt`, `screen-001.txt`, etc.) in the output directory.
-
-### Interactive Debug Mode
-
-Dump frames while running the interactive TUI:
+Capture TUI state using tmux:
 
 ```bash
-hh chat --debug ./debug-session
+# Start chat in a tmux session
+tmux new-session -d -s hh-debug "cargo run -- chat"
+
+# Capture current pane contents as text
+tmux capture-pane -t hh-debug -p > debug-screen.txt
+
+# Capture with ANSI colors preserved
+tmux capture-pane -t hh-debug -p -e > debug-screen-ansi.txt
+
+# Send keys to the session
+tmux send-keys -t hh-debug "your input here" Enter
+
+# Kill the session when done
+tmux kill-session -t hh-debug
 ```
-
-Frames are written continuously while you interact with the TUI.
-
-### Replay Debug Frames
-
-View captured frames:
-
-```bash
-# Basic replay (100ms delay between frames)
-hh replay ./my-debug
-
-# Faster replay
-hh replay ./my-debug --delay 50
-
-# Loop continuously
-hh replay ./my-debug --loop
-```
-
-When running in a terminal:
-- Press `q` to quit
-- Press `p` to pause/resume
 
 ### Debugging Workflow for AI
 
-1. Run the problematic prompt in single-prompt debug mode:
+1. Start chat in a tmux session:
    ```bash
-   hh run "your problematic prompt" --debug ./debug
+   tmux new-session -d -s hh-debug "cargo run -- chat"
    ```
 
-2. Read the screen dumps to understand what happened:
+2. Interact with the session or send keys:
    ```bash
-   cat ./debug/screen-000.txt
-   cat ./debug/screen-final.txt
+   tmux send-keys -t hh-debug "your test input" Enter
    ```
 
-3. Or replay all frames to see the animation:
+3. Capture the screen state:
    ```bash
-   hh replay ./debug --delay 200
+   tmux capture-pane -t hh-debug -p > debug-output.txt
    ```
 
-4. Fix the issue based on what you observed in the screen dumps.
+4. Read the captured output to understand what happened:
+   ```bash
+   cat debug-output.txt
+   ```
+
+5. Fix the issue based on what you observed.
+
+6. Clean up when done:
+   ```bash
+   tmux kill-session -t hh-debug
+   ```
 
 ## TUI UI Learnings
 

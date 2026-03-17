@@ -5,8 +5,10 @@ pub mod events;
 pub mod handlers;
 pub mod input;
 pub mod render;
+pub mod runtime;
 pub mod state;
 pub mod terminal;
+pub mod ui;
 pub mod utils;
 
 use std::path::Path;
@@ -22,6 +24,15 @@ use crate::cli::agent_init;
 use crate::config::Settings;
 
 pub async fn run_interactive_chat(settings: Settings, cwd: &Path) -> anyhow::Result<()> {
+    let use_iocraft = std::env::var("HH_USE_IOCRAFT").is_ok();
+    if use_iocraft {
+        run_interactive_chat_iocraft(settings, cwd).await
+    } else {
+        run_interactive_chat_ratatui(settings, cwd).await
+    }
+}
+
+async fn run_interactive_chat_ratatui(settings: Settings, cwd: &Path) -> anyhow::Result<()> {
     let terminal = terminal::setup_terminal()?;
     let mut tui_guard = terminal::TuiGuard::new(terminal);
 
@@ -58,6 +69,10 @@ pub async fn run_single_prompt(
     prompt: String,
 ) -> anyhow::Result<String> {
     crate::app::handlers::runner::run_single_prompt(settings, cwd, prompt).await
+}
+
+async fn run_interactive_chat_iocraft(_settings: Settings, _cwd: &Path) -> anyhow::Result<()> {
+    anyhow::bail!("iocraft backend not yet implemented. Remove HH_USE_IOCRAFT environment variable to use ratatui.")
 }
 
 const EVENT_DRAIN_MAX: usize = 128;

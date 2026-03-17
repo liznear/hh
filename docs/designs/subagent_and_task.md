@@ -189,7 +189,7 @@ Integration tests:
 
 Debug workflow:
 
-- use `hh run ... --debug <dir>` and inspect frame progression for click/row binding.
+- use tmux with `cargo run -- chat` and `tmux capture-pane` to inspect frame progression for click/row binding.
 
 ## Risks and Mitigations
 
