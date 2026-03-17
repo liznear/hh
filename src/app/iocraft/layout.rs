@@ -1,5 +1,6 @@
 use iocraft::prelude::*;
 
+use super::input_mapper::map_terminal_event;
 use super::theme;
 use crate::core::{Message, Role};
 use crate::theme::colors::UiLayout;
@@ -8,6 +9,19 @@ use crate::theme::colors::UiLayout;
 pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let (width, height) = hooks.use_terminal_size();
     let layout = UiLayout::default();
+
+    hooks.use_terminal_events(|event| {
+        if let Some(mapped_event) = map_terminal_event(&event) {
+            // Here we would dispatch mapped_event to MvuApp
+            // For now, if Q is pressed, we exit
+            if let crate::app::events::InputEvent::Key(k) = mapped_event {
+                if k.code == crossterm::event::KeyCode::Char('q') {
+                    // This is a temporary hack since MvuApp isn't fully integrated here
+                    std::process::exit(0);
+                }
+            }
+        }
+    });
 
     let dummy_messages = vec![
         Message {

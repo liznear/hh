@@ -1172,9 +1172,9 @@ Update `src/app/iocraft/layout.rs` to include MessagesPanel.
 **Files:**
 - Modify: `src/app/iocraft/root.rs`, `src/app/iocraft/messages.rs`, `src/app/iocraft/sidebar.rs`
 
-- [ ] **Step 1: Map keyboard events to InputEvent enum**
+- [x] **Step 1: Map keyboard events to InputEvent enum**
 
-- [ ] **Step 2: Wire key handling through existing dispatch**
+- [x] **Step 2: Wire key handling through existing dispatch**
 
 - [ ] **Step 3: Implement mouse scroll for messages**
 

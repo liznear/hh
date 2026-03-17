@@ -1,4 +1,5 @@
 pub mod input;
+pub mod input_mapper;
 pub mod layout;
 pub mod messages;
 pub mod popups;
