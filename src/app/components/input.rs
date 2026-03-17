@@ -1,8 +1,7 @@
-use ratatui::{
+use crate::ui_compat::{
     Frame,
     layout::Rect,
-    prelude::Stylize,
-    style::{Color, Modifier, Style},
+        style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Paragraph, Wrap},
 };

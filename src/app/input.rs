@@ -4,7 +4,7 @@ use std::path::Path;
 
 use base64::Engine;
 use crossterm::event::{self, KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::layout::Rect;
+use crate::ui_compat::layout::Rect;
 
 use crate::app::chat_state::QuestionKeyResult;
 use crate::app::state::AppState;
@@ -643,7 +643,7 @@ fn screen_to_message_coords(
     terminal: &impl crate::app::runtime::TerminalBackend,
 ) -> Option<(usize, usize)> {
     let size = terminal.size().ok()?;
-    let terminal_rect = ratatui::layout::Rect::new(0, 0, size.0, size.1);
+    let terminal_rect = crate::ui_compat::layout::Rect::new(0, 0, size.0, size.1);
     let layout_rects =
         crate::app::components::layout::compute_layout_rects(terminal_rect, app, &app.input);
 
@@ -676,7 +676,7 @@ fn screen_to_sidebar_header(
     terminal: &impl crate::app::runtime::TerminalBackend,
 ) -> Option<&'static str> {
     let size = terminal.size().ok()?;
-    let terminal_rect = ratatui::layout::Rect::new(0, 0, size.0, size.1);
+    let terminal_rect = crate::ui_compat::layout::Rect::new(0, 0, size.0, size.1);
     let layout_rects =
         crate::app::components::layout::compute_layout_rects(terminal_rect, app, &app.input);
     let sidebar_content = layout_rects.sidebar_content?;

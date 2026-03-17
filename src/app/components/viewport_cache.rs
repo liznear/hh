@@ -1,4 +1,4 @@
-use ratatui::text::Line;
+use crate::ui_compat::text::Line;
 
 use crate::app::chat_state::SelectionPosition;
 use crate::app::state::AppState;

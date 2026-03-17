@@ -1,6 +1,5 @@
-use ratatui::prelude::Stylize;
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
+use crate::ui_compat::style::{Color, Style};
+use crate::ui_compat::text::{Line, Span};
 
 use super::{UiColor, UiLine, UiSpan, UiStyle};
 
@@ -67,16 +66,16 @@ pub fn ratatui_style_to_ui(s: Style) -> UiStyle {
     if let Some(bg) = s.bg.and_then(ratatui_color_to_ui) {
         ui = ui.bg(bg);
     }
-    if s.add_modifier.contains(ratatui::style::Modifier::BOLD) {
+    if s.add_modifier.contains(crate::ui_compat::style::Modifier::BOLD) {
         ui = ui.bold();
     }
-    if s.add_modifier.contains(ratatui::style::Modifier::ITALIC) {
+    if s.add_modifier.contains(crate::ui_compat::style::Modifier::ITALIC) {
         ui = ui.italic();
     }
-    if s.add_modifier.contains(ratatui::style::Modifier::DIM) {
+    if s.add_modifier.contains(crate::ui_compat::style::Modifier::DIM) {
         ui = ui.dim();
     }
-    if s.add_modifier.contains(ratatui::style::Modifier::UNDERLINED) {
+    if s.add_modifier.contains(crate::ui_compat::style::Modifier::UNDERLINED) {
         ui = ui.underline();
     }
     ui

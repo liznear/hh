@@ -1,4 +1,4 @@
-use ratatui::{
+use crate::ui_compat::{
     Frame,
     style::{Color, Style},
     text::{Line, Span},
@@ -41,8 +41,8 @@ impl Component for PopupComponent {
 
     fn render(
         &self,
-        f: &mut ratatui::Frame<'_>,
-        _area: ratatui::layout::Rect,
+        f: &mut crate::ui_compat::Frame<'_>,
+        _area: crate::ui_compat::layout::Rect,
         _state: &crate::app::state::SessionContext,
     ) {
         render_clipboard_notice_local(f, &self.clipboard_notice);
@@ -54,7 +54,7 @@ impl PopupComponent {
         &self,
         f: &mut Frame,
         input_comp: &crate::app::components::input::InputComponent,
-        input_area: ratatui::layout::Rect,
+        input_area: crate::ui_compat::layout::Rect,
         layout: UiLayout,
     ) {
         if input_comp.filtered_commands.is_empty() {
@@ -69,7 +69,7 @@ impl PopupComponent {
         let input_width = input_area
             .width
             .saturating_sub(layout.user_bubble_indent() as u16);
-        let popup_area = ratatui::layout::Rect {
+        let popup_area = crate::ui_compat::layout::Rect {
             x: input_left,
             y: input_area.y.saturating_sub(popup_height),
             width: input_width,
@@ -83,7 +83,7 @@ impl PopupComponent {
         &self,
         f: &mut Frame,
         input_comp: &crate::app::components::input::InputComponent,
-        area: ratatui::layout::Rect,
+        area: crate::ui_compat::layout::Rect,
         layout: UiLayout,
     ) {
         render_command_palette_local(f, input_comp, area, layout);
@@ -91,7 +91,7 @@ impl PopupComponent {
 }
 
 pub(crate) fn render_clipboard_notice_local(
-    f: &mut ratatui::Frame,
+    f: &mut crate::ui_compat::Frame,
     notice: &Option<ClipboardNotice>,
 ) {
     let Some(notice) = notice else {
@@ -111,7 +111,7 @@ pub(crate) fn render_clipboard_notice_local(
     let max_y = area.bottom().saturating_sub(height);
     let x = notice.x.saturating_add(1).clamp(area.x, max_x);
     let y = notice.y.saturating_sub(1).clamp(area.y, max_y);
-    let popup = ratatui::layout::Rect {
+    let popup = crate::ui_compat::layout::Rect {
         x,
         y,
         width,
@@ -135,7 +135,7 @@ pub(crate) fn render_clipboard_notice_local(
 fn render_command_palette_local(
     f: &mut Frame,
     input_comp: &crate::app::components::input::InputComponent,
-    area: ratatui::layout::Rect,
+    area: crate::ui_compat::layout::Rect,
     layout: UiLayout,
 ) {
     f.render_widget(Clear, area);

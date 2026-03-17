@@ -1,5 +1,5 @@
-use ratatui::layout::Rect;
-use ratatui::style::Color;
+use crate::ui_compat::layout::Rect;
+use crate::ui_compat::style::Color;
 
 pub(crate) const MAX_TOOL_OUTPUT_LEN: usize = 200;
 pub(crate) const MIN_DIFF_COLUMN_WIDTH: usize = 24;

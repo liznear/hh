@@ -1,4 +1,4 @@
-use ratatui::{backend::CrosstermBackend, Frame, Terminal};
+use crate::ui_compat::{backend::CrosstermBackend, Frame, Terminal};
 use std::io::Stdout;
 
 use super::FrameContext;
@@ -28,7 +28,7 @@ impl FrameContext for RatatuiFrameContext<'_> {
 
 impl super::TerminalBackend for RatatuiTerminal {
     fn size(&self) -> Result<(u16, u16), std::io::Error> {
-        let r = ratatui::Terminal::size(self)?;
+        let r = crate::ui_compat::Terminal::size(self)?;
         Ok((r.width, r.height))
     }
 }

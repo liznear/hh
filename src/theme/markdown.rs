@@ -1,8 +1,7 @@
 use std::sync::OnceLock;
 
-use ratatui::{
-    prelude::Stylize,
-    style::{Color, Style},
+use crate::ui_compat::{
+        style::{Color, Style},
     text::{Line, Span},
 };
 use syntect::{
@@ -10,7 +9,7 @@ use syntect::{
     highlighting::{Theme, ThemeSet},
     parsing::{SyntaxReference, SyntaxSet},
 };
-use syntect_tui::translate_style;
+
 
 pub fn markdown_to_lines_with_indent(
     markdown: &str,
@@ -531,7 +530,7 @@ fn highlight_code_block(code_lines: &[String], language: &str) -> Option<Vec<Vec
         let ranges = highlighter.highlight_line(line, syntax_set).ok()?;
         let mut spans = Vec::new();
         for (style, segment) in ranges {
-            let tui_style = translate_style(style).unwrap_or_else(|_| Style::default());
+            let tui_style = translate_style(style);
             spans.push(Span::styled(segment.to_string(), tui_style));
         }
         rendered.push(spans);
@@ -752,13 +751,13 @@ fn push_wrapped_text(line: &mut Vec<Span<'static>>, text: &str, style: Style) {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::style::Color;
+    use crate::ui_compat::style::Color;
 
     use super::{CODE_BLOCK_BG, markdown_to_lines_with_indent};
 
     const TEST_INDENT: &str = "    ";
 
-    fn line_text(line: &ratatui::text::Line<'_>) -> String {
+    fn line_text(line: &crate::ui_compat::text::Line<'_>) -> String {
         line.spans
             .iter()
             .map(|span| span.content.as_ref())
@@ -930,7 +929,7 @@ mod tests {
                 && span
                     .style
                     .add_modifier
-                    .contains(ratatui::style::Modifier::BOLD)
+                    .contains(crate::ui_compat::style::Modifier::BOLD)
         }));
         assert!(
             row.spans
@@ -938,4 +937,19 @@ mod tests {
                 .any(|span| span.content.contains("code") && span.style.fg == Some(Color::Yellow))
         );
     }
+}
+
+fn translate_style(style: syntect::highlighting::Style) -> crate::ui_compat::style::Style {
+    let fg = style.foreground;
+    let mut s = crate::ui_compat::style::Style::default().fg(crate::ui_compat::style::Color::Rgb(fg.r, fg.g, fg.b));
+    if style.font_style.contains(syntect::highlighting::FontStyle::BOLD) {
+        s = s.add_modifier(crate::ui_compat::style::Modifier::BOLD);
+    }
+    if style.font_style.contains(syntect::highlighting::FontStyle::ITALIC) {
+        s = s.add_modifier(crate::ui_compat::style::Modifier::ITALIC);
+    }
+    if style.font_style.contains(syntect::highlighting::FontStyle::UNDERLINE) {
+        s = s.add_modifier(crate::ui_compat::style::Modifier::UNDERLINED);
+    }
+    s
 }

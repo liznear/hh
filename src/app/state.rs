@@ -857,7 +857,7 @@ impl AppState {
         main_width.saturating_sub(2) as usize
     }
 
-    pub fn get_selected_text(&self, lines: &[ratatui::text::Line<'static>]) -> String {
+    pub fn get_selected_text(&self, lines: &[crate::ui_compat::text::Line<'static>]) -> String {
         if !self.text_selection.is_active() {
             return String::new();
         }
@@ -880,7 +880,7 @@ impl AppState {
             let line_text = line
                 .spans
                 .iter()
-                .map(|s| s.content.as_ref())
+                .map(|s| s.content.as_ref() as &str)
                 .collect::<String>();
 
             let (start_col, end_col) = if line_idx == start_idx && line_idx == end_idx {
@@ -1710,7 +1710,7 @@ impl App {
 
     pub fn process_area_scroll(
         &mut self,
-        terminal_rect: ratatui::layout::Rect,
+        terminal_rect: crate::ui_compat::layout::Rect,
         x: u16,
         y: u16,
         up_steps: usize,
@@ -2035,7 +2035,7 @@ impl App {
         }
     }
 
-    pub fn render_root(&mut self, f: &mut ratatui::Frame<'_>) {
+    pub fn render_root(&mut self, f: &mut crate::ui_compat::Frame<'_>) {
         crate::app::render::render_root_layout(f, self);
     }
 
@@ -2301,13 +2301,13 @@ mod tests {
 }
 
 impl App {
-    pub fn get_message_lines(&mut self, width: usize, height: usize) -> Vec<ratatui::text::Line<'static>> {
+    pub fn get_message_lines(&mut self, width: usize, height: usize) -> Vec<crate::ui_compat::text::Line<'static>> {
         let total_lines = self.messages.viewport.get_lines(&self.state, width).len();
         let scroll_offset = self.state.message_scroll.effective_offset(total_lines, height);
         self.messages.viewport.get_visible_lines(&self.state, width, height, scroll_offset).to_vec()
     }
 
-    pub fn get_sidebar_lines(&mut self, width: u16, height: usize) -> Vec<ratatui::text::Line<'static>> {
+    pub fn get_sidebar_lines(&mut self, width: u16, height: usize) -> Vec<crate::ui_compat::text::Line<'static>> {
         let lines = crate::app::components::sidebar::build_sidebar_lines(&self.state, &self.sidebar, width);
         let total_lines = lines.len();
         let scroll_offset = self.sidebar.scroll.effective_offset(total_lines, height);

@@ -1,4 +1,4 @@
-use ratatui::{
+use crate::ui_compat::{
     Frame,
     style::{Color, Style},
     text::{Line, Span, Text},
@@ -51,7 +51,7 @@ impl MessagesComponent {
         &mut self,
         f: &mut Frame,
         app: &AppState,
-        area: ratatui::layout::Rect,
+        area: crate::ui_compat::layout::Rect,
     ) {
         render_messages_local(f, app, self, area);
     }
@@ -64,7 +64,7 @@ fn render_messages_local(
     f: &mut Frame,
     app: &AppState,
     messages: &mut MessagesComponent,
-    area: ratatui::layout::Rect,
+    area: crate::ui_compat::layout::Rect,
 ) {
     let panel = Block::default().style(Style::default().bg(PAGE_BG));
     let inner = panel.inner(area);
@@ -137,7 +137,7 @@ fn highlight_line_range(line: &mut Line<'static>, start: usize, end: usize) {
     let mut cursor = 0usize;
 
     for span in original_spans {
-        let content = span.content.as_ref();
+        let content = span.content.as_ref() as &str;
         let span_len = content.chars().count();
         let span_start = cursor;
         let span_end = span_start + span_len;
@@ -184,7 +184,7 @@ fn highlight_line_range(line: &mut Line<'static>, start: usize, end: usize) {
 fn line_char_count(line: &Line<'static>) -> usize {
     line.spans
         .iter()
-        .map(|span| span.content.as_ref().chars().count())
+        .map(|span| (span.content.as_ref() as &str).chars().count())
         .sum()
 }
 

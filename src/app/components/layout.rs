@@ -1,6 +1,6 @@
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Style;
-use ratatui::widgets::Block;
+use crate::ui_compat::layout::{Constraint, Direction, Layout, Rect};
+use crate::ui_compat::style::Style;
+use crate::ui_compat::widgets::Block;
 
 use crate::app::components::input;
 use crate::app::state::AppState;
@@ -39,7 +39,7 @@ pub(crate) fn split_root_columns(area: Rect, layout: UiLayout) -> RootColumns {
     );
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
+        .constraints(&[
             Constraint::Min(40),
             Constraint::Length(layout.left_column_right_margin),
             Constraint::Length(layout.sidebar_width),
@@ -59,7 +59,7 @@ pub(crate) fn split_root_columns(area: Rect, layout: UiLayout) -> RootColumns {
 pub(crate) fn build_subagent_layout(main_area: Rect) -> SubagentLayout {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
+        .constraints(&[
             Constraint::Min(3),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -88,7 +88,7 @@ pub(crate) fn build_main_layout(app: &AppState, input_text: &str, main_area: Rec
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
+        .constraints(&[
             Constraint::Min(3),
             Constraint::Length(1),
             Constraint::Length(1),

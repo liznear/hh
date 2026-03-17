@@ -1,4 +1,4 @@
-use ratatui::layout::Rect;
+use crate::ui_compat::layout::Rect;
 
 use crate::app::components::commands::SlashCommand;
 use crate::app::events::{InputEvent, TuiEvent};
@@ -15,7 +15,7 @@ pub trait Component {
 
     fn render(
         &self,
-        _f: &mut ratatui::Frame<'_>,
+        _f: &mut crate::ui_compat::Frame<'_>,
         _area: Rect,
         _state: &crate::app::state::SessionContext,
     ) {

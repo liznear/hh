@@ -1,7 +1,6 @@
-use ratatui::{
+use crate::ui_compat::{
     Frame,
-    prelude::Stylize,
-    style::Style,
+        style::Style,
     text::{Line, Span, Text},
     widgets::{Block, Paragraph, Wrap},
 };
@@ -53,7 +52,7 @@ impl SidebarComponent {
         &mut self,
         f: &mut Frame,
         app: &AppState,
-        area: ratatui::layout::Rect,
+        area: crate::ui_compat::layout::Rect,
     ) {
         render_sidebar_local(f, app, self, area);
     }
@@ -62,10 +61,10 @@ impl SidebarComponent {
         &mut self,
         f: &mut Frame,
         app: &AppState,
-        sidebar_area: ratatui::layout::Rect,
+        sidebar_area: crate::ui_compat::layout::Rect,
         bottom_y: u16,
     ) {
-        let clipped_sidebar_area = ratatui::layout::Rect {
+        let clipped_sidebar_area = crate::ui_compat::layout::Rect {
             x: sidebar_area.x,
             y: sidebar_area.y,
             width: sidebar_area.width,
@@ -125,11 +124,11 @@ fn render_sidebar_local(
     f: &mut Frame,
     app: &AppState,
     sidebar_comp: &mut SidebarComponent,
-    area: ratatui::layout::Rect,
+    area: crate::ui_compat::layout::Rect,
 ) {
     let block = Block::default().style(Style::default().bg(SIDEBAR_BG));
     let inner = block.inner(area);
-    let content = ratatui::layout::Rect {
+    let content = crate::ui_compat::layout::Rect {
         x: inner.x.saturating_add(2).min(inner.right()),
         y: inner.y,
         width: inner.width.saturating_sub(2),

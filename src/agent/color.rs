@@ -1,4 +1,4 @@
-use ratatui::style::Color;
+use crate::ui_compat::style::Color;
 
 pub fn parse_color(s: &str) -> Option<Color> {
     match s.to_lowercase().as_str() {

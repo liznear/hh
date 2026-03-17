@@ -1,7 +1,6 @@
-use ratatui::{
+use crate::ui_compat::{
     Frame,
-    prelude::Stylize,
-    style::{Color, Style},
+        style::{Color, Style},
     text::{Line, Span},
     widgets::Block,
 };
@@ -366,7 +365,7 @@ fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usiz
         }
 
         spans.extend(line.spans.into_iter().map(|span| {
-            let style = span.style.add_modifier(ratatui::style::Modifier::DIM);
+            let style = span.style.add_modifier(crate::ui_compat::style::Modifier::DIM);
             Span::styled(span.content.into_owned(), style)
         }));
 

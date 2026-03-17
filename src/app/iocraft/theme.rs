@@ -1,8 +1,8 @@
 use iocraft::prelude::*;
 
-pub fn to_iocraft_color(color: ratatui::style::Color) -> Color {
+pub fn to_iocraft_color(color: crate::ui_compat::style::Color) -> Color {
     match color {
-        ratatui::style::Color::Rgb(r, g, b) => Color::Rgb { r, g, b },
+        crate::ui_compat::style::Color::Rgb(r, g, b) => Color::Rgb { r, g, b },
         _ => Color::Reset,
     }
 }

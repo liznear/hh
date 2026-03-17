@@ -72,8 +72,8 @@ impl UiRect {
     }
 }
 
-impl From<ratatui::layout::Rect> for UiRect {
-    fn from(rect: ratatui::layout::Rect) -> Self {
+impl From<crate::ui_compat::layout::Rect> for UiRect {
+    fn from(rect: crate::ui_compat::layout::Rect) -> Self {
         Self {
             x: rect.x,
             y: rect.y,
@@ -83,7 +83,7 @@ impl From<ratatui::layout::Rect> for UiRect {
     }
 }
 
-impl From<UiRect> for ratatui::layout::Rect {
+impl From<UiRect> for crate::ui_compat::layout::Rect {
     fn from(rect: UiRect) -> Self {
         Self {
             x: rect.x,
