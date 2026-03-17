@@ -47,7 +47,7 @@ where
         let blocking_tools = tool_registry
             .schemas()
             .iter()
-            .filter(|s| s.blocking.unwrap_or(true))
+            .filter(|s| s.blocking)
             .map(|s| s.name.clone())
             .collect();
         Self {
@@ -445,7 +445,7 @@ mod tests {
                     description: format!("{name} tool"),
                     capability: None,
                     mutating: None,
-                    blocking: Some(true),
+                    blocking: true,
                     parameters: serde_json::json!({}),
                 })
                 .collect()

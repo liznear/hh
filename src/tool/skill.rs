@@ -31,6 +31,7 @@ impl Tool for SkillTool {
             description: format_skill_description(&self.skills),
             capability: Some("read".to_string()),
             mutating: Some(false),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {

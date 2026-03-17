@@ -47,6 +47,7 @@ impl Tool for EditTool {
             description: "Edit a file by replacing an exact string".to_string(),
             capability: Some("edit".to_string()),
             mutating: Some(true),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {

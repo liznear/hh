@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+fn default_blocking() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -46,8 +50,8 @@ pub struct ToolSchema {
     pub capability: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mutating: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocking: Option<bool>,
+    #[serde(default = "default_blocking")]
+    pub blocking: bool,
     pub parameters: Value,
 }
 

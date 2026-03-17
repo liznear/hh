@@ -253,6 +253,7 @@ fn register_fs_unavailable_tools(tools: &mut HashMap<String, Arc<dyn Tool>>, err
                     description: description.to_string(),
                     capability: capability.clone(),
                     mutating,
+                    blocking: true,
                     parameters: serde_json::json!({
                         "type": "object",
                         "additionalProperties": true

@@ -115,6 +115,7 @@ fn request_with_tool() -> ProviderRequest {
             description: "Read a file".to_string(),
             capability: None,
             mutating: Some(false),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {"path": {"type": "string"}},

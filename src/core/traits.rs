@@ -1,7 +1,10 @@
-use crate::core::types::{Message, ProviderRequest, ProviderResponse, ProviderStreamEvent};
+use crate::core::types::Message;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+// Re-export Provider trait from hh-agent crate.
+pub use hh_agent::Provider;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalDecision {
@@ -30,31 +33,6 @@ pub struct ApprovalRequest {
 pub struct QueuedUserMessage {
     pub message: Message,
     pub message_index: Option<usize>,
-}
-
-#[async_trait]
-pub trait Provider: Send + Sync {
-    async fn complete(&self, req: ProviderRequest) -> anyhow::Result<ProviderResponse>;
-
-    async fn complete_stream<F>(
-        &self,
-        req: ProviderRequest,
-        mut on_event: F,
-    ) -> anyhow::Result<ProviderResponse>
-    where
-        F: FnMut(ProviderStreamEvent) + Send,
-    {
-        let response = self.complete(req).await?;
-        if let Some(thinking) = &response.thinking {
-            on_event(ProviderStreamEvent::ThinkingDelta(thinking.clone()));
-        }
-        if !response.assistant_message.content.is_empty() {
-            on_event(ProviderStreamEvent::AssistantDelta(
-                response.assistant_message.content.clone(),
-            ));
-        }
-        Ok(response)
-    }
 }
 
 #[async_trait]

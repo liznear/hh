@@ -90,6 +90,7 @@ impl Tool for TaskTool {
             ),
             capability: Some("task".to_string()),
             mutating: Some(false),
+            blocking: false,
             parameters: json!({
                 "type": "object",
                 "properties": {

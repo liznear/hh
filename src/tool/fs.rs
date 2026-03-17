@@ -310,6 +310,7 @@ impl Tool for FsRead {
             description: "Read a UTF-8 text file".to_string(),
             capability: Some("read".to_string()),
             mutating: Some(false),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -390,6 +391,7 @@ impl Tool for FsWrite {
             description: "Write UTF-8 text to file".to_string(),
             capability: Some("write".to_string()),
             mutating: Some(true),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -471,6 +473,7 @@ impl Tool for FsList {
             description: "List directory entries".to_string(),
             capability: Some("list".to_string()),
             mutating: Some(false),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -519,6 +522,7 @@ impl Tool for FsGlob {
             description: "Glob files".to_string(),
             capability: Some("glob".to_string()),
             mutating: Some(false),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {"pattern": {"type": "string"}},
@@ -568,6 +572,7 @@ impl Tool for FsGrep {
             description: "Search regex in files recursively".to_string(),
             capability: Some("grep".to_string()),
             mutating: Some(false),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {

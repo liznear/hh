@@ -203,7 +203,7 @@ fn message_to_rig(message: Message) -> anyhow::Result<Option<rig_message::Messag
                 }));
             }
             for attachment in message.attachments {
-                content.push(attachment.into());
+                content.push(attachment_to_rig(attachment));
             }
             let content = OneOrMany::many(content)
                 .map_err(|_| anyhow::anyhow!("user message cannot be empty"))?;
@@ -217,7 +217,7 @@ fn message_to_rig(message: Message) -> anyhow::Result<Option<rig_message::Messag
                 }));
             }
             for call in message.tool_calls {
-                content.push(call.into());
+                content.push(tool_call_to_rig(call));
             }
             let content = OneOrMany::many(content)
                 .map_err(|_| anyhow::anyhow!("assistant message cannot be empty"))?;
@@ -240,38 +240,34 @@ fn message_to_rig(message: Message) -> anyhow::Result<Option<rig_message::Messag
     }
 }
 
-impl From<MessageAttachment> for rig_message::UserContent {
-    fn from(value: MessageAttachment) -> Self {
-        match value {
-            MessageAttachment::Image {
-                media_type,
-                data_base64,
-            } => {
-                let url = format!("data:{media_type};base64,{data_base64}");
-                rig_message::UserContent::Image(rig_message::Image {
-                    data: rig_message::DocumentSourceKind::Url(url),
-                    media_type: None,
-                    detail: None,
-                    additional_params: None,
-                })
-            }
+fn attachment_to_rig(value: MessageAttachment) -> rig_message::UserContent {
+    match value {
+        MessageAttachment::Image {
+            media_type,
+            data_base64,
+        } => {
+            let url = format!("data:{media_type};base64,{data_base64}");
+            rig_message::UserContent::Image(rig_message::Image {
+                data: rig_message::DocumentSourceKind::Url(url),
+                media_type: None,
+                detail: None,
+                additional_params: None,
+            })
         }
     }
 }
 
-impl From<ToolCall> for rig_message::AssistantContent {
-    fn from(value: ToolCall) -> Self {
-        rig_message::AssistantContent::ToolCall(rig_message::ToolCall {
-            id: value.id,
-            call_id: None,
-            function: rig_message::ToolFunction {
-                name: value.name,
-                arguments: value.arguments,
-            },
-            signature: None,
-            additional_params: None,
-        })
-    }
+fn tool_call_to_rig(value: ToolCall) -> rig_message::AssistantContent {
+    rig_message::AssistantContent::ToolCall(rig_message::ToolCall {
+        id: value.id,
+        call_id: None,
+        function: rig_message::ToolFunction {
+            name: value.name,
+            arguments: value.arguments,
+        },
+        signature: None,
+        additional_params: None,
+    })
 }
 
 #[async_trait]

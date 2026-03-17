@@ -51,6 +51,7 @@ impl Tool for BashTool {
             description: "Run a shell command".to_string(),
             capability: Some("bash".to_string()),
             mutating: Some(true),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {

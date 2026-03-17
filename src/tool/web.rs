@@ -120,6 +120,7 @@ impl Tool for WebFetchTool {
             description: "Fetch content from a URL".to_string(),
             capability: Some("web".to_string()),
             mutating: Some(false),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -188,6 +189,7 @@ impl Tool for WebSearchTool {
             description: "Search the web for information. Returns search results with titles, snippets, and URLs.".to_string(),
             capability: Some("web".to_string()),
             mutating: Some(false),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {

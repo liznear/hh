@@ -60,6 +60,7 @@ impl Tool for TodoReadTool {
             description: "Read canonical todo list state".to_string(),
             capability: Some("todo_read".to_string()),
             mutating: Some(false),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {},
@@ -94,6 +95,7 @@ impl Tool for TodoWriteTool {
             description: "Set canonical todo list state".to_string(),
             capability: Some("todo_write".to_string()),
             mutating: Some(true),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {

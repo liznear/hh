@@ -76,6 +76,7 @@ impl Tool for QuestionTool {
             description: "Ask the user questions during execution.".to_string(),
             capability: Some("question".to_string()),
             mutating: Some(false),
+            blocking: true,
             parameters: json!({
                 "type": "object",
                 "properties": {
