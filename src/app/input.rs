@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 
-use crate::ui_compat::layout::Rect;
+use crate::app::ui::geometry::Rect;
 use base64::Engine;
 use crossterm::event::{self, KeyCode, KeyEventKind, KeyModifiers};
 
@@ -571,19 +571,17 @@ pub(crate) fn handle_mouse_click(
     actions: &mut Vec<crate::app::core::AppAction>,
     x: u16,
     y: u16,
-    terminal: &impl crate::app::runtime::TerminalBackend,
+    terminal_size: (u16, u16),
 ) {
-    if let Some(section_id) = screen_to_sidebar_header(app, sidebar, x, y, terminal) {
+    if let Some(section_id) = screen_to_sidebar_header(app, sidebar, x, y, terminal_size) {
         actions.push(crate::app::core::AppAction::ToggleSidebarSection(
             section_id.to_string(),
         ));
         return;
     }
 
-    if let Some((line, _column)) = screen_to_message_coords(app, messages, x, y, terminal)
-        && let Ok(size) = terminal.size()
-    {
-        let wrap_width = app.message_wrap_width(size.0);
+    if let Some((line, _column)) = screen_to_message_coords(app, messages, x, y, terminal_size) {
+        let wrap_width = app.message_wrap_width(terminal_size.0);
 
         if let Some(target) = app.task_session_target_at_visual_line(wrap_width, line) {
             actions.push(crate::app::core::AppAction::OpenSubagentSession {
@@ -595,7 +593,7 @@ pub(crate) fn handle_mouse_click(
         }
     }
 
-    if let Some((line, column)) = screen_to_message_coords(app, messages, x, y, terminal) {
+    if let Some((line, column)) = screen_to_message_coords(app, messages, x, y, terminal_size) {
         app.start_selection(line, column);
     }
 }
@@ -605,9 +603,9 @@ pub(crate) fn handle_mouse_drag(
     messages: &mut crate::app::components::messages::MessagesComponent,
     x: u16,
     y: u16,
-    terminal: &impl crate::app::runtime::TerminalBackend,
+    terminal_size: (u16, u16),
 ) {
-    if let Some((line, column)) = screen_to_message_coords(app, messages, x, y, terminal) {
+    if let Some((line, column)) = screen_to_message_coords(app, messages, x, y, terminal_size) {
         app.update_selection(line, column);
     }
 }
@@ -617,16 +615,14 @@ pub(crate) fn handle_mouse_release(
     messages: &mut crate::app::components::messages::MessagesComponent,
     x: u16,
     y: u16,
-    terminal: &impl crate::app::runtime::TerminalBackend,
+    terminal_size: (u16, u16),
 ) -> Option<crate::app::core::AppAction> {
     let mut action = None;
-    if let Some((line, column)) = screen_to_message_coords(app, messages, x, y, terminal) {
+    if let Some((line, column)) = screen_to_message_coords(app, messages, x, y, terminal_size) {
         app.update_selection(line, column);
     }
-    if app.text_selection.is_active()
-        && let Ok(size) = terminal.size()
-    {
-        if copy_selection_to_clipboard(app, messages, size.0) {
+    if app.text_selection.is_active() {
+        if copy_selection_to_clipboard(app, messages, terminal_size.0) {
             action = Some(crate::app::core::AppAction::ShowClipboardNotice { x, y });
         }
         app.clear_selection();
@@ -640,10 +636,9 @@ fn screen_to_message_coords(
     messages: &mut crate::app::components::messages::MessagesComponent,
     x: u16,
     y: u16,
-    terminal: &impl crate::app::runtime::TerminalBackend,
+    terminal_size: (u16, u16),
 ) -> Option<(usize, usize)> {
-    let size = terminal.size().ok()?;
-    let terminal_rect = crate::ui_compat::layout::Rect::new(0, 0, size.0, size.1);
+    let terminal_rect = crate::app::ui::geometry::Rect::new(0, 0, terminal_size.0, terminal_size.1);
     let layout_rects =
         crate::app::components::layout::compute_layout_rects(terminal_rect, app, &app.input);
 
@@ -655,7 +650,7 @@ fn screen_to_message_coords(
     let relative_y = (y - main_messages.y) as usize;
     let relative_x = (x - main_messages.x) as usize;
 
-    let wrap_width = app.message_wrap_width(size.0);
+    let wrap_width = app.message_wrap_width(terminal_size.0);
     let total_lines = messages.viewport.get_lines(app, wrap_width).len();
     let visible_height = main_messages.height as usize;
     let scroll_offset = app
@@ -673,10 +668,9 @@ fn screen_to_sidebar_header(
     sidebar: &crate::app::components::sidebar::SidebarComponent,
     x: u16,
     y: u16,
-    terminal: &impl crate::app::runtime::TerminalBackend,
+    terminal_size: (u16, u16),
 ) -> Option<&'static str> {
-    let size = terminal.size().ok()?;
-    let terminal_rect = crate::ui_compat::layout::Rect::new(0, 0, size.0, size.1);
+    let terminal_rect = crate::app::ui::geometry::Rect::new(0, 0, terminal_size.0, terminal_size.1);
     let layout_rects =
         crate::app::components::layout::compute_layout_rects(terminal_rect, app, &app.input);
     let sidebar_content = layout_rects.sidebar_content?;

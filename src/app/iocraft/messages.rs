@@ -1,10 +1,10 @@
 use super::utils::ui_line_to_mixed_text;
-use crate::app::ui::UiLine;
+use crate::app::ui::text::Line;
 use iocraft::prelude::*;
 
 #[derive(Default, Props)]
 pub struct MessagesPanelProps {
-    pub lines: Vec<UiLine>,
+    pub lines: Vec<Line>,
 }
 
 #[component]

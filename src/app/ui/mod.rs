@@ -1,6 +1,5 @@
 pub mod geometry;
-pub mod primitives;
-pub mod ratatui_adapter;
+pub mod text;
 
 pub use geometry::*;
-pub use primitives::*;
+pub use text::*;

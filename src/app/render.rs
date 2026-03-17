@@ -1,15 +1,9 @@
-use crate::ui_compat::{
-    Frame,
-    style::{Color, Style},
-    text::{Line, Span},
-    widgets::Block,
-};
+use crate::app::ui::text::{Color, Line, Span, Style};
 use serde::Deserialize;
 use serde_json::Value;
 use std::iter::Peekable;
 
 use crate::app::chat_state::ChatMessage;
-use crate::app::core::Component;
 use crate::app::state::AppState;
 pub(crate) use crate::theme::colors::UiLayout;
 use crate::theme::colors::*;
@@ -38,96 +32,20 @@ struct TaskToolRenderOutput {
     finished_at: Option<u64>,
 }
 
-pub(crate) fn render_root_layout(f: &mut Frame, mvu_app: &mut crate::app::state::App) {
-    let layout = UiLayout::default();
-    f.render_widget(
-        Block::default().style(Style::default().bg(PAGE_BG)),
-        f.area(),
-    );
-
-    let root_layout = crate::app::components::layout::split_root_columns(f.area(), layout);
-    let main_area = root_layout.main_area;
-    let sidebar_area = root_layout.sidebar_area;
-
-    if mvu_app.state.is_viewing_subagent_session() {
-        let subagent_layout = crate::app::components::layout::build_subagent_layout(main_area);
-
-        mvu_app
-            .messages
-            .render_messages(f, &mvu_app.state, subagent_layout.messages_area);
-        mvu_app.input.render_subagent_back_indicator(
-            f,
-            &mvu_app.state,
-            subagent_layout.back_indicator_area,
-            layout,
-        );
-
-        if let Some(area) = sidebar_area {
-            mvu_app.sidebar.render_sidebar_clipped_to_bottom(
-                f,
-                &mvu_app.state,
-                area,
-                subagent_layout.back_indicator_area.bottom(),
-            );
-        }
-
-        mvu_app.popups.render(f, f.area(), &mvu_app.state.context);
-
-        return;
-    }
-
-    let main_layout = crate::app::components::layout::build_main_layout(
-        &mvu_app.state,
-        &mvu_app.input.text,
-        main_area,
-    );
-
-    mvu_app
-        .messages
-        .render_messages(f, &mvu_app.state, main_layout.messages_area);
-    mvu_app.input.render_processing_indicator(
-        f,
-        &mvu_app.state,
-        main_layout.processing_area,
-        layout,
-    );
-    mvu_app
-        .input
-        .render_input(f, &mvu_app.state, main_layout.input_area, layout);
-
-    mvu_app.popups.render_command_palette_above_input(
-        f,
-        &mvu_app.input,
-        main_layout.input_area,
-        layout,
-    );
-
-    if let Some(area) = sidebar_area {
-        mvu_app.sidebar.render_sidebar_clipped_to_bottom(
-            f,
-            &mvu_app.state,
-            area,
-            main_layout.input_area.bottom(),
-        );
-    }
-
-    mvu_app.popups.render(f, f.area(), &mvu_app.state.context);
-}
-
 /// Build message lines (used for caching and scroll bounds)
-pub fn build_message_lines(app: &AppState, width: usize) -> Vec<Line<'static>> {
+pub fn build_message_lines(app: &AppState, width: usize) -> Vec<Line> {
     build_message_lines_with_starts(app, width).0
 }
 
 pub(crate) fn build_message_lines_with_starts(
     app: &AppState,
     width: usize,
-) -> (Vec<Line<'static>>, Vec<usize>) {
+) -> (Vec<Line>, Vec<usize>) {
     build_message_lines_impl(app, width, UiLayout::default())
 }
 
 pub(crate) fn append_message_lines_for_index(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     app: &AppState,
     width: usize,
     idx: usize,
@@ -173,7 +91,7 @@ fn build_message_lines_impl(
     app: &AppState,
     width: usize,
     layout: UiLayout,
-) -> (Vec<Line<'static>>, Vec<usize>) {
+) -> (Vec<Line>, Vec<usize>) {
     // Get agent color for user message borders
     let border_color = if app.has_pending_question() {
         QUESTION_BORDER
@@ -223,7 +141,7 @@ struct MessageRenderContext<'a> {
 }
 
 fn render_message_line_item(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     app: &AppState,
     idx: usize,
     msg: &ChatMessage,
@@ -326,15 +244,15 @@ fn render_message_line_item(
 }
 
 /// Parse markdown text into styled lines with wrapping
-fn parse_markdown_lines(text: &str, width: usize, indent: &str) -> Vec<Line<'static>> {
+fn parse_markdown_lines(text: &str, width: usize, indent: &str) -> Vec<Line> {
     markdown_to_lines_with_indent(text, width, indent)
 }
 
-fn parse_markdown_lines_unindented(text: &str, width: usize) -> Vec<Line<'static>> {
+fn parse_markdown_lines_unindented(text: &str, width: usize) -> Vec<Line> {
     markdown_to_lines_with_indent(text, width, "")
 }
 
-fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usize, indent: &str) {
+fn render_thinking_block(lines: &mut Vec<Line>, text: &str, width: usize, indent: &str) {
     ensure_single_blank_line(lines);
 
     let text = text.trim_end_matches(['\n', '\r']);
@@ -365,10 +283,8 @@ fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usiz
         }
 
         spans.extend(line.spans.into_iter().map(|span| {
-            let style = span
-                .style
-                .add_modifier(crate::ui_compat::style::Modifier::DIM);
-            Span::styled(span.content.into_owned(), style)
+            let style = span.style.add_modifier(crate::app::ui::text::Modifier::DIM);
+            Span::styled(span.content, style)
         }));
 
         lines.push(Line::from(spans));
@@ -378,7 +294,7 @@ fn render_thinking_block(lines: &mut Vec<Line<'static>>, text: &str, width: usiz
 }
 
 fn render_compaction_block(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     summary: Option<&str>,
     width: usize,
     indent: &str,
@@ -418,7 +334,7 @@ struct FooterBlock<'a> {
 }
 
 fn render_footer_block(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     footer: FooterBlock<'_>,
     indent: &str,
     agent: Option<&crate::app::chat_state::AgentOptionView>,
@@ -437,7 +353,7 @@ fn render_footer_block(
     };
 
     // Build footer parts: symbol, agent name, provider, model, duration, interrupted
-    let mut footer_parts: Vec<Span<'static>> = vec![
+    let mut footer_parts: Vec<Span> = vec![
         Span::styled(status_symbol, Style::default().fg(status_color)),
         Span::raw("  "),
         Span::styled(
@@ -522,10 +438,10 @@ fn wrap_compact_text(text: &str, width: usize) -> Vec<String> {
 }
 
 fn push_wrapped_tool_rows(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     wrapped: &[String],
-    first_prefix: Vec<Span<'static>>,
-    continuation_prefix: Vec<Span<'static>>,
+    first_prefix: Vec<Span>,
+    continuation_prefix: Vec<Span>,
     text_style: Style,
 ) {
     for (index, text) in wrapped.iter().enumerate() {
@@ -570,7 +486,7 @@ struct CompletedToolCall<'a> {
 }
 
 fn render_tool_call_message(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     message: ToolCallMessage<'_>,
     context: ToolRenderContext<'_>,
 ) {
@@ -617,7 +533,7 @@ fn render_tool_call_message(
 }
 
 fn render_completed_tool_call(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     completed: CompletedToolCall<'_>,
     context: ToolRenderContext<'_>,
 ) {
@@ -654,7 +570,7 @@ fn render_completed_tool_call(
 }
 
 fn render_tool_error_detail(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     output: Option<&str>,
     context: ToolRenderContext<'_>,
 ) {
@@ -735,7 +651,7 @@ fn extract_error_message_from_json(value: &Value) -> Option<String> {
 }
 
 fn render_pending_tool_call(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     tool_name: &str,
     label: &str,
     args: &str,
@@ -827,7 +743,7 @@ fn title_case(name: &str) -> String {
 }
 
 fn render_edit_diff_block(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     tool_name: &str,
     output: &str,
     available_width: usize,
@@ -893,7 +809,7 @@ fn render_edit_diff_block(
 }
 
 fn render_edit_diff_block_single_column(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     diff: &str,
     available_width: usize,
     layout: UiLayout,
@@ -946,7 +862,7 @@ fn render_edit_diff_block_single_column(
 }
 
 fn render_user_message_block(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     text: &str,
     queued: bool,
     width: usize,
@@ -996,11 +912,7 @@ fn render_user_message_block(
     lines.push(Line::from(""));
 }
 
-fn build_user_bubble_tag_line(
-    content_width: usize,
-    layout: UiLayout,
-    border_color: Color,
-) -> Line<'static> {
+fn build_user_bubble_tag_line(content_width: usize, layout: UiLayout, border_color: Color) -> Line {
     let tag_text = " queued ";
     let tag_width = tag_text.chars().count();
     let bubble_padding = " ".repeat(layout.user_bubble_inner_padding);
@@ -1026,7 +938,7 @@ fn build_user_bubble_tag_line(
     ])
 }
 
-fn ensure_single_blank_line(lines: &mut Vec<Line<'static>>) {
+fn ensure_single_blank_line(lines: &mut Vec<Line>) {
     if lines.is_empty() {
         return;
     }
@@ -1038,7 +950,7 @@ fn ensure_single_blank_line(lines: &mut Vec<Line<'static>>) {
     lines.push(Line::from(""));
 }
 
-fn line_is_empty(line: &Line<'_>) -> bool {
+fn line_is_empty(line: &Line) -> bool {
     line.spans.iter().all(|span| span.content.is_empty())
 }
 
@@ -1047,7 +959,7 @@ fn build_user_bubble_line(
     content_width: usize,
     layout: UiLayout,
     border_color: Color,
-) -> Line<'static> {
+) -> Line {
     let trimmed = truncate_chars(
         content,
         content_width.saturating_sub(layout.user_bubble_inner_padding * 2),
@@ -1282,7 +1194,7 @@ fn take_next_line_number(line_number: &mut Option<usize>) -> Option<usize> {
 }
 
 fn render_side_by_side_diff_row(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     row: &SideBySideDiffRow,
     left_width: usize,
     right_width: usize,

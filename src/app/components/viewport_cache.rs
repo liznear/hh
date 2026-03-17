@@ -1,4 +1,4 @@
-use crate::ui_compat::text::Line;
+use crate::app::ui::text::Line;
 
 use crate::app::chat_state::SelectionPosition;
 use crate::app::state::AppState;
@@ -25,9 +25,9 @@ pub struct MessageViewportCache {
     // Invalidated by: mark_full_dirty/mark_tail_dirty, App message generation changes,
     // and width/viewport/selection changes.
     // Fallback behavior: full rebuild via build_message_lines_with_starts.
-    cached_lines: Vec<Line<'static>>,
+    cached_lines: Vec<Line>,
     cached_message_starts: Vec<usize>,
-    cached_visible_lines: Vec<Line<'static>>,
+    cached_visible_lines: Vec<Line>,
     cached_width: usize,
     needs_rebuild: bool,
     message_dirty_hint: MessageDirtyHint,
@@ -51,7 +51,7 @@ impl MessageViewportCache {
         }
     }
 
-    pub fn get_lines(&mut self, app: &AppState, width: usize) -> &Vec<Line<'static>> {
+    pub fn get_lines(&mut self, app: &AppState, width: usize) -> &Vec<Line> {
         let app_generation = app.message_cache_generation();
         if app_generation != self.app_message_generation {
             self.mark_full_dirty();
@@ -111,7 +111,7 @@ impl MessageViewportCache {
         wrap_width: usize,
         visible_height: usize,
         scroll_offset: usize,
-    ) -> &Vec<Line<'static>> {
+    ) -> &Vec<Line> {
         self.get_lines(app, wrap_width);
 
         let key = VisibleCacheKey {

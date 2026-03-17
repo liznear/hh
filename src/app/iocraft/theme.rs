@@ -1,8 +1,8 @@
 use iocraft::prelude::*;
 
-pub fn to_iocraft_color(color: crate::ui_compat::style::Color) -> Color {
+pub fn to_iocraft_color(color: crate::app::ui::text::Color) -> Color {
     match color {
-        crate::ui_compat::style::Color::Rgb(r, g, b) => Color::Rgb { r, g, b },
+        crate::app::ui::text::Color::Rgb(r, g, b) => Color::Rgb { r, g, b },
         _ => Color::Reset,
     }
 }

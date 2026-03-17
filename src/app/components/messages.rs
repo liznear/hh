@@ -1,13 +1,9 @@
-use crate::ui_compat::{
-    Frame,
-    style::{Color, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Paragraph},
-};
-
 use crate::app::chat_state::{ScrollState, TextSelection};
 use crate::app::components::viewport_cache::MessageViewportCache;
+use crate::app::core::{AppAction, Component};
 use crate::app::state::AppState;
+use crate::app::ui::text::{Color, Line, Span, Style};
+use crate::theme::colors::*;
 
 pub struct MessagesComponent {
     pub viewport: MessageViewportCache,
@@ -46,59 +42,7 @@ impl Component for MessagesComponent {
     }
 }
 
-impl MessagesComponent {
-    pub(crate) fn render_messages(
-        &mut self,
-        f: &mut Frame,
-        app: &AppState,
-        area: crate::ui_compat::layout::Rect,
-    ) {
-        render_messages_local(f, app, self, area);
-    }
-}
-
-use crate::app::core::{AppAction, Component};
-use crate::theme::colors::*;
-
-fn render_messages_local(
-    f: &mut Frame,
-    app: &AppState,
-    messages: &mut MessagesComponent,
-    area: crate::ui_compat::layout::Rect,
-) {
-    let panel = Block::default().style(Style::default().bg(PAGE_BG));
-    let inner = panel.inner(area);
-    f.render_widget(panel, area);
-
-    let content = inner;
-
-    let wrap_width = content.width as usize;
-    let visible_height = content.height as usize;
-
-    let lines = messages.viewport.get_lines(app, wrap_width);
-    let total_lines = lines.len();
-
-    let scroll_offset = app
-        .message_scroll
-        .effective_offset(total_lines, visible_height);
-
-    let rendered_lines =
-        messages
-            .viewport
-            .get_visible_lines(app, wrap_width, visible_height, scroll_offset);
-    let text = Text::from(rendered_lines.clone());
-    let paragraph = Paragraph::new(text)
-        .style(Style::default().bg(PAGE_BG).fg(TEXT_PRIMARY))
-        .scroll((0, 0));
-
-    f.render_widget(paragraph, content);
-}
-
-pub(crate) fn apply_selection_highlight(
-    lines: &mut [Line<'static>],
-    app: &AppState,
-    line_offset: usize,
-) {
+pub(crate) fn apply_selection_highlight(lines: &mut [Line], app: &AppState, line_offset: usize) {
     let Some((start, end)) = app.text_selection.get_range() else {
         return;
     };
@@ -131,7 +75,7 @@ pub(crate) fn apply_selection_highlight(
     }
 }
 
-fn highlight_line_range(line: &mut Line<'static>, start: usize, end: usize) {
+fn highlight_line_range(line: &mut Line, start: usize, end: usize) {
     let original_spans = std::mem::take(&mut line.spans);
     let mut highlighted = Vec::with_capacity(original_spans.len() + 2);
     let mut cursor = 0usize;
@@ -181,7 +125,7 @@ fn highlight_line_range(line: &mut Line<'static>, start: usize, end: usize) {
     line.spans = highlighted;
 }
 
-fn line_char_count(line: &Line<'static>) -> usize {
+fn line_char_count(line: &Line) -> usize {
     line.spans
         .iter()
         .map(|span| (span.content.as_ref() as &str).chars().count())

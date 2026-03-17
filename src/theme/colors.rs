@@ -1,5 +1,6 @@
-use crate::ui_compat::layout::Rect;
-use crate::ui_compat::style::Color;
+#![allow(dead_code)]
+use crate::app::ui::geometry::Rect;
+use crate::app::ui::text::Color;
 
 pub(crate) const MAX_TOOL_OUTPUT_LEN: usize = 200;
 pub(crate) const MIN_DIFF_COLUMN_WIDTH: usize = 24;

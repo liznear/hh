@@ -1,9 +1,4 @@
-use crate::ui_compat::{
-    Frame,
-    style::Style,
-    text::{Line, Span, Text},
-    widgets::{Block, Paragraph, Wrap},
-};
+use crate::app::ui::text::{Line, Span, Style};
 use serde_json::Value;
 
 use crate::app::chat_state::ScrollState;
@@ -16,14 +11,6 @@ use std::collections::HashSet;
 pub struct SidebarComponent {
     pub scroll: ScrollState,
     pub folded_sections: HashSet<String>,
-    // Cache key inputs: `cached_width` + `cached_app_generation` + `needs_rebuild`.
-    // Invalidated by: fold/unfold actions (mark_dirty), message generation changes,
-    // and width changes observed at render time.
-    // Fallback behavior: rebuild full sidebar lines from current AppState.
-    pub cached_lines: Vec<Line<'static>>,
-    pub cached_width: u16,
-    pub cached_app_generation: u64,
-    pub needs_rebuild: bool,
 }
 
 impl Default for SidebarComponent {
@@ -31,10 +18,6 @@ impl Default for SidebarComponent {
         Self {
             scroll: ScrollState::new(false),
             folded_sections: HashSet::new(),
-            cached_lines: Vec::new(),
-            cached_width: 0,
-            cached_app_generation: 0,
-            needs_rebuild: true,
         }
     }
 }
@@ -44,39 +27,7 @@ impl SidebarComponent {
         self.folded_sections.contains(section_id)
     }
 
-    pub fn mark_dirty(&mut self) {
-        self.needs_rebuild = true;
-    }
-
-    pub(crate) fn render_sidebar(
-        &mut self,
-        f: &mut Frame,
-        app: &AppState,
-        area: crate::ui_compat::layout::Rect,
-    ) {
-        render_sidebar_local(f, app, self, area);
-    }
-
-    pub(crate) fn render_sidebar_clipped_to_bottom(
-        &mut self,
-        f: &mut Frame,
-        app: &AppState,
-        sidebar_area: crate::ui_compat::layout::Rect,
-        bottom_y: u16,
-    ) {
-        let clipped_sidebar_area = crate::ui_compat::layout::Rect {
-            x: sidebar_area.x,
-            y: sidebar_area.y,
-            width: sidebar_area.width,
-            height: bottom_y.saturating_sub(sidebar_area.y),
-        };
-
-        if clipped_sidebar_area.width == 0 || clipped_sidebar_area.height == 0 {
-            return;
-        }
-
-        self.render_sidebar(f, app, clipped_sidebar_area);
-    }
+    pub fn mark_dirty(&mut self) {}
 }
 
 impl Component for SidebarComponent {
@@ -101,11 +52,6 @@ impl Component for SidebarComponent {
                 self.mark_dirty();
                 Some(AppAction::Redraw)
             }
-            AppAction::Redraw | AppAction::PeriodicTick => {
-                // Since this runs during update, we can't rebuild cache yet until render provides width.
-                // It just tells us state changed somewhere.
-                None
-            }
             _ => None,
         }
     }
@@ -120,51 +66,11 @@ pub(crate) struct SidebarSectionHeaderHitbox {
     pub(crate) title_width: u16,
 }
 
-fn render_sidebar_local(
-    f: &mut Frame,
-    app: &AppState,
-    sidebar_comp: &mut SidebarComponent,
-    area: crate::ui_compat::layout::Rect,
-) {
-    let block = Block::default().style(Style::default().bg(SIDEBAR_BG));
-    let inner = block.inner(area);
-    let content = crate::ui_compat::layout::Rect {
-        x: inner.x.saturating_add(2).min(inner.right()),
-        y: inner.y,
-        width: inner.width.saturating_sub(2),
-        height: inner.height,
-    };
-    f.render_widget(block, area);
-
-    let app_generation = app.message_cache_generation();
-    let needs_rebuild = sidebar_comp.needs_rebuild
-        || sidebar_comp.cached_width != content.width
-        || sidebar_comp.cached_app_generation != app_generation;
-    if needs_rebuild {
-        let lines = build_sidebar_lines(app, sidebar_comp, content.width);
-        sidebar_comp.cached_lines = lines;
-        sidebar_comp.cached_width = content.width;
-        sidebar_comp.cached_app_generation = app_generation;
-        sidebar_comp.needs_rebuild = false;
-    }
-
-    let lines_ref = &sidebar_comp.cached_lines;
-    let scroll_offset = sidebar_comp
-        .scroll
-        .effective_offset(lines_ref.len(), content.height as usize);
-
-    let sidebar = Paragraph::new(Text::from(lines_ref.to_vec()))
-        .style(Style::default().bg(SIDEBAR_BG))
-        .wrap(Wrap { trim: true })
-        .scroll((scroll_offset as u16, 0));
-    f.render_widget(sidebar, content);
-}
-
 pub(crate) fn build_sidebar_lines(
     app: &AppState,
     sidebar: &SidebarComponent,
     content_width: u16,
-) -> Vec<Line<'static>> {
+) -> Vec<Line> {
     build_sidebar_model(app, sidebar, content_width).lines
 }
 
@@ -180,7 +86,7 @@ struct SidebarSection {
     id: &'static str,
     title: String,
     title_style: Style,
-    body_lines: Vec<Line<'static>>,
+    body_lines: Vec<Line>,
 }
 
 impl SidebarSection {
@@ -190,7 +96,7 @@ impl SidebarSection {
 }
 
 struct SidebarRenderModel {
-    lines: Vec<Line<'static>>,
+    lines: Vec<Line>,
     hitboxes: Vec<SidebarSectionHeaderHitbox>,
 }
 
@@ -219,7 +125,7 @@ fn build_sidebar_model(
 
     let directory_text =
         format_sidebar_directory(&app.cwd.display().to_string(), app.git_branch.as_deref());
-    let mut lines: Vec<Line<'static>> = vec![Line::from("")];
+    let mut lines: Vec<Line> = vec![Line::from("")];
     let mut hitboxes = Vec::new();
 
     lines.push(Line::from(Span::styled(
@@ -438,7 +344,7 @@ fn parse_modified_file_summary(output: &str) -> Option<ModifiedFileSummary> {
 }
 
 fn append_modified_file_list(
-    lines: &mut Vec<Line<'static>>,
+    lines: &mut Vec<Line>,
     files: &[ModifiedFileSummary],
     content_width: usize,
 ) {
@@ -497,7 +403,7 @@ fn append_modified_file_list(
     }
 }
 
-fn append_sidebar_list(lines: &mut Vec<Line<'static>>, items: &[TodoItemView], max_items: usize) {
+fn append_sidebar_list(lines: &mut Vec<Line>, items: &[TodoItemView], max_items: usize) {
     if max_items == 0 {
         return;
     }

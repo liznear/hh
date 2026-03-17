@@ -9,4 +9,3 @@ pub mod safety;
 pub mod session;
 pub mod theme;
 pub mod tool;
-pub mod ui_compat;

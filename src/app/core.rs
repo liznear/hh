@@ -1,4 +1,4 @@
-use crate::ui_compat::layout::Rect;
+use crate::app::ui::geometry::Rect;
 
 use crate::app::components::commands::SlashCommand;
 use crate::app::events::{InputEvent, TuiEvent};
@@ -15,7 +15,7 @@ pub trait Component {
 
     fn render(
         &self,
-        _f: &mut crate::ui_compat::Frame<'_>,
+        _f: &mut crate::app::ui::geometry::Rect,
         _area: Rect,
         _state: &crate::app::state::SessionContext,
     ) {

@@ -857,7 +857,7 @@ impl AppState {
         main_width.saturating_sub(2) as usize
     }
 
-    pub fn get_selected_text(&self, lines: &[crate::ui_compat::text::Line<'static>]) -> String {
+    pub fn get_selected_text(&self, lines: &[crate::app::ui::text::Line]) -> String {
         if !self.text_selection.is_active() {
             return String::new();
         }
@@ -1710,7 +1710,7 @@ impl App {
 
     pub fn process_area_scroll(
         &mut self,
-        terminal_rect: crate::ui_compat::layout::Rect,
+        terminal_size_rect: crate::app::ui::geometry::Rect,
         x: u16,
         y: u16,
         up_steps: usize,
@@ -1722,7 +1722,7 @@ impl App {
             &mut self.messages,
             &self.sidebar,
             &mut actions,
-            terminal_rect,
+            terminal_size_rect,
             x,
             y,
             up_steps,
@@ -1737,7 +1737,7 @@ impl App {
         &mut self,
         x: u16,
         y: u16,
-        terminal: &impl crate::app::runtime::TerminalBackend,
+        terminal_size: (u16, u16),
         settings: &crate::config::Settings,
         cwd: &std::path::Path,
         event_sender: &crate::app::events::TuiEventSender,
@@ -1750,34 +1750,30 @@ impl App {
             &mut actions,
             x,
             y,
-            terminal,
+            terminal_size,
         );
         for action in actions {
             self.dispatch_with_runtime(action, settings, cwd, event_sender);
         }
     }
 
-    pub fn process_mouse_drag(
-        &mut self,
-        x: u16,
-        y: u16,
-        terminal: &impl crate::app::runtime::TerminalBackend,
-    ) {
-        crate::app::input::handle_mouse_drag(&mut self.state, &mut self.messages, x, y, terminal);
+    pub fn process_mouse_drag(&mut self, x: u16, y: u16, terminal_size: (u16, u16)) {
+        crate::app::input::handle_mouse_drag(
+            &mut self.state,
+            &mut self.messages,
+            x,
+            y,
+            terminal_size,
+        );
     }
 
-    pub fn process_mouse_release(
-        &mut self,
-        x: u16,
-        y: u16,
-        terminal: &impl crate::app::runtime::TerminalBackend,
-    ) {
+    pub fn process_mouse_release(&mut self, x: u16, y: u16, terminal_size: (u16, u16)) {
         if let Some(action) = crate::app::input::handle_mouse_release(
             &mut self.state,
             &mut self.messages,
             x,
             y,
-            terminal,
+            terminal_size,
         ) {
             self.dispatch(action);
         }
@@ -2043,10 +2039,6 @@ impl App {
                 self.state.needs_redraw = true;
             }
         }
-    }
-
-    pub fn render_root(&mut self, f: &mut crate::ui_compat::Frame<'_>) {
-        crate::app::render::render_root_layout(f, self);
     }
 
     pub fn take_needs_redraw(&mut self) -> bool {
@@ -2315,7 +2307,7 @@ impl App {
         &mut self,
         width: usize,
         height: usize,
-    ) -> Vec<crate::ui_compat::text::Line<'static>> {
+    ) -> Vec<crate::app::ui::text::Line> {
         let total_lines = self.messages.viewport.get_lines(&self.state, width).len();
         let scroll_offset = self
             .state
@@ -2331,7 +2323,7 @@ impl App {
         &mut self,
         width: u16,
         height: usize,
-    ) -> Vec<crate::ui_compat::text::Line<'static>> {
+    ) -> Vec<crate::app::ui::text::Line> {
         let lines =
             crate::app::components::sidebar::build_sidebar_lines(&self.state, &self.sidebar, width);
         let total_lines = lines.len();

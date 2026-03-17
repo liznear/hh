@@ -1,12 +1,12 @@
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct UiRect {
+pub struct Rect {
     pub x: u16,
     pub y: u16,
     pub width: u16,
     pub height: u16,
 }
 
-impl UiRect {
+impl Rect {
     pub fn new(x: u16, y: u16, width: u16, height: u16) -> Self {
         Self {
             x,
@@ -72,24 +72,33 @@ impl UiRect {
     }
 }
 
-impl From<crate::ui_compat::layout::Rect> for UiRect {
-    fn from(rect: crate::ui_compat::layout::Rect) -> Self {
-        Self {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-        }
-    }
+#[derive(Clone, Copy, Debug)]
+pub enum Constraint {
+    Length(u16),
+    Min(u16),
+    Max(u16),
+    Percentage(u16),
 }
 
-impl From<UiRect> for crate::ui_compat::layout::Rect {
-    fn from(rect: UiRect) -> Self {
-        Self {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-        }
+#[derive(Clone, Copy, Debug)]
+pub enum Direction {
+    Horizontal,
+    Vertical,
+}
+
+pub struct Layout;
+impl Layout {
+    #[allow(clippy::should_implement_trait)]
+    pub fn default() -> Self {
+        Self
+    }
+    pub fn direction(self, _d: Direction) -> Self {
+        self
+    }
+    pub fn constraints(self, _c: &[Constraint]) -> Self {
+        self
+    }
+    pub fn split(self, r: Rect) -> std::rc::Rc<[Rect]> {
+        std::rc::Rc::new([r, r, r, r, r, r, r, r])
     }
 }

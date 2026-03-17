@@ -50,7 +50,7 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                         mvu_app.process_paste(text);
                     }
                     crate::app::events::InputEvent::ScrollUp { x, y } => {
-                        let terminal_rect = crate::ui_compat::layout::Rect {
+                        let terminal_rect = crate::app::ui::geometry::Rect {
                             x: 0,
                             y: 0,
                             width: term_size.0,
@@ -59,7 +59,7 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                         mvu_app.process_area_scroll(terminal_rect, x, y, 3, 0);
                     }
                     crate::app::events::InputEvent::ScrollDown { x, y } => {
-                        let terminal_rect = crate::ui_compat::layout::Rect {
+                        let terminal_rect = crate::app::ui::geometry::Rect {
                             x: 0,
                             y: 0,
                             width: term_size.0,
@@ -68,41 +68,20 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                         mvu_app.process_area_scroll(terminal_rect, x, y, 0, 3);
                     }
                     crate::app::events::InputEvent::MouseClick { x, y } => {
-                        struct DummyTerm(u16, u16);
-                        impl crate::app::runtime::TerminalBackend for DummyTerm {
-                            fn size(&self) -> Result<(u16, u16), std::io::Error> {
-                                Ok((self.0, self.1))
-                            }
-                        }
-                        let dummy_term = DummyTerm(term_size.0, term_size.1);
                         mvu_app.process_mouse_click(
                             x,
                             y,
-                            &dummy_term,
+                            term_size,
                             &runner.settings,
                             &runner.cwd,
                             &runner.event_sender,
                         );
                     }
                     crate::app::events::InputEvent::MouseDrag { x, y } => {
-                        struct DummyTerm(u16, u16);
-                        impl crate::app::runtime::TerminalBackend for DummyTerm {
-                            fn size(&self) -> Result<(u16, u16), std::io::Error> {
-                                Ok((self.0, self.1))
-                            }
-                        }
-                        let dummy_term = DummyTerm(term_size.0, term_size.1);
-                        mvu_app.process_mouse_drag(x, y, &dummy_term);
+                        mvu_app.process_mouse_drag(x, y, term_size);
                     }
                     crate::app::events::InputEvent::MouseRelease { x, y } => {
-                        struct DummyTerm(u16, u16);
-                        impl crate::app::runtime::TerminalBackend for DummyTerm {
-                            fn size(&self) -> Result<(u16, u16), std::io::Error> {
-                                Ok((self.0, self.1))
-                            }
-                        }
-                        let dummy_term = DummyTerm(term_size.0, term_size.1);
-                        mvu_app.process_mouse_release(x, y, &dummy_term);
+                        mvu_app.process_mouse_release(x, y, term_size);
                     }
                     _ => {}
                 }
@@ -166,10 +145,7 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let messages_width = width.saturating_sub(layout.sidebar_width + 3) as usize;
 
     let ratatui_lines = mvu_app.get_message_lines(messages_width, messages_height);
-    let ui_lines: Vec<crate::app::ui::UiLine> = ratatui_lines
-        .iter()
-        .map(crate::app::ui::ratatui_adapter::ratatui_line_to_ui)
-        .collect();
+    let ui_lines = ratatui_lines;
 
     element! {
         View(
@@ -203,7 +179,7 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                 super::sidebar::Sidebar(
                     lines: {
                         let ratatui_lines = mvu_app.get_sidebar_lines(layout.sidebar_width, messages_height);
-                        ratatui_lines.iter().map(crate::app::ui::ratatui_adapter::ratatui_line_to_ui).collect::<Vec<_>>()
+                        ratatui_lines.into_iter().collect::<Vec<_>>()
                     }
                 )
             }

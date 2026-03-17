@@ -1,4 +1,4 @@
-use crate::ui_compat::style::Color;
+use crate::app::ui::text::Color;
 
 pub fn parse_color(s: &str) -> Option<Color> {
     match s.to_lowercase().as_str() {

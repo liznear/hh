@@ -1,20 +1,13 @@
 use std::sync::OnceLock;
 
-use crate::ui_compat::{
-    style::{Color, Style},
-    text::{Line, Span},
-};
+use crate::app::ui::text::{Color, Line, Span, Style};
 use syntect::{
     easy::HighlightLines,
     highlighting::{Theme, ThemeSet},
     parsing::{SyntaxReference, SyntaxSet},
 };
 
-pub fn markdown_to_lines_with_indent(
-    markdown: &str,
-    width: usize,
-    indent: &str,
-) -> Vec<Line<'static>> {
+pub fn markdown_to_lines_with_indent(markdown: &str, width: usize, indent: &str) -> Vec<Line> {
     let mut rendered = Vec::new();
     let mut in_code_block = false;
     let mut code_fence = CodeFence::default();
@@ -89,7 +82,7 @@ fn parse_code_fence(line: &str) -> Option<CodeFence> {
     })
 }
 
-fn render_text_line(line: &str, width: usize, indent: &str) -> Vec<Line<'static>> {
+fn render_text_line(line: &str, width: usize, indent: &str) -> Vec<Line> {
     let spans = parse_inline_markdown_spans(line);
     let wrapped = wrap_spans(&spans, width.saturating_sub(indent.chars().count()));
 
@@ -169,7 +162,7 @@ fn is_table_separator_cell(cell: &str) -> bool {
         && trimmed.chars().filter(|ch| *ch == '-').count() >= 3
 }
 
-fn render_table(rows: &[TableRow], width: usize, indent: &str) -> Vec<Line<'static>> {
+fn render_table(rows: &[TableRow], width: usize, indent: &str) -> Vec<Line> {
     if rows.is_empty() {
         return Vec::new();
     }
@@ -264,7 +257,7 @@ fn render_table_border(
     middle: char,
     right: char,
     fill: char,
-) -> Line<'static> {
+) -> Line {
     let mut text = String::with_capacity(indent.len() + table_total_width(widths));
     text.push_str(indent);
     text.push(left);
@@ -279,13 +272,8 @@ fn render_table_border(
     Line::raw(text)
 }
 
-fn render_table_row(
-    indent: &str,
-    row: &TableRow,
-    widths: &[usize],
-    header: bool,
-) -> Vec<Line<'static>> {
-    let wrapped_cells: Vec<Vec<Vec<Span<'static>>>> = row
+fn render_table_row(indent: &str, row: &TableRow, widths: &[usize], header: bool) -> Vec<Line> {
+    let wrapped_cells: Vec<Vec<Vec<Span>>> = row
         .cells
         .iter()
         .zip(widths.iter())
@@ -294,7 +282,7 @@ fn render_table_row(
             if header {
                 for line in &mut wrapped {
                     for span in line {
-                        *span = Span::styled(span.content.clone().into_owned(), span.style.bold());
+                        *span = Span::styled(span.content.clone(), span.style.bold());
                     }
                 }
             }
@@ -311,7 +299,7 @@ fn render_table_row(
         for (column_index, width) in widths.iter().enumerate() {
             let cell_line = wrapped_cells
                 .get(column_index)
-                .and_then(|cell| cell.get(line_index))
+                .and_then(|cell: &Vec<Vec<Span>>| cell.get(line_index))
                 .cloned()
                 .unwrap_or_default();
             let used = spans_width(&cell_line);
@@ -341,7 +329,7 @@ fn render_code_block(
     fence: &CodeFence,
     width: usize,
     indent: &str,
-) -> Vec<Line<'static>> {
+) -> Vec<Line> {
     let styled_code_lines =
         highlight_code_block(code_lines, &fence.language).unwrap_or_else(|| {
             code_lines
@@ -396,10 +384,7 @@ fn render_code_block(
         line_spans.push(Span::styled(" ".repeat(CODE_BLOCK_PADDING_X), block_style));
 
         for span in clipped_spans {
-            line_spans.push(Span::styled(
-                span.content.into_owned(),
-                span.style.bg(CODE_BLOCK_BG),
-            ));
+            line_spans.push(Span::styled(span.content, span.style.bg(CODE_BLOCK_BG)));
         }
 
         line_spans.push(Span::styled(
@@ -470,10 +455,7 @@ fn code_block_header(fence: &CodeFence, max_width: usize) -> String {
     truncate_to_width(&label, max_width)
 }
 
-fn truncate_spans_to_width(
-    spans: Vec<Span<'static>>,
-    max_width: usize,
-) -> (Vec<Span<'static>>, usize) {
+fn truncate_spans_to_width(spans: Vec<Span>, max_width: usize) -> (Vec<Span>, usize) {
     let mut clipped = Vec::new();
     let mut used = 0;
 
@@ -482,7 +464,7 @@ fn truncate_spans_to_width(
             break;
         }
 
-        let text = span.content.into_owned();
+        let text = span.content;
         let span_len = text.chars().count();
         if span_len <= max_width.saturating_sub(used) {
             used += span_len;
@@ -505,7 +487,7 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
     text.chars().take(max_width).collect()
 }
 
-fn spans_width(spans: &[Span<'static>]) -> usize {
+fn spans_width(spans: &[Span]) -> usize {
     spans.iter().map(|span| span.content.chars().count()).sum()
 }
 
@@ -518,7 +500,7 @@ fn pad_right(text: &str, width: usize) -> String {
     format!("{text}{}", " ".repeat(width - visible))
 }
 
-fn highlight_code_block(code_lines: &[String], language: &str) -> Option<Vec<Vec<Span<'static>>>> {
+fn highlight_code_block(code_lines: &[String], language: &str) -> Option<Vec<Vec<Span>>> {
     let syntax_set = syntax_set();
     let theme = theme()?;
     let syntax = resolve_syntax(syntax_set, language)?;
@@ -582,7 +564,7 @@ fn normalize_language(language: &str) -> String {
     }
 }
 
-fn parse_inline_markdown_spans(text: &str) -> Vec<Span<'static>> {
+fn parse_inline_markdown_spans(text: &str) -> Vec<Span> {
     let mut spans = Vec::new();
     let mut chars = text.chars().peekable();
     let mut current = String::new();
@@ -641,17 +623,17 @@ fn parse_inline_markdown_spans(text: &str) -> Vec<Span<'static>> {
     spans
 }
 
-fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+fn wrap_spans(spans: &[Span], width: usize) -> Vec<Vec<Span>> {
     if width == 0 {
         return vec![spans.to_vec()];
     }
 
-    let mut lines: Vec<Vec<Span<'static>>> = vec![Vec::new()];
+    let mut lines: Vec<Vec<Span>> = vec![Vec::new()];
     let mut current_line_len = 0;
 
     for span in spans {
         let span_style = span.style;
-        for (token, is_whitespace) in split_whitespace_runs(span.content.as_ref()) {
+        for (token, is_whitespace) in split_whitespace_runs(span.content.as_str()) {
             push_wrapped_token(
                 &mut lines,
                 &mut current_line_len,
@@ -696,7 +678,7 @@ fn split_whitespace_runs(text: &str) -> Vec<(&str, bool)> {
 }
 
 fn push_wrapped_token(
-    lines: &mut Vec<Vec<Span<'static>>>,
+    lines: &mut Vec<Vec<Span>>,
     current_line_len: &mut usize,
     token: &str,
     _is_whitespace: bool,
@@ -733,7 +715,7 @@ fn push_wrapped_token(
     *current_line_len += token_len;
 }
 
-fn push_wrapped_text(line: &mut Vec<Span<'static>>, text: &str, style: Style) {
+fn push_wrapped_text(line: &mut Vec<Span>, text: &str, style: Style) {
     if text.is_empty() {
         return;
     }
@@ -741,7 +723,7 @@ fn push_wrapped_text(line: &mut Vec<Span<'static>>, text: &str, style: Style) {
     if let Some(last) = line.last_mut()
         && last.style == style
     {
-        last.content.to_mut().push_str(text);
+        last.content.push_str(text);
         return;
     }
 
@@ -750,16 +732,16 @@ fn push_wrapped_text(line: &mut Vec<Span<'static>>, text: &str, style: Style) {
 
 #[cfg(test)]
 mod tests {
-    use crate::ui_compat::style::Color;
+    use crate::app::ui::text::Color;
 
     use super::{CODE_BLOCK_BG, markdown_to_lines_with_indent};
 
     const TEST_INDENT: &str = "    ";
 
-    fn line_text(line: &crate::ui_compat::text::Line<'_>) -> String {
+    fn line_text(line: &crate::app::ui::text::Line) -> String {
         line.spans
             .iter()
-            .map(|span| span.content.as_ref())
+            .map(|span| span.content.as_str())
             .collect::<String>()
     }
 
@@ -795,12 +777,12 @@ mod tests {
         let keyword = code_line
             .spans
             .iter()
-            .find(|span| span.content.as_ref().contains("let"))
+            .find(|span| span.content.as_str().contains("let"))
             .expect("expected keyword token");
         let identifier = code_line
             .spans
             .iter()
-            .find(|span| span.content.as_ref().contains("value"))
+            .find(|span| span.content.as_str().contains("value"))
             .expect("expected identifier token");
 
         assert_ne!(keyword.style.fg, identifier.style.fg);
@@ -928,7 +910,7 @@ mod tests {
                 && span
                     .style
                     .add_modifier
-                    .contains(crate::ui_compat::style::Modifier::BOLD)
+                    .contains(crate::app::ui::text::Modifier::BOLD)
         }));
         assert!(
             row.spans
@@ -938,27 +920,27 @@ mod tests {
     }
 }
 
-fn translate_style(style: syntect::highlighting::Style) -> crate::ui_compat::style::Style {
+fn translate_style(style: syntect::highlighting::Style) -> crate::app::ui::text::Style {
     let fg = style.foreground;
-    let mut s = crate::ui_compat::style::Style::default()
-        .fg(crate::ui_compat::style::Color::Rgb(fg.r, fg.g, fg.b));
+    let mut s = crate::app::ui::text::Style::default()
+        .fg(crate::app::ui::text::Color::Rgb(fg.r, fg.g, fg.b));
     if style
         .font_style
         .contains(syntect::highlighting::FontStyle::BOLD)
     {
-        s = s.add_modifier(crate::ui_compat::style::Modifier::BOLD);
+        s = s.add_modifier(crate::app::ui::text::Modifier::BOLD);
     }
     if style
         .font_style
         .contains(syntect::highlighting::FontStyle::ITALIC)
     {
-        s = s.add_modifier(crate::ui_compat::style::Modifier::ITALIC);
+        s = s.add_modifier(crate::app::ui::text::Modifier::ITALIC);
     }
     if style
         .font_style
         .contains(syntect::highlighting::FontStyle::UNDERLINE)
     {
-        s = s.add_modifier(crate::ui_compat::style::Modifier::UNDERLINED);
+        s = s.add_modifier(crate::app::ui::text::Modifier::UNDERLINED);
     }
     s
 }

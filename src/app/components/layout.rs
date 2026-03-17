@@ -1,25 +1,19 @@
-use crate::ui_compat::layout::{Constraint, Direction, Layout, Rect};
-use crate::ui_compat::style::Style;
-use crate::ui_compat::widgets::Block;
+use crate::app::ui::geometry::{Constraint, Direction, Layout, Rect};
 
 use crate::app::components::input;
 use crate::app::state::AppState;
-use crate::theme::colors::{AppLayoutRects, MAX_INPUT_LINES, SIDEBAR_BG, UiLayout};
+use crate::theme::colors::{AppLayoutRects, MAX_INPUT_LINES, UiLayout};
 
 pub(crate) struct RootColumns {
     pub main_area: Rect,
     pub sidebar_area: Option<Rect>,
 }
 
+#[allow(dead_code)]
 pub(crate) struct MainLayout {
     pub messages_area: Rect,
     pub processing_area: Rect,
     pub input_area: Rect,
-}
-
-pub(crate) struct SubagentLayout {
-    pub messages_area: Rect,
-    pub back_indicator_area: Rect,
 }
 
 fn inset_rect(area: Rect, padding_x: u16, padding_y: u16) -> Rect {
@@ -53,22 +47,6 @@ pub(crate) fn split_root_columns(area: Rect, layout: UiLayout) -> RootColumns {
         } else {
             None
         },
-    }
-}
-
-pub(crate) fn build_subagent_layout(main_area: Rect) -> SubagentLayout {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(&[
-            Constraint::Min(3),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
-        .split(main_area);
-
-    SubagentLayout {
-        messages_area: chunks[0],
-        back_indicator_area: chunks[2],
     }
 }
 
@@ -121,8 +99,7 @@ pub(crate) fn compute_layout_rects(area: Rect, app: &AppState, input_text: &str)
             return None;
         }
 
-        let block = Block::default().style(Style::default().bg(SIDEBAR_BG));
-        let inner = block.inner(clipped_sidebar_area);
+        let inner = clipped_sidebar_area;
         let content = inset_rect(inner, 2, 0);
         if content.width == 0 || content.height == 0 {
             None
