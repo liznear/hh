@@ -4,6 +4,7 @@ pub mod core;
 pub mod events;
 pub mod handlers;
 pub mod input;
+pub mod iocraft;
 pub mod render;
 pub mod runtime;
 pub mod state;
@@ -71,8 +72,8 @@ pub async fn run_single_prompt(
     crate::app::handlers::runner::run_single_prompt(settings, cwd, prompt).await
 }
 
-async fn run_interactive_chat_iocraft(_settings: Settings, _cwd: &Path) -> anyhow::Result<()> {
-    anyhow::bail!("iocraft backend not yet implemented. Remove HH_USE_IOCRAFT environment variable to use ratatui.")
+async fn run_interactive_chat_iocraft(settings: Settings, cwd: &Path) -> anyhow::Result<()> {
+    crate::app::iocraft::run_iocraft_app(settings, cwd.to_path_buf()).await
 }
 
 const EVENT_DRAIN_MAX: usize = 128;

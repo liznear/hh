@@ -891,7 +891,7 @@ pub async fn run_interactive_chat(settings: Settings, cwd: &Path) -> anyhow::Res
 **Files:**
 - Create: `src/app/iocraft/mod.rs`, `src/app/iocraft/root.rs`, `src/app/iocraft/layout.rs`, `src/app/iocraft/theme.rs`
 
-- [ ] **Step 1: Create iocraft module structure**
+- [x] **Step 1: Create iocraft module structure**
 
 Create `src/app/iocraft/mod.rs`:
 ```rust
@@ -902,7 +902,7 @@ pub mod theme;
 pub use root::run_iocraft_app;
 ```
 
-- [ ] **Step 2: Implement theme adapter**
+- [x] **Step 2: Implement theme adapter**
 
 Create `src/app/iocraft/theme.rs`:
 ```rust
@@ -932,13 +932,13 @@ pub const fn input_panel_bg() -> Color {
 // ... etc for all colors
 ```
 
-- [ ] **Step 3: Run cargo check**
+- [x] **Step 3: Run cargo check**
   ```bash
   cargo check
   ```
   Expected: No errors
 
-- [ ] **Step 4: Implement layout component**
+- [x] **Step 4: Implement layout component**
 
 Create `src/app/iocraft/layout.rs`:
 ```rust
@@ -975,13 +975,13 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
 }
 ```
 
-- [ ] **Step 5: Run cargo check**
+- [x] **Step 5: Run cargo check**
   ```bash
   cargo check
   ```
   Expected: No errors
 
-- [ ] **Step 6: Wire into main loop**
+- [x] **Step 6: Wire into main loop**
 
 Create `src/app/iocraft/root.rs`:
 ```rust
@@ -998,13 +998,13 @@ pub async fn run_iocraft_app(
 }
 ```
 
-- [ ] **Step 7: Run with iocraft**
+- [x] **Step 7: Run with iocraft**
   ```bash
   HH_USE_IOCRAFT=1 hh chat
   ```
   Expected: Empty shell renders, can quit with 'q'
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
   ```bash
   git add src/app/iocraft/
   git commit -m "feat: add iocraft root shell with layout structure
