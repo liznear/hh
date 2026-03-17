@@ -62,6 +62,21 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                     context_percent: 35_u32,
                 )
             }
+
+            // Popups
+            super::popups::CommandPalette(
+                is_visible: false,
+                query: "".to_string(),
+                x: 0,
+                y: 0,
+                width: 50,
+            )
+
+            super::popups::ClipboardNotice(
+                is_visible: false,
+                x: 0,
+                y: 0,
+            )
         }
     }
 }

@@ -1157,15 +1157,15 @@ Update `src/app/iocraft/layout.rs` to include MessagesPanel.
 - Create: `src/app/iocraft/popups.rs`
 - Modify: `src/app/iocraft/layout.rs`, `src/app/iocraft/mod.rs`
 
-- [ ] **Step 1: Create CommandPalette component**
+- [x] **Step 1: Create CommandPalette component**
 
-- [ ] **Step 2: Implement clipboard notice popup**
+- [x] **Step 2: Implement clipboard notice popup**
 
-- [ ] **Step 3: Wire into layout with correct z-order**
+- [x] **Step 3: Wire into layout with correct z-order**
 
-- [ ] **Step 4: Test popups rendering**
+- [x] **Step 4: Test popups rendering**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ### Phase 5: Input + Mouse Parity
 
