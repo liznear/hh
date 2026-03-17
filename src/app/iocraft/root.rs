@@ -30,7 +30,7 @@ pub async fn run_iocraft_app(
     let (agent_views, selected_agent) = agent_init::initialize_agents(&settings)?;
     app.set_agents(agent_views, selected_agent);
 
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
+    let (event_tx, event_rx) = mpsc::unbounded_channel::<ScopedTuiEvent>();
     let event_sender = TuiEventSender::new(event_tx);
     handlers::subagent::initialize_subagent_manager(settings.clone(), cwd.clone());
 

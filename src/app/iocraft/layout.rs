@@ -18,7 +18,7 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let mut redraw_trigger = hooks.use_state(|| 0);
 
     let (width, height) = hooks.use_terminal_size();
-    let term_size = (width as u16, height as u16);
+    let term_size = (width, height);
     let layout = UiLayout::default();
 
     let runner_arc_for_events = runner_arc.clone();
@@ -103,7 +103,7 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     });
 
     let runner_arc_for_tick = runner_arc.clone();
-    let mut redraw_trigger_for_tick = redraw_trigger.clone();
+    let mut redraw_trigger_for_tick = redraw_trigger;
     hooks.use_future(async move {
         let mut tick_interval = smol::Timer::interval(Duration::from_millis(100));
         let mut event_rx = {

@@ -1195,26 +1195,26 @@ Update `src/app/iocraft/layout.rs` to include MessagesPanel.
 **Files:**
 - Create: `src/app/iocraft/tests.rs` or tests in appropriate locations
 
-- [ ] **Step 1: Add mock terminal tests for input editing**
+- [x] **Step 1: Add mock terminal tests for input editing**
 
-- [ ] **Step 2: Add mock terminal tests for command palette**
+- [x] **Step 2: Add mock terminal tests for command palette**
 
-- [ ] **Step 3: Add mock terminal tests for question mode**
+- [x] **Step 3: Add mock terminal tests for question mode**
 
-- [ ] **Step 4: Run full test suite**
+- [x] **Step 4: Run full test suite**
   ```bash
   cargo test
   ```
   Expected: All tests pass
 
-- [ ] **Step 5: Run lint checks**
+- [x] **Step 5: Run lint checks**
   ```bash
   cargo fmt --check
   cargo clippy -- -D warnings
   ```
   Expected: No errors
 
-- [ ] **Step 6: Run visual regression suite**
+- [x] **Step 6: Run visual regression suite**
   Use tmux to capture and compare iocraft vs baseline:
   ```bash
   # Capture iocraft session
