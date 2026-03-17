@@ -1245,11 +1245,11 @@ Update `src/app/iocraft/layout.rs` to include MessagesPanel.
 
 - [x] **Step 2: Run full test suite**
 
-- [ ] **Step 3: Remove ratatui dependency** (Deferred. We use Ratatui as a headless styled-text layout engine, while iocraft handles the UI rendering and flexbox)
+- [x] **Step 3: Remove ratatui dependency**
 
 - [x] **Step 4: Run cargo check**
 
-- [x] **Step 5: Remove old ratatui code** (Deferred)
+- [x] **Step 5: Remove old ratatui code**
 
 - [x] **Step 6: Run full test suite**
 
