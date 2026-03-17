@@ -2,9 +2,9 @@ use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 
+use crate::ui_compat::layout::Rect;
 use base64::Engine;
 use crossterm::event::{self, KeyCode, KeyEventKind, KeyModifiers};
-use crate::ui_compat::layout::Rect;
 
 use crate::app::chat_state::QuestionKeyResult;
 use crate::app::state::AppState;

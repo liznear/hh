@@ -1,13 +1,13 @@
-use iocraft::prelude::*;
-use std::sync::{Arc, Mutex};
-use std::path::PathBuf;
-use tokio::sync::mpsc;
-use crate::config::Settings;
-use crate::app::state::{App as MvuApp, AppState};
 use crate::app::events::{ScopedTuiEvent, TuiEventSender};
+use crate::app::handlers;
+use crate::app::state::{App as MvuApp, AppState};
 use crate::app::utils;
 use crate::cli::agent_init;
-use crate::app::handlers;
+use crate::config::Settings;
+use iocraft::prelude::*;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
 
 pub struct IocraftAppRunner {
     pub mvu_app: Arc<Mutex<MvuApp>>,
@@ -17,10 +17,7 @@ pub struct IocraftAppRunner {
     pub event_rx: Option<mpsc::UnboundedReceiver<ScopedTuiEvent>>,
 }
 
-pub async fn run_iocraft_app(
-    settings: Settings,
-    cwd: std::path::PathBuf,
-) -> anyhow::Result<()> {
+pub async fn run_iocraft_app(settings: Settings, cwd: std::path::PathBuf) -> anyhow::Result<()> {
     let mut app = AppState::new(cwd.clone());
     app.configure_models(
         settings.selected_model_ref().to_string(),

@@ -11,8 +11,8 @@ pub mod state;
 pub mod ui;
 pub mod utils;
 
-use std::path::Path;
 use crate::config::Settings;
+use std::path::Path;
 
 pub async fn run_interactive_chat(settings: Settings, cwd: &Path) -> anyhow::Result<()> {
     crate::app::iocraft::run_iocraft_app(settings, cwd.to_path_buf()).await

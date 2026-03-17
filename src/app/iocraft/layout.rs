@@ -50,11 +50,21 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                         mvu_app.process_paste(text);
                     }
                     crate::app::events::InputEvent::ScrollUp { x, y } => {
-                        let terminal_rect = crate::ui_compat::layout::Rect { x: 0, y: 0, width: term_size.0, height: term_size.1 };
+                        let terminal_rect = crate::ui_compat::layout::Rect {
+                            x: 0,
+                            y: 0,
+                            width: term_size.0,
+                            height: term_size.1,
+                        };
                         mvu_app.process_area_scroll(terminal_rect, x, y, 3, 0);
                     }
                     crate::app::events::InputEvent::ScrollDown { x, y } => {
-                        let terminal_rect = crate::ui_compat::layout::Rect { x: 0, y: 0, width: term_size.0, height: term_size.1 };
+                        let terminal_rect = crate::ui_compat::layout::Rect {
+                            x: 0,
+                            y: 0,
+                            width: term_size.0,
+                            height: term_size.1,
+                        };
                         mvu_app.process_area_scroll(terminal_rect, x, y, 0, 3);
                     }
                     crate::app::events::InputEvent::MouseClick { x, y } => {

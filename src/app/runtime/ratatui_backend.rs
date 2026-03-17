@@ -1,4 +1,4 @@
-use crate::ui_compat::{backend::CrosstermBackend, Frame, Terminal};
+use crate::ui_compat::{Frame, Terminal, backend::CrosstermBackend};
 use std::io::Stdout;
 
 use super::FrameContext;

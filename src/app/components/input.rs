@@ -1,7 +1,7 @@
 use crate::ui_compat::{
     Frame,
     layout::Rect,
-        style::{Color, Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Paragraph, Wrap},
 };

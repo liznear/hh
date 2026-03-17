@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use crate::ui_compat::{
-        style::{Color, Style},
+    style::{Color, Style},
     text::{Line, Span},
 };
 use syntect::{
@@ -9,7 +9,6 @@ use syntect::{
     highlighting::{Theme, ThemeSet},
     parsing::{SyntaxReference, SyntaxSet},
 };
-
 
 pub fn markdown_to_lines_with_indent(
     markdown: &str,
@@ -941,14 +940,24 @@ mod tests {
 
 fn translate_style(style: syntect::highlighting::Style) -> crate::ui_compat::style::Style {
     let fg = style.foreground;
-    let mut s = crate::ui_compat::style::Style::default().fg(crate::ui_compat::style::Color::Rgb(fg.r, fg.g, fg.b));
-    if style.font_style.contains(syntect::highlighting::FontStyle::BOLD) {
+    let mut s = crate::ui_compat::style::Style::default()
+        .fg(crate::ui_compat::style::Color::Rgb(fg.r, fg.g, fg.b));
+    if style
+        .font_style
+        .contains(syntect::highlighting::FontStyle::BOLD)
+    {
         s = s.add_modifier(crate::ui_compat::style::Modifier::BOLD);
     }
-    if style.font_style.contains(syntect::highlighting::FontStyle::ITALIC) {
+    if style
+        .font_style
+        .contains(syntect::highlighting::FontStyle::ITALIC)
+    {
         s = s.add_modifier(crate::ui_compat::style::Modifier::ITALIC);
     }
-    if style.font_style.contains(syntect::highlighting::FontStyle::UNDERLINE) {
+    if style
+        .font_style
+        .contains(syntect::highlighting::FontStyle::UNDERLINE)
+    {
         s = s.add_modifier(crate::ui_compat::style::Modifier::UNDERLINED);
     }
     s

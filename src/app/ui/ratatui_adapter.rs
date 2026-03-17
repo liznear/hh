@@ -66,16 +66,24 @@ pub fn ratatui_style_to_ui(s: Style) -> UiStyle {
     if let Some(bg) = s.bg.and_then(ratatui_color_to_ui) {
         ui = ui.bg(bg);
     }
-    if s.add_modifier.contains(crate::ui_compat::style::Modifier::BOLD) {
+    if s.add_modifier
+        .contains(crate::ui_compat::style::Modifier::BOLD)
+    {
         ui = ui.bold();
     }
-    if s.add_modifier.contains(crate::ui_compat::style::Modifier::ITALIC) {
+    if s.add_modifier
+        .contains(crate::ui_compat::style::Modifier::ITALIC)
+    {
         ui = ui.italic();
     }
-    if s.add_modifier.contains(crate::ui_compat::style::Modifier::DIM) {
+    if s.add_modifier
+        .contains(crate::ui_compat::style::Modifier::DIM)
+    {
         ui = ui.dim();
     }
-    if s.add_modifier.contains(crate::ui_compat::style::Modifier::UNDERLINED) {
+    if s.add_modifier
+        .contains(crate::ui_compat::style::Modifier::UNDERLINED)
+    {
         ui = ui.underline();
     }
     ui
@@ -86,5 +94,10 @@ pub fn ratatui_span_to_ui(span: &Span<'_>) -> UiSpan {
 }
 
 pub fn ratatui_line_to_ui(line: &Line<'_>) -> UiLine {
-    UiLine::from(line.spans.iter().map(ratatui_span_to_ui).collect::<Vec<_>>())
+    UiLine::from(
+        line.spans
+            .iter()
+            .map(ratatui_span_to_ui)
+            .collect::<Vec<_>>(),
+    )
 }

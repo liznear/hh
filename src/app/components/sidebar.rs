@@ -1,6 +1,6 @@
 use crate::ui_compat::{
     Frame,
-        style::Style,
+    style::Style,
     text::{Line, Span, Text},
     widgets::{Block, Paragraph, Wrap},
 };

@@ -1,6 +1,6 @@
-use iocraft::prelude::*;
-use crate::app::ui::UiLine;
 use super::utils::ui_line_to_mixed_text;
+use crate::app::ui::UiLine;
+use iocraft::prelude::*;
 
 #[derive(Default, Props)]
 pub struct MessagesPanelProps {

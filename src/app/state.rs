@@ -1757,11 +1757,21 @@ impl App {
         }
     }
 
-    pub fn process_mouse_drag(&mut self, x: u16, y: u16, terminal: &impl crate::app::runtime::TerminalBackend) {
+    pub fn process_mouse_drag(
+        &mut self,
+        x: u16,
+        y: u16,
+        terminal: &impl crate::app::runtime::TerminalBackend,
+    ) {
         crate::app::input::handle_mouse_drag(&mut self.state, &mut self.messages, x, y, terminal);
     }
 
-    pub fn process_mouse_release(&mut self, x: u16, y: u16, terminal: &impl crate::app::runtime::TerminalBackend) {
+    pub fn process_mouse_release(
+        &mut self,
+        x: u16,
+        y: u16,
+        terminal: &impl crate::app::runtime::TerminalBackend,
+    ) {
         if let Some(action) = crate::app::input::handle_mouse_release(
             &mut self.state,
             &mut self.messages,
@@ -2301,14 +2311,29 @@ mod tests {
 }
 
 impl App {
-    pub fn get_message_lines(&mut self, width: usize, height: usize) -> Vec<crate::ui_compat::text::Line<'static>> {
+    pub fn get_message_lines(
+        &mut self,
+        width: usize,
+        height: usize,
+    ) -> Vec<crate::ui_compat::text::Line<'static>> {
         let total_lines = self.messages.viewport.get_lines(&self.state, width).len();
-        let scroll_offset = self.state.message_scroll.effective_offset(total_lines, height);
-        self.messages.viewport.get_visible_lines(&self.state, width, height, scroll_offset).to_vec()
+        let scroll_offset = self
+            .state
+            .message_scroll
+            .effective_offset(total_lines, height);
+        self.messages
+            .viewport
+            .get_visible_lines(&self.state, width, height, scroll_offset)
+            .to_vec()
     }
 
-    pub fn get_sidebar_lines(&mut self, width: u16, height: usize) -> Vec<crate::ui_compat::text::Line<'static>> {
-        let lines = crate::app::components::sidebar::build_sidebar_lines(&self.state, &self.sidebar, width);
+    pub fn get_sidebar_lines(
+        &mut self,
+        width: u16,
+        height: usize,
+    ) -> Vec<crate::ui_compat::text::Line<'static>> {
+        let lines =
+            crate::app::components::sidebar::build_sidebar_lines(&self.state, &self.sidebar, width);
         let total_lines = lines.len();
         let scroll_offset = self.sidebar.scroll.effective_offset(total_lines, height);
         lines.into_iter().skip(scroll_offset).take(height).collect()
