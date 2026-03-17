@@ -1,3 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["hh-agent"]
+
 [package]
 name = "hh-cli"
 version = "0.1.3"
@@ -11,6 +15,7 @@ name = "hh"
 path = "src/main.rs"
 
 [dependencies]
+hh-agent = { path = "hh-agent" }
 anyhow = "1.0"
 async-trait = "0.1"
 futures = "0.3"
