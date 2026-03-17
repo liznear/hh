@@ -25,3 +25,10 @@ impl FrameContext for RatatuiFrameContext<'_> {
         self.frame.area().into()
     }
 }
+
+impl super::TerminalBackend for RatatuiTerminal {
+    fn size(&self) -> Result<(u16, u16), std::io::Error> {
+        let r = ratatui::Terminal::size(self)?;
+        Ok((r.width, r.height))
+    }
+}

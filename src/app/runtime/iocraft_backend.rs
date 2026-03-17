@@ -26,3 +26,9 @@ impl FrameContext for IocraftFrameContext {
         UiRect::default()
     }
 }
+
+impl super::TerminalBackend for IocraftBackend {
+    fn size(&self) -> Result<(u16, u16), std::io::Error> {
+        Ok((100, 40)) // Dummy
+    }
+}
