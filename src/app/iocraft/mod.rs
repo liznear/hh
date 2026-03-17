@@ -1,3 +1,4 @@
+pub mod input;
 pub mod layout;
 pub mod messages;
 pub mod root;

@@ -1113,19 +1113,19 @@ Update `src/app/iocraft/layout.rs` to include MessagesPanel.
 - Create: `src/app/iocraft/input.rs`
 - Modify: `src/app/iocraft/layout.rs`, `src/app/iocraft/mod.rs`
 
-- [ ] **Step 1: Create InputPanel component**
+- [x] **Step 1: Create InputPanel component**
 
-- [ ] **Step 2: Implement text input with cursor**
+- [x] **Step 2: Implement text input with cursor**
 
-- [ ] **Step 3: Implement status line**
+- [x] **Step 3: Implement status line**
 
-- [ ] **Step 4: Implement question mode UI**
+- [x] **Step 4: Implement question mode UI**
 
-- [ ] **Step 5: Wire into layout**
+- [x] **Step 5: Wire into layout**
 
-- [ ] **Step 6: Test input rendering**
+- [x] **Step 6: Test input rendering**
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 #### 4c: Sidebar
 

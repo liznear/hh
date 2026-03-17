@@ -38,8 +38,17 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                 flex_grow: 1.0,
                 flex_direction: FlexDirection::Column,
             ) {
-                // Messages, processing, input
+                // Messages
                 super::messages::MessagesPanel(messages: dummy_messages)
+
+                // Input
+                super::input::InputPanel(
+                    value: "Tell me more about this project...".to_string(),
+                    is_question_mode: false,
+                    active_agent: "AgentName".to_string(),
+                    active_model: "Provider Model".to_string(),
+                    duration: "1s".to_string(),
+                )
             }
             // Sidebar
             View(
