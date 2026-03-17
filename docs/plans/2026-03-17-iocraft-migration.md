@@ -1176,19 +1176,19 @@ Update `src/app/iocraft/layout.rs` to include MessagesPanel.
 
 - [x] **Step 2: Wire key handling through existing dispatch**
 
-- [ ] **Step 3: Implement mouse scroll for messages**
+- [x] **Step 3: Implement mouse scroll for messages**
 
-- [ ] **Step 4: Implement mouse scroll for sidebar**
+- [x] **Step 4: Implement mouse scroll for sidebar**
 
-- [ ] **Step 5: Implement mouse click for section toggle**
+- [x] **Step 5: Implement mouse click for section toggle**
 
-- [ ] **Step 6: Implement text selection and copy**
+- [x] **Step 6: Implement text selection and copy**
 
-- [ ] **Step 7: Test all keyboard shortcuts**
+- [x] **Step 7: Test all keyboard shortcuts**
 
-- [ ] **Step 8: Test all mouse interactions**
+- [x] **Step 8: Test all mouse interactions**
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ### Phase 6: Testing + Visual Regression
 

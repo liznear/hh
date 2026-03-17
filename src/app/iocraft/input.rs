@@ -11,7 +11,7 @@ pub struct InputPanelProps {
 }
 
 #[component]
-pub fn InputPanel(mut hooks: Hooks, props: &InputPanelProps) -> impl Into<AnyElement<'static>> {
+pub fn InputPanel(_hooks: Hooks, props: &InputPanelProps) -> impl Into<AnyElement<'static>> {
     element! {
         View(
             flex_direction: FlexDirection::Column,
