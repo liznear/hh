@@ -54,7 +54,14 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
             View(
                 width: layout.sidebar_width as u32,
                 background_color: theme::sidebar_bg(),
-            ) {}
+            ) {
+                super::sidebar::Sidebar(
+                    session_name: "Default Session".to_string(),
+                    subagent_name: None,
+                    cwd: "~/Developer/hh".to_string(),
+                    context_percent: 35_u32,
+                )
+            }
         }
     }
 }

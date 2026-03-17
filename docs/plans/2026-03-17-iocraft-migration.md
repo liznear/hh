@@ -1133,23 +1133,23 @@ Update `src/app/iocraft/layout.rs` to include MessagesPanel.
 - Create: `src/app/iocraft/sidebar.rs`
 - Modify: `src/app/iocraft/layout.rs`, `src/app/iocraft/mod.rs`
 
-- [ ] **Step 1: Create Sidebar component**
+- [x] **Step 1: Create Sidebar component**
 
-- [ ] **Step 2: Implement session info section**
+- [x] **Step 2: Implement session info section**
 
-- [ ] **Step 3: Implement context usage display**
+- [x] **Step 3: Implement context usage display**
 
-- [ ] **Step 4: Implement modified files list**
+- [x] **Step 4: Implement modified files list**
 
-- [ ] **Step 5: Implement TODO list**
+- [x] **Step 5: Implement TODO list**
 
-- [ ] **Step 6: Implement section folding**
+- [x] **Step 6: Implement section folding**
 
-- [ ] **Step 7: Wire into layout**
+- [x] **Step 7: Wire into layout**
 
-- [ ] **Step 8: Test sidebar rendering**
+- [x] **Step 8: Test sidebar rendering**
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 #### 4d: Popups and Command Palette
 

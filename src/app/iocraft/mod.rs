@@ -2,6 +2,7 @@ pub mod input;
 pub mod layout;
 pub mod messages;
 pub mod root;
+pub mod sidebar;
 pub mod theme;
 pub mod utils;
 
