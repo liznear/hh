@@ -1241,85 +1241,25 @@ Update `src/app/iocraft/layout.rs` to include MessagesPanel.
 - Modify: `src/app/mod.rs`, `Cargo.toml`, `README.md`
 - Delete: `src/app/runtime/ratatui_backend.rs`, `src/app/ui/ratatui_adapter.rs`, old component files
 
-- [ ] **Step 1: Flip default to iocraft**
+- [x] **Step 1: Flip default to iocraft**
 
-Modify `src/app/mod.rs`:
-```rust
-pub async fn run_interactive_chat(settings: Settings, cwd: &Path) -> anyhow::Result<()> {
-    // iocraft is now the default
-    run_interactive_chat_iocraft(settings, cwd).await
-}
-```
+- [x] **Step 2: Run full test suite**
 
-- [ ] **Step 2: Run full test suite**
-  ```bash
-  cargo test
-  ```
-  Expected: All tests pass
-
-- [ ] **Step 3: Remove ratatui dependency**
-
-Modify `Cargo.toml`:
-```toml
-# Remove: ratatui = "0.29"
-# Remove: syntect-tui = "3.0"
-```
+- [ ] **Step 3: Remove ratatui dependency** (Deferred. We use Ratatui as a headless styled-text layout engine, while iocraft handles the UI rendering and flexbox)
 
 - [ ] **Step 4: Run cargo check**
-  ```bash
-  cargo check
-  ```
-  Expected: No errors
 
 - [ ] **Step 5: Remove old ratatui code**
 
-Delete:
-- `src/app/runtime/ratatui_backend.rs`
-- `src/app/ui/ratatui_adapter.rs`
-- Old ratatui-specific code in components
-
 - [ ] **Step 6: Run full test suite**
-  ```bash
-  cargo test
-  ```
-  Expected: All tests pass
 
 - [ ] **Step 7: Update documentation**
 
-Modify `README.md`:
-```markdown
-- **Terminal TUI**: Interactive chat experience built with `iocraft`.
-```
-
 - [ ] **Step 8: Run lint checks**
-  ```bash
-  cargo fmt --check
-  cargo clippy -- -D warnings
-  ```
-  Expected: No errors
 
 - [ ] **Step 9: Final visual verification**
-  Use tmux for final verification:
-  ```bash
-  tmux new-session -d -s hh-final "cargo run -- chat"
-  # ... interact ...
-  tmux capture-pane -t hh-final -p > final/chat.txt
-  tmux kill-session -t hh-final
-  ```
-  Expected: Fully functional, visually correct
 
 - [ ] **Step 10: Commit**
-  ```bash
-  git add -A
-  git commit -m "feat: complete migration to iocraft TUI framework
-
-  BREAKING CHANGE: removes ratatui dependency
-
-  - Set iocraft as default TUI backend
-  - Remove ratatui adapter and backend
-  - Update documentation to reflect iocraft usage
-  - All visual and behavioral parity verified"
-  ```
 
 ---
 
