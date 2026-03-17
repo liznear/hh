@@ -1022,7 +1022,7 @@ pub async fn run_iocraft_app(
 - Create: `src/app/iocraft/messages.rs`
 - Modify: `src/app/iocraft/layout.rs`, `src/app/iocraft/mod.rs`
 
-- [ ] **Step 1: Create Messages component skeleton**
+- [x] **Step 1: Create Messages component skeleton**
 
 Create `src/app/iocraft/messages.rs`:
 ```rust
@@ -1042,50 +1042,50 @@ pub fn MessagesPanel(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
 }
 ```
 
-- [ ] **Step 2: Run cargo check**
+- [x] **Step 2: Run cargo check**
   ```bash
   cargo check
   ```
   Expected: No errors
 
-- [ ] **Step 3: Port user bubble rendering**
+- [x] **Step 3: Port user bubble rendering**
 
 Implement user message bubble with correct styling:
 - Border character `▌`
 - Background color
 - Inner padding
 
-- [ ] **Step 4: Run cargo check**
+- [x] **Step 4: Run cargo check**
   ```bash
   cargo check
   ```
   Expected: No errors
 
-- [ ] **Step 5: Port assistant message rendering**
+- [x] **Step 5: Port assistant message rendering**
 
 Implement markdown text rendering with styling.
 
-- [ ] **Step 6: Run cargo check**
+- [x] **Step 6: Run cargo check**
   ```bash
   cargo check
   ```
   Expected: No errors
 
-- [ ] **Step 7: Port tool call rendering**
+- [x] **Step 7: Port tool call rendering**
 
 Implement pending/completed tool display with checkmarks.
 
-- [ ] **Step 8: Run cargo check**
+- [x] **Step 8: Run cargo check**
   ```bash
   cargo check
   ```
   Expected: No errors
 
-- [ ] **Step 9: Wire into layout**
+- [x] **Step 9: Wire into layout**
 
 Update `src/app/iocraft/layout.rs` to include MessagesPanel.
 
-- [ ] **Step 10: Test messages rendering**
+- [x] **Step 10: Test messages rendering**
   Use tmux with HH_USE_IOCRAFT=1:
   ```bash
   tmux new-session -d -s hh-iocraft "HH_USE_IOCRAFT=1 cargo run -- chat"
@@ -1094,10 +1094,10 @@ Update `src/app/iocraft/layout.rs` to include MessagesPanel.
   ```
   Expected: Messages render correctly
 
-- [ ] **Step 11: Visual regression check**
+- [x] **Step 11: Visual regression check**
   Compare captured output with baseline manually.
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
   ```bash
   git add src/app/iocraft/messages.rs src/app/iocraft/layout.rs src/app/iocraft/mod.rs
   git commit -m "feat(iocraft): port messages component

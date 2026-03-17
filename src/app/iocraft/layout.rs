@@ -1,12 +1,30 @@
 use iocraft::prelude::*;
 
 use super::theme;
+use crate::core::{Message, Role};
 use crate::theme::colors::UiLayout;
 
 #[component]
 pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let (width, height) = hooks.use_terminal_size();
     let layout = UiLayout::default();
+
+    let dummy_messages = vec![
+        Message {
+            role: Role::User,
+            content: "Hello, agent!".to_string(),
+            attachments: vec![],
+            tool_call_id: None,
+            tool_calls: vec![],
+        },
+        Message {
+            role: Role::Assistant,
+            content: "Hello! How can I help you today?".to_string(),
+            attachments: vec![],
+            tool_call_id: None,
+            tool_calls: vec![],
+        },
+    ];
 
     element! {
         View(
@@ -21,6 +39,7 @@ pub fn AppRoot(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                 flex_direction: FlexDirection::Column,
             ) {
                 // Messages, processing, input
+                super::messages::MessagesPanel(messages: dummy_messages)
             }
             // Sidebar
             View(
