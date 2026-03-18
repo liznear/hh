@@ -942,7 +942,8 @@ where
             .filter(|item| {
                 matches!(
                     item.status,
-                    crate::core::types::TodoStatus::Pending | crate::core::types::TodoStatus::InProgress
+                    crate::core::types::TodoStatus::Pending
+                        | crate::core::types::TodoStatus::InProgress
                 )
             })
             .count();

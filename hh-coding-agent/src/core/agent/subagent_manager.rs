@@ -347,7 +347,11 @@ impl SubagentManager {
         }
     }
 
-    fn spawn_task(&self, parent_session: Arc<dyn SessionSink + Send + Sync>, execution: SubagentExecutionRequest) {
+    fn spawn_task(
+        &self,
+        parent_session: Arc<dyn SessionSink + Send + Sync>,
+        execution: SubagentExecutionRequest,
+    ) {
         let queue = Arc::clone(&self.queue);
         let manager = self.clone();
         let executor = Arc::clone(&self.executor);
@@ -374,7 +378,9 @@ impl SubagentManager {
 
             manager.mark_running(&*parent_session, &task_id).await;
             let result = executor(execution).await;
-            manager.finish_task(&*parent_session, &task_id, result).await;
+            manager
+                .finish_task(&*parent_session, &task_id, result)
+                .await;
             drop(permit);
         });
     }
@@ -560,7 +566,10 @@ mod tests {
 
         let manager = SubagentManager::new(1, 4, completed_executor());
         let acceptance = manager
-            .start_or_resume(sample_request(parent_session_id), sink.clone() as Arc<dyn SessionSink + Send + Sync>)
+            .start_or_resume(
+                sample_request(parent_session_id),
+                sink.clone() as Arc<dyn SessionSink + Send + Sync>,
+            )
             .await
             .expect("acceptance");
         assert_eq!(acceptance.status, "queued");

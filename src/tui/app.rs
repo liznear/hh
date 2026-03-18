@@ -1,7 +1,7 @@
 use iocraft::prelude::*;
 
 const SIDEBAR_WIDTH: u32 = 45;
-const MIN_WIDTH_FOR_SIDEBAR: u16 = 180;
+const MIN_WIDTH_FOR_SIDEBAR: u16 = 160;
 
 #[component]
 fn App(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
@@ -13,6 +13,11 @@ fn App(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
         r: 220,
         g: 220,
         b: 220,
+    };
+    let main_bg = Color::Rgb {
+        r: 255,
+        g: 255,
+        b: 255,
     };
 
     let main_width = if show_sidebar {
@@ -32,7 +37,7 @@ fn App(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                 flex_direction: FlexDirection::Column,
                 width: main_width,
                 height: height as u32,
-                background_color: Color::White,
+                background_color: main_bg,
                 flex_grow: 1.0,
                 flex_shrink: 0.0,
             ) {

@@ -153,7 +153,12 @@ impl Tool for TaskTool {
             return ToolResult::error(format!(
                 "unknown subagent_type: {}. Available: {}",
                 parsed.subagent_type,
-                self.context.available_subagents.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>().join(", ")
+                self.context
+                    .available_subagents
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
 
