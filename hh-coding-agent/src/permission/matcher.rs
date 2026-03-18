@@ -1,5 +1,5 @@
 use crate::config::Settings;
-use crate::core::traits::{ApprovalDecision, ApprovalPolicy};
+use crate::core::{ApprovalDecision, ApprovalPolicy};
 use crate::permission::policy::Decision;
 use crate::permission::rules::{PermissionRule, RuleContext};
 use crate::tool::ToolSchema;
