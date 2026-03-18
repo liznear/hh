@@ -14,12 +14,10 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::path::Path;
-use tokio::sync::{mpsc, watch};
+use std::sync::{Arc, Mutex as StdMutex};
+use tokio::sync::mpsc;
 
-use super::{
-    CoreInput, CoreOutput, RunnerInput, RunnerOutput, RunnerState, StateOp, StatePatch,
-    core::{AgentCore, CoreTurnResult},
-};
+use super::{ErrorPayload, RunnerInput, RunnerOutput, RunnerState, StatePatch};
 
 #[cfg(test)]
 #[derive(Debug, Clone, Default)]
@@ -34,12 +32,10 @@ pub fn is_cancellation_error(err: &anyhow::Error) -> bool {
     err.to_string().contains(CANCELLATION_ERROR_MESSAGE)
 }
 
-pub struct AgentRunner<'a, P, T, A>
+pub struct AgentRunner<'a, T, A>
 where
-    P: Provider,
     T: ToolExecutor,
 {
-    pub core: AgentCore<'a, P>,
     pub tools: &'a T,
     pub approvals: &'a A,
     pub state: RunnerState,
@@ -58,15 +54,24 @@ pub enum CallHandlingOutcome {
     },
 }
 
-impl<'a, P, T, A> AgentRunner<'a, P, T, A>
+struct ToolRegistryAdapter<'a, T: ToolExecutor>(&'a T);
+
+impl<T: ToolExecutor> hh_agent::ToolRegistry for ToolRegistryAdapter<'_, T> {
+    fn schemas(&self) -> Vec<crate::core::ToolSchema> {
+        self.0.schemas()
+    }
+    fn is_blocking(&self, name: &str) -> bool {
+        !self.0.is_non_blocking(name)
+    }
+}
+
+impl<'a, T, A> AgentRunner<'a, T, A>
 where
-    P: Provider,
     T: ToolExecutor,
     A: ApprovalPolicy,
 {
-    pub fn new(core: AgentCore<'a, P>, tools: &'a T, approvals: &'a A, state: RunnerState) -> Self {
+    pub fn new(tools: &'a T, approvals: &'a A, state: RunnerState) -> Self {
         Self {
-            core,
             tools,
             approvals,
             state,
@@ -122,14 +127,6 @@ where
         self.tools.apply_approval_decision(action, choice)
     }
 
-    pub fn send_core_input(&mut self, input: CoreInput) -> anyhow::Result<()> {
-        self.core.handle_input(input)
-    }
-
-    pub fn has_pending_tool_calls(&self) -> bool {
-        self.core.has_pending_tool_calls()
-    }
-
     pub fn apply_tool_result(
         &mut self,
         tool_name: &str,
@@ -154,16 +151,6 @@ where
         };
 
         let changed = self.apply_tool_result(&call.name, &result, patch);
-
-        self.send_core_input(CoreInput::ToolResult {
-            call_id: call.id.clone(),
-            name: call.name.clone(),
-            result: result.clone(),
-        })?;
-
-        if changed {
-            self.send_core_input(CoreInput::SetEphemeralState(self.state_for_llm()))?;
-        }
 
         Ok((tool_message, changed))
     }
@@ -284,36 +271,6 @@ where
                 "permission_rule": permission_rule,
             }),
         }
-    }
-
-    pub async fn complete_turn<F>(
-        &mut self,
-        messages: &[Message],
-        mut emit: F,
-    ) -> anyhow::Result<CoreTurnResult>
-    where
-        F: FnMut(CoreOutput) + Send,
-    {
-        let mut context_tokens = None;
-        self.send_core_input(CoreInput::SetEphemeralState(self.state_for_llm()))?;
-        let turn = self
-            .core
-            .complete_turn(messages, |output| match output {
-                CoreOutput::ContextUsage(tokens) => {
-                    context_tokens = Some(tokens);
-                    emit(CoreOutput::ContextUsage(tokens));
-                }
-                other => emit(other),
-            })
-            .await?;
-
-        if let Some(tokens) = context_tokens {
-            let _ = self
-                .state
-                .apply_patch(StatePatch::with_op(StateOp::SetContextTokens { tokens }));
-        }
-
-        Ok(turn)
     }
 
     pub async fn execute_tool_call<AP, APFut, TS, TE>(
@@ -588,7 +545,6 @@ where
 
             match tokio::select! {
                 _ = cancel() => {
-                    self.send_core_input(CoreInput::Cancel)?;
                     emit_output(RunnerOutput::Cancelled);
                     anyhow::bail!(CANCELLATION_ERROR_MESSAGE)
                 }
@@ -614,7 +570,6 @@ where
         while !pending_non_blocking.is_empty() {
             let completion = tokio::select! {
                 _ = cancel() => {
-                    self.send_core_input(CoreInput::Cancel)?;
                     emit_output(RunnerOutput::Cancelled);
                     anyhow::bail!(CANCELLATION_ERROR_MESSAGE)
                 }
@@ -634,376 +589,342 @@ where
             emit_tool_message_outputs(messages, message, &self.state, changed, emit_output);
         }
 
-        if self.has_pending_tool_calls() {
-            anyhow::bail!("provider turn ended with unresolved tool call results")
-        }
-
         Ok(())
     }
 
-    pub async fn execute_turn_with_outputs<AP, APFut, Q, QFut>(
+    pub async fn run_input_loop<P: Provider, D>(
         &mut self,
-        messages: &mut Vec<Message>,
-        step: &mut usize,
-        approve: &mut AP,
-        ask_question: &mut Q,
-    ) -> anyhow::Result<(Option<String>, Vec<RunnerOutput>)>
-    where
-        AP: FnMut(ApprovalRequest) -> APFut,
-        APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
-        Q: FnMut(Vec<QuestionPrompt>) -> QFut,
-        QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
-    {
-        self.execute_turn_with_outputs_cancellable(
-            messages,
-            step,
-            approve,
-            ask_question,
-            &mut || std::future::pending::<()>(),
-        )
-        .await
-    }
-
-    pub async fn execute_turn_with_outputs_cancellable<AP, APFut, Q, QFut, C, CFut>(
-        &mut self,
-        messages: &mut Vec<Message>,
-        step: &mut usize,
-        approve: &mut AP,
-        ask_question: &mut Q,
-        cancel: &mut C,
-    ) -> anyhow::Result<(Option<String>, Vec<RunnerOutput>)>
-    where
-        AP: FnMut(ApprovalRequest) -> APFut,
-        APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
-        Q: FnMut(Vec<QuestionPrompt>) -> QFut,
-        QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
-        C: FnMut() -> CFut,
-        CFut: Future<Output = ()> + Send,
-    {
-        let mut outputs = Vec::new();
-        let result = self
-            .execute_turn_with_output_sink(
-                messages,
-                step,
-                approve,
-                ask_question,
-                &mut |output| outputs.push(output),
-                cancel,
-            )
-            .await?;
-        Ok((result, outputs))
-    }
-
-    pub async fn run_input_loop<D>(
-        &mut self,
+        provider: &P,
+        config: hh_agent::AgentConfig,
         messages: &mut Vec<Message>,
         mut input_rx: mpsc::Receiver<RunnerInput>,
         emit_output: &mut (impl FnMut(RunnerOutput) + Send),
-        mut drain_pending_messages: D,
+        drain_pending_messages: D,
     ) -> anyhow::Result<Option<String>>
     where
         D: FnMut() -> Vec<Message>,
     {
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let mut pending_messages = VecDeque::<Message>::new();
-        let pending_approvals = std::sync::Arc::new(std::sync::Mutex::new(VecDeque::<(
-            String,
-            ApprovalChoice,
-        )>::new()));
-        let pending_approvals_notify = std::sync::Arc::new(tokio::sync::Notify::new());
-        let pending_answers = std::sync::Arc::new(std::sync::Mutex::new(VecDeque::<(
-            String,
-            QuestionAnswers,
-        )>::new()));
-        let pending_answers_notify = std::sync::Arc::new(tokio::sync::Notify::new());
-        let mut step = 0usize;
+        let tool_registry = ToolRegistryAdapter(self.tools);
+        let mut agent_loop = hh_agent::AgentLoop::new(provider, tool_registry, config);
+
+        let (agent_input_tx, agent_input_rx) = mpsc::channel::<hh_agent::AgentInput>(256);
+
+        // Send initial ephemeral state (e.g. TODO items)
+        if let Some(state_msg) = self.state_for_llm() {
+            let _ = agent_input_tx
+                .send(hh_agent::AgentInput::SetEphemeralState(Some(state_msg)))
+                .await;
+        }
+
+        // Channel for AgentLoop to emit outputs to the bridge
+        let (agent_output_tx, mut agent_output_rx) = mpsc::channel::<hh_agent::AgentOutput>(512);
+
+        // Shared queue for tool result messages to be drained into AgentLoop
+        let drain_queue: Arc<StdMutex<Vec<Message>>> = Arc::new(StdMutex::new(Vec::new()));
+
+        // Emit callback for AgentLoop - sends to channel
+        let out_tx = agent_output_tx;
+        let mut emit_for_agent = move |output: hh_agent::AgentOutput| {
+            let _ = out_tx.try_send(output);
+        };
+
+        // Combined drain: tool result messages + external drain
+        let dq = drain_queue.clone();
+        let mut drain_pending_messages = drain_pending_messages;
+        let mut combined_drain = move || -> Vec<Message> {
+            let mut result = Vec::new();
+            if let Ok(mut q) = dq.lock() {
+                result.append(&mut *q);
+            }
+            result.extend(drain_pending_messages());
+            result
+        };
+
+        // Approval/question queues for bridging RunnerInput -> tool execution
+        let pending_approvals =
+            Arc::new(StdMutex::new(VecDeque::<(String, ApprovalChoice)>::new()));
+        let pending_approvals_notify = Arc::new(tokio::sync::Notify::new());
+        let pending_answers = Arc::new(StdMutex::new(VecDeque::<(String, QuestionAnswers)>::new()));
+        let pending_answers_notify = Arc::new(tokio::sync::Notify::new());
 
         let mut approve_from_input = |_request: ApprovalRequest| {
-            let pending_approvals = pending_approvals.clone();
-            let pending_approvals_notify = pending_approvals_notify.clone();
+            let pa = pending_approvals.clone();
+            let pan = pending_approvals_notify.clone();
             async move {
                 loop {
-                    if let Ok(mut queued) = pending_approvals.lock()
+                    if let Ok(mut queued) = pa.lock()
                         && let Some((_call_id, choice)) = queued.pop_front()
                     {
                         return Ok(choice);
                     }
-                    pending_approvals_notify.notified().await;
+                    pan.notified().await;
                 }
             }
         };
 
         let mut question_from_input = |questions: Vec<QuestionPrompt>| {
-            let pending_answers = pending_answers.clone();
-            let pending_answers_notify = pending_answers_notify.clone();
+            let pa = pending_answers.clone();
+            let pan = pending_answers_notify.clone();
             async move {
                 let _ = questions;
                 loop {
-                    if let Ok(mut queued) = pending_answers.lock()
+                    if let Ok(mut queued) = pa.lock()
                         && let Some((_call_id, answers)) = queued.pop_front()
                     {
                         return Ok(answers);
                     }
-                    pending_answers_notify.notified().await;
+                    pan.notified().await;
                 }
             }
         };
 
-        let mut first_message = None;
-        while first_message.is_none() {
-            match input_rx.recv().await {
-                Some(RunnerInput::Message(message)) => first_message = Some(message),
-                Some(RunnerInput::ApprovalDecision { call_id, choice }) => {
-                    enqueue_approval(
-                        &pending_approvals,
-                        &pending_approvals_notify,
-                        call_id,
-                        choice,
-                    );
-                }
-                Some(RunnerInput::QuestionAnswered { call_id, answers }) => {
-                    enqueue_answer(&pending_answers, &pending_answers_notify, call_id, answers);
-                }
-                Some(RunnerInput::Cancel) => {
-                    let _ = cancel_tx.send(true);
-                    break;
-                }
-                None => break,
-            }
-        }
+        // Pin the AgentLoop::run() future
+        let agent_future = agent_loop.run(
+            messages,
+            agent_input_rx,
+            &mut emit_for_agent,
+            &mut combined_drain,
+        );
+        tokio::pin!(agent_future);
 
-        let Some(first_message) = first_message else {
-            if *cancel_rx.borrow() {
-                emit_output(RunnerOutput::Cancelled);
-                anyhow::bail!(CANCELLATION_ERROR_MESSAGE)
-            }
-            return Ok(None);
-        };
-        messages.push(first_message.clone());
-        emit_output(RunnerOutput::MessageAdded(first_message));
+        let mut thinking_content = String::new();
+        let mut pending_non_blocking: FuturesUnordered<_> = FuturesUnordered::new();
 
         loop {
-            if *cancel_rx.borrow() {
-                emit_output(RunnerOutput::Cancelled);
-                anyhow::bail!(CANCELLATION_ERROR_MESSAGE)
-            }
-
-            while let Some(message) = pending_messages.pop_front() {
-                messages.push(message.clone());
-                emit_output(RunnerOutput::MessageAdded(message));
-            }
-
-            for message in drain_pending_messages() {
-                messages.push(message.clone());
-                emit_output(RunnerOutput::MessageAdded(message));
-            }
-
-            let mut cancel = {
-                let cancel_rx = cancel_rx.clone();
-                move || wait_for_cancel(cancel_rx.clone())
-            };
-
-            let turn_future = self.execute_turn_with_output_sink(
-                messages,
-                &mut step,
-                &mut approve_from_input,
-                &mut question_from_input,
-                emit_output,
-                &mut cancel,
-            );
-            tokio::pin!(turn_future);
-
-            let maybe_answer = loop {
-                for message in drain_pending_messages() {
-                    pending_messages.push_back(message);
-                }
-
-                tokio::select! {
-                    turn_result = &mut turn_future => {
-                        break turn_result?;
-                    }
-                    maybe_input = input_rx.recv() => {
-                        match maybe_input {
-                            Some(RunnerInput::Message(message)) => {
-                                pending_messages.push_back(message);
+            tokio::select! {
+                result = &mut agent_future => {
+                    // Drain any remaining outputs from the channel before returning
+                    while let Ok(agent_output) = agent_output_rx.try_recv() {
+                        match agent_output {
+                            hh_agent::AgentOutput::ThinkingDelta(delta) => {
+                                thinking_content.push_str(&delta);
+                                emit_output(RunnerOutput::ThinkingDelta(delta));
                             }
-                            Some(RunnerInput::ApprovalDecision { call_id, choice }) => {
-                                enqueue_approval(
-                                    &pending_approvals,
-                                    &pending_approvals_notify,
-                                    call_id,
-                                    choice,
-                                );
+                            hh_agent::AgentOutput::AssistantDelta(delta) => {
+                                emit_output(RunnerOutput::AssistantDelta(delta));
                             }
-                            Some(RunnerInput::QuestionAnswered { call_id, answers }) => {
-                                enqueue_answer(
-                                    &pending_answers,
-                                    &pending_answers_notify,
-                                    call_id,
-                                    answers,
-                                );
-                            }
-                            Some(RunnerInput::Cancel) => {
-                                let _ = cancel_tx.send(true);
-                            }
-                            None => {}
-                        }
-                    }
-                }
-            };
-
-            if maybe_answer.is_some() {
-                return Ok(maybe_answer);
-            }
-        }
-    }
-
-    async fn execute_turn_with_output_sink<AP, APFut, Q, QFut, C, CFut>(
-        &mut self,
-        messages: &mut Vec<Message>,
-        step: &mut usize,
-        approve: &mut AP,
-        ask_question: &mut Q,
-        emit_output: &mut (impl FnMut(RunnerOutput) + Send),
-        cancel: &mut C,
-    ) -> anyhow::Result<Option<String>>
-    where
-        AP: FnMut(ApprovalRequest) -> APFut,
-        APFut: Future<Output = anyhow::Result<ApprovalChoice>> + Send,
-        Q: FnMut(Vec<QuestionPrompt>) -> QFut,
-        QFut: Future<Output = anyhow::Result<QuestionAnswers>> + Send,
-        C: FnMut() -> CFut,
-        CFut: Future<Output = ()> + Send,
-    {
-        if self.core.max_steps() > 0 && *step >= self.core.max_steps() {
-            anyhow::bail!("Reached max steps without final answer")
-        }
-
-        let (turn_result, thinking_content, cancelled) = {
-            let mut thinking_content = String::new();
-            let (core_tx, mut core_rx) = mpsc::channel::<CoreOutput>(256);
-            let overflow_outputs =
-                std::sync::Arc::new(std::sync::Mutex::new(VecDeque::<CoreOutput>::new()));
-            let request_messages = messages.clone();
-            let overflow_for_emit = overflow_outputs.clone();
-            let complete_turn =
-                self.complete_turn(&request_messages, |output| match core_tx.try_send(output) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(output)) => {
-                        if !is_coalescible_core_output(&output)
-                            && let Ok(mut overflow) = overflow_for_emit.lock()
-                        {
-                            overflow.push_back(output);
-                        }
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {}
-                });
-            tokio::pin!(complete_turn);
-
-            let mut apply_core_output = |output: CoreOutput| match output {
-                CoreOutput::ThinkingDelta(delta) => {
-                    thinking_content.push_str(&delta);
-                    emit_output(RunnerOutput::ThinkingDelta(delta));
-                }
-                CoreOutput::AssistantDelta(delta) => {
-                    emit_output(RunnerOutput::AssistantDelta(delta));
-                }
-                CoreOutput::ToolCallRequested(_) => {}
-                CoreOutput::MessageAdded(_) => {}
-                CoreOutput::TurnComplete => {}
-                CoreOutput::Error(payload) => {
-                    emit_output(RunnerOutput::Error(payload));
-                }
-                CoreOutput::ContextUsage(_) => {}
-            };
-
-            let mut cancelled = false;
-            let turn_result = loop {
-                if let Ok(mut overflow) = overflow_outputs.lock()
-                    && let Some(output) = overflow.pop_front()
-                {
-                    apply_core_output(output);
-                    continue;
-                }
-
-                tokio::select! {
-                    _ = cancel() => {
-                        cancelled = true;
-                        break None;
-                    }
-                    maybe_output = core_rx.recv() => {
-                        let Some(output) = maybe_output else {
-                            continue;
-                        };
-                        apply_core_output(output);
-                    }
-                    turn = &mut complete_turn => {
-                        let turn = match turn {
-                            Ok(turn) => turn,
-                            Err(err) => {
-                                while let Ok(output) = core_rx.try_recv() {
-                                    apply_core_output(output);
-                                }
-                                if let Ok(mut overflow) = overflow_outputs.lock() {
-                                    while let Some(output) = overflow.pop_front() {
-                                        apply_core_output(output);
+                            hh_agent::AgentOutput::MessageAdded(message) => {
+                                if message.role == Role::Assistant {
+                                    emit_output(RunnerOutput::StateUpdated(self.state.clone()));
+                                    if !thinking_content.is_empty() {
+                                        emit_output(RunnerOutput::ThinkingRecorded(
+                                            std::mem::take(&mut thinking_content),
+                                        ));
                                     }
                                 }
-                                return Err(err);
+                                emit_output(RunnerOutput::MessageAdded(message));
                             }
-                        };
-                        while let Ok(output) = core_rx.try_recv() {
-                            apply_core_output(output);
-                        }
-                        if let Ok(mut overflow) = overflow_outputs.lock() {
-                            while let Some(output) = overflow.pop_front() {
-                                apply_core_output(output);
+                            hh_agent::AgentOutput::TurnComplete => {
+                                emit_output(RunnerOutput::SnapshotUpdated(self.state.clone()));
+                                emit_output(RunnerOutput::TurnComplete);
+                            }
+                            hh_agent::AgentOutput::ContextUsage(tokens) => {
+                                self.state.context_tokens = tokens;
+                                emit_output(RunnerOutput::StateUpdated(self.state.clone()));
+                            }
+                            hh_agent::AgentOutput::Cancelled => {
+                                emit_output(RunnerOutput::Cancelled);
+                            }
+                            hh_agent::AgentOutput::Error(msg) => {
+                                emit_output(RunnerOutput::Error(ErrorPayload { message: msg }));
+                            }
+                            hh_agent::AgentOutput::ToolCallRequested { .. } => {
+                                // Tool calls should have been processed before completion;
+                                // ignore any remaining in the drain
                             }
                         }
-                        break Some(turn);
+                    }
+                    return result;
+                }
+                Some(agent_output) = agent_output_rx.recv() => {
+                    match agent_output {
+                        hh_agent::AgentOutput::ThinkingDelta(delta) => {
+                            thinking_content.push_str(&delta);
+                            emit_output(RunnerOutput::ThinkingDelta(delta));
+                        }
+                        hh_agent::AgentOutput::AssistantDelta(delta) => {
+                            emit_output(RunnerOutput::AssistantDelta(delta));
+                        }
+                        hh_agent::AgentOutput::MessageAdded(message) => {
+                            if message.role == Role::Assistant {
+                                emit_output(RunnerOutput::StateUpdated(self.state.clone()));
+                                if !thinking_content.is_empty() {
+                                    emit_output(RunnerOutput::ThinkingRecorded(
+                                        std::mem::take(&mut thinking_content),
+                                    ));
+                                }
+                            }
+                            emit_output(RunnerOutput::MessageAdded(message));
+                        }
+                        hh_agent::AgentOutput::ToolCallRequested { call, blocking: _ } => {
+                            let call_id_for_events = call.id.clone();
+                            let lifecycle_outputs = std::sync::Mutex::new(Vec::new());
+
+                            // Handle tool call with inner select! for approval bridging
+                            let outcome = {
+                                let call_id = call_id_for_events.clone();
+                                let handle_call = self.handle_tool_call(
+                                    call.clone(),
+                                    &mut approve_from_input,
+                                    &mut question_from_input,
+                                    |name, args| {
+                                        if let Ok(mut outputs) = lifecycle_outputs.lock() {
+                                            outputs.push(RunnerOutput::ToolStart {
+                                                call_id: call_id.clone(),
+                                                name: name.to_string(),
+                                                args: args.clone(),
+                                            });
+                                        }
+                                    },
+                                    |name, result| {
+                                        if let Ok(mut outputs) = lifecycle_outputs.lock() {
+                                            outputs.push(RunnerOutput::ToolEnd {
+                                                call_id: call_id.clone(),
+                                                name: name.to_string(),
+                                                result: result.clone(),
+                                            });
+                                        }
+                                    },
+                                    emit_output,
+                                );
+                                tokio::pin!(handle_call);
+
+                                loop {
+                                    tokio::select! {
+                                        result = &mut handle_call => break result?,
+                                        Some(runner_input) = input_rx.recv() => {
+                                            match runner_input {
+                                                RunnerInput::ApprovalDecision { call_id, choice } => {
+                                                    enqueue_approval(&pending_approvals, &pending_approvals_notify, call_id, choice);
+                                                }
+                                                RunnerInput::QuestionAnswered { call_id, answers } => {
+                                                    enqueue_answer(&pending_answers, &pending_answers_notify, call_id, answers);
+                                                }
+                                                RunnerInput::Cancel => {
+                                                    // Immediately abort tool execution and return cancellation error
+                                                    anyhow::bail!(CANCELLATION_ERROR_MESSAGE);
+                                                }
+                                                RunnerInput::Message(message) => {
+                                                    let _ = agent_input_tx.send(hh_agent::AgentInput::Message(message)).await;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            };
+
+                            match outcome {
+                                CallHandlingOutcome::Handled { message, changed } => {
+                                    emit_lifecycle_outputs(emit_output, lifecycle_outputs);
+                                    emit_output(RunnerOutput::SnapshotUpdated(self.state.clone()));
+                                    if changed {
+                                        emit_output(RunnerOutput::StateUpdated(self.state.clone()));
+                                    }
+                                    if let Ok(mut q) = drain_queue.lock() {
+                                        q.push(message);
+                                    }
+                                    let _ = agent_input_tx
+                                        .send(hh_agent::AgentInput::SetEphemeralState(
+                                            self.state_for_llm(),
+                                        ))
+                                        .await;
+                                    let _ = agent_input_tx
+                                        .send(hh_agent::AgentInput::ToolResult {
+                                            call_id: call.id.clone(),
+                                            result: ToolResult::ok_text("ack", "ack"),
+                                        })
+                                        .await;
+                                }
+                                CallHandlingOutcome::NonBlocking {
+                                    call: nb_call,
+                                    execution_args,
+                                } => {
+                                    emit_lifecycle_outputs(emit_output, lifecycle_outputs);
+                                    // Don't send ack here - wait for tool to complete.
+                                    // The AgentLoop will wait until it receives the ack.
+                                    let tools = self.tools;
+                                    pending_non_blocking.push(async move {
+                                        execute_non_blocking_tool(tools, nb_call, execution_args)
+                                            .await
+                                    });
+                                }
+                            }
+                        }
+                        hh_agent::AgentOutput::TurnComplete => {
+                            emit_output(RunnerOutput::SnapshotUpdated(self.state.clone()));
+                            emit_output(RunnerOutput::TurnComplete);
+                        }
+                        hh_agent::AgentOutput::ContextUsage(tokens) => {
+                            self.state.context_tokens = tokens;
+                            emit_output(RunnerOutput::StateUpdated(self.state.clone()));
+                        }
+                        hh_agent::AgentOutput::Cancelled => {
+                            emit_output(RunnerOutput::Cancelled);
+                        }
+                        hh_agent::AgentOutput::Error(msg) => {
+                            emit_output(RunnerOutput::Error(ErrorPayload { message: msg }));
+                        }
                     }
                 }
-            };
-
-            (turn_result, thinking_content, cancelled)
-        };
-
-        if cancelled {
-            self.send_core_input(CoreInput::Cancel)?;
-            emit_output(RunnerOutput::Cancelled);
-            anyhow::bail!(CANCELLATION_ERROR_MESSAGE)
+                runner_input_opt = input_rx.recv() => {
+                    match runner_input_opt {
+                        Some(runner_input) => match runner_input {
+                            RunnerInput::Message(message) => {
+                                let _ = agent_input_tx.send(hh_agent::AgentInput::Message(message)).await;
+                            }
+                            RunnerInput::ApprovalDecision { call_id, choice } => {
+                                enqueue_approval(&pending_approvals, &pending_approvals_notify, call_id, choice);
+                            }
+                            RunnerInput::QuestionAnswered { call_id, answers } => {
+                                enqueue_answer(&pending_answers, &pending_answers_notify, call_id, answers);
+                            }
+                            RunnerInput::Cancel => {
+                                // Immediately abort the agent loop and return cancellation error.
+                                // Dropping agent_future cancels any in-flight provider calls.
+                                emit_output(RunnerOutput::Cancelled);
+                                anyhow::bail!(CANCELLATION_ERROR_MESSAGE);
+                            }
+                        },
+                        None => {
+                            // Input channel closed - drop agent input channel to signal AgentLoop
+                            drop(agent_input_tx);
+                            // Wait for agent_future to complete
+                            return agent_future.await;
+                        }
+                    }
+                }
+                Some((nb_call, nb_exec)) = pending_non_blocking.next(), if !pending_non_blocking.is_empty() => {
+                    emit_output(RunnerOutput::ToolEnd {
+                        call_id: nb_call.id.clone(),
+                        name: nb_call.name.clone(),
+                        result: nb_exec.result.clone(),
+                    });
+                    let (message, changed) = self.record_tool_result(
+                        &nb_call,
+                        nb_exec.result,
+                        nb_exec.patch,
+                    )?;
+                    emit_output(RunnerOutput::SnapshotUpdated(self.state.clone()));
+                    if changed {
+                        emit_output(RunnerOutput::StateUpdated(self.state.clone()));
+                    }
+                    if let Ok(mut q) = drain_queue.lock() {
+                        q.push(message);
+                    }
+                    let _ = agent_input_tx
+                        .send(hh_agent::AgentInput::SetEphemeralState(
+                            self.state_for_llm(),
+                        ))
+                        .await;
+                    let _ = agent_input_tx
+                        .send(hh_agent::AgentInput::ToolResult {
+                            call_id: nb_call.id.clone(),
+                            result: ToolResult::ok_text("ack", "ack"),
+                        })
+                        .await;
+                }
+            }
         }
-        let turn = turn_result.ok_or_else(|| anyhow::anyhow!("provider turn cancelled"))?;
-
-        emit_output(RunnerOutput::StateUpdated(self.state.clone()));
-
-        if !thinking_content.is_empty() {
-            emit_output(RunnerOutput::ThinkingRecorded(thinking_content));
-        }
-
-        messages.push(turn.assistant_message);
-        if let Some(message) = messages.last().cloned() {
-            emit_output(RunnerOutput::MessageAdded(message));
-        }
-
-        if turn.done {
-            emit_output(RunnerOutput::SnapshotUpdated(self.state.clone()));
-            emit_output(RunnerOutput::TurnComplete);
-            return Ok(Some(turn.assistant_content));
-        }
-
-        self.process_tool_calls_cancellable(
-            messages,
-            turn.tool_calls,
-            approve,
-            ask_question,
-            emit_output,
-            cancel,
-        )
-        .await?;
-
-        *step += 1;
-        Ok(None)
     }
 
     pub fn state_for_llm(&self) -> Option<Message> {
@@ -1304,23 +1225,10 @@ fn enqueue_answer(
     }
 }
 
-async fn wait_for_cancel(mut cancel_rx: watch::Receiver<bool>) {
-    if *cancel_rx.borrow() {
-        return;
-    }
-    let _ = cancel_rx.changed().await;
-}
-
-fn is_coalescible_core_output(output: &CoreOutput) -> bool {
-    matches!(
-        output,
-        CoreOutput::ThinkingDelta(_) | CoreOutput::AssistantDelta(_)
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::agent::StateOp;
     use crate::core::{
         ApprovalDecision, ApprovalPolicy, Message, Provider, ProviderRequest, ProviderResponse,
         Role, TodoItem, TodoPriority, TodoStatus, ToolCall, ToolExecutor,
@@ -1332,7 +1240,7 @@ mod tests {
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     };
-    use tokio::sync::{mpsc, watch};
+    use tokio::sync::mpsc;
     use tokio::time::{Duration, sleep, timeout};
 
     struct TestProvider {
@@ -1575,33 +1483,12 @@ mod tests {
         }
     }
 
-    fn test_turn_state_with_user(content: &str) -> TurnState {
-        TurnState {
-            messages: vec![TestData::user_message(content)],
-            ..Default::default()
+    fn test_config(max_steps: usize) -> hh_agent::AgentConfig {
+        hh_agent::AgentConfig {
+            model: "test".to_string(),
+            system_prompt: String::new(),
+            max_steps,
         }
-    }
-
-    async fn test_ask_question_not_expected(
-        _questions: Vec<QuestionPrompt>,
-    ) -> anyhow::Result<Vec<Vec<String>>> {
-        anyhow::bail!("question tool should not be called in this test")
-    }
-
-    fn test_spawn_cancel_after(delay: Duration) -> watch::Receiver<bool> {
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        tokio::spawn(async move {
-            sleep(delay).await;
-            let _ = cancel_tx.send(true);
-        });
-        cancel_rx
-    }
-
-    async fn test_wait_for_cancel_signal(mut cancel_rx: watch::Receiver<bool>) {
-        if *cancel_rx.borrow() {
-            return;
-        }
-        let _ = cancel_rx.changed().await;
     }
 
     #[test]
@@ -1654,35 +1541,23 @@ mod tests {
             TestData::tool_call("call-slow", "slow_tool", json!({})),
             TestData::tool_call("call-fast", "fast_tool", json!({})),
         ];
-        let provider = mock_provider_with_responses(vec![TestData::provider_response(
-            "",
-            tool_calls.clone(),
-            false,
-            None,
-        )]);
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
-        let mut state = test_turn_state_with_user("run tools");
-
-        let turn = runner
-            .complete_turn(&state.messages, |_output| {})
-            .await
-            .expect("seed pending tool calls");
-        let tool_calls = turn.tool_calls;
-
+        let mut messages = vec![TestData::user_message("run tools")];
         let mut outputs = Vec::new();
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
+        async fn not_expected(_questions: Vec<QuestionPrompt>) -> anyhow::Result<Vec<Vec<String>>> {
+            anyhow::bail!("question tool should not be called in this test")
+        }
 
         runner
             .process_tool_calls(
-                &mut state.messages,
+                &mut messages,
                 tool_calls,
                 &mut approve,
-                &mut ask_question,
+                &mut not_expected,
                 &mut |output| outputs.push(output),
             )
             .await
@@ -1712,8 +1587,7 @@ mod tests {
         assert_eq!(tool_ends[1].1, "slow_tool");
         assert_eq!(tool_ends[1].2, "slow_tool output");
 
-        let tool_messages = state
-            .messages
+        let tool_messages = messages
             .iter()
             .filter_map(|message| {
                 (message.role == Role::Tool).then(|| {
@@ -1737,8 +1611,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_turn_cancellation_stops_inflight_non_blocking_tools_and_clears_pending_calls()
-    {
+    async fn cancellation_stops_inflight_non_blocking_tools() {
         let provider = mock_provider_with_responses(vec![TestData::provider_response(
             "",
             vec![TestData::tool_call("call-slow", "slow_tool", json!({}))],
@@ -1750,32 +1623,29 @@ mod tests {
             dropped: Arc::clone(&dropped),
         };
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
-        let mut state = test_turn_state_with_user("run slow tool");
+        let (tx, rx) = mpsc::channel(8);
+        tx.send(RunnerInput::Message(TestData::user_message(
+            "run slow tool",
+        )))
+        .await
+        .expect("send message");
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(50)).await;
+            let _ = tx.send(RunnerInput::Cancel).await;
+        });
 
-        let cancel_rx = test_spawn_cancel_after(Duration::from_millis(25));
-
-        let mut cancel = {
-            let cancel_rx = cancel_rx.clone();
-            move || {
-                let cancel_rx = cancel_rx.clone();
-                async move { test_wait_for_cancel_signal(cancel_rx).await }
-            }
-        };
-
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
-
+        let mut messages = Vec::new();
         let result = timeout(
-            Duration::from_millis(250),
-            runner.execute_turn_with_outputs_cancellable(
-                &mut state.messages,
-                &mut state.step,
-                &mut approve,
-                &mut ask_question,
-                &mut cancel,
+            Duration::from_millis(500),
+            runner.run_input_loop(
+                &provider,
+                test_config(10),
+                &mut messages,
+                rx,
+                &mut |_| {},
+                Vec::new,
             ),
         )
         .await
@@ -1783,46 +1653,42 @@ mod tests {
 
         let err = result.expect_err("turn should be cancelled");
         assert!(err.to_string().contains("cancelled"));
-        assert!(!runner.has_pending_tool_calls());
 
         sleep(Duration::from_millis(10)).await;
         assert!(dropped.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
-    async fn execute_turn_cancellation_drops_inflight_provider_future() {
+    async fn cancellation_drops_inflight_provider_future() {
         let dropped = Arc::new(AtomicBool::new(false));
         let provider = HangingProvider {
             dropped: Arc::clone(&dropped),
         };
         let tools = SlowTodoReadTools;
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
-        let mut state = test_turn_state_with_user("hang provider");
+        let (tx, rx) = mpsc::channel(8);
+        tx.send(RunnerInput::Message(TestData::user_message(
+            "hang provider",
+        )))
+        .await
+        .expect("send message");
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(50)).await;
+            let _ = tx.send(RunnerInput::Cancel).await;
+        });
 
-        let cancel_rx = test_spawn_cancel_after(Duration::from_millis(25));
-
-        let mut cancel = {
-            let cancel_rx = cancel_rx.clone();
-            move || {
-                let cancel_rx = cancel_rx.clone();
-                async move { test_wait_for_cancel_signal(cancel_rx).await }
-            }
-        };
-
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
-
+        let mut messages = Vec::new();
         let result = timeout(
-            Duration::from_millis(250),
-            runner.execute_turn_with_outputs_cancellable(
-                &mut state.messages,
-                &mut state.step,
-                &mut approve,
-                &mut ask_question,
-                &mut cancel,
+            Duration::from_millis(500),
+            runner.run_input_loop(
+                &provider,
+                test_config(10),
+                &mut messages,
+                rx,
+                &mut |_| {},
+                Vec::new,
             ),
         )
         .await
@@ -1836,39 +1702,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_turn_cancellation_drops_inflight_provider_stream_future() {
+    async fn cancellation_drops_inflight_provider_stream_future() {
         let dropped = Arc::new(AtomicBool::new(false));
         let provider = HangingStreamProvider {
             dropped: Arc::clone(&dropped),
         };
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
-        let mut state = test_turn_state_with_user("hang provider stream");
+        let (tx, rx) = mpsc::channel(8);
+        tx.send(RunnerInput::Message(TestData::user_message("hang stream")))
+            .await
+            .expect("send message");
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(50)).await;
+            let _ = tx.send(RunnerInput::Cancel).await;
+        });
 
-        let cancel_rx = test_spawn_cancel_after(Duration::from_millis(25));
-
-        let mut cancel = {
-            let cancel_rx = cancel_rx.clone();
-            move || {
-                let cancel_rx = cancel_rx.clone();
-                async move { test_wait_for_cancel_signal(cancel_rx).await }
-            }
-        };
-
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
-
+        let mut messages = Vec::new();
         let result = timeout(
-            Duration::from_millis(250),
-            runner.execute_turn_with_outputs_cancellable(
-                &mut state.messages,
-                &mut state.step,
-                &mut approve,
-                &mut ask_question,
-                &mut cancel,
+            Duration::from_millis(500),
+            runner.run_input_loop(
+                &provider,
+                test_config(10),
+                &mut messages,
+                rx,
+                &mut |_| {},
+                Vec::new,
             ),
         )
         .await
@@ -1891,8 +1752,7 @@ mod tests {
         )]);
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
         let (tx, rx) = mpsc::channel(8);
         tx.send(RunnerInput::Message(TestData::user_message("hello")))
@@ -1900,11 +1760,13 @@ mod tests {
             .expect("send message");
 
         let mut outputs = Vec::new();
-        let mut state = TurnState::default();
+        let mut messages = Vec::new();
 
         let answer = runner
             .run_input_loop(
-                &mut state.messages,
+                &provider,
+                test_config(10),
+                &mut messages,
                 rx,
                 &mut |output| outputs.push(output),
                 Vec::new,
@@ -1928,8 +1790,7 @@ mod tests {
         };
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
         let (tx, rx) = mpsc::channel(8);
         tx.send(RunnerInput::Message(TestData::user_message("hello")))
@@ -1940,11 +1801,18 @@ mod tests {
             let _ = tx.send(RunnerInput::Cancel).await;
         });
 
-        let mut state = TurnState::default();
+        let mut messages = Vec::new();
 
         let result = timeout(
             Duration::from_millis(250),
-            runner.run_input_loop(&mut state.messages, rx, &mut |_output| {}, Vec::new),
+            runner.run_input_loop(
+                &provider,
+                test_config(10),
+                &mut messages,
+                rx,
+                &mut |_output| {},
+                Vec::new,
+            ),
         )
         .await
         .expect("run loop should resolve quickly");
@@ -1960,16 +1828,22 @@ mod tests {
         let provider = mock_provider_with_responses(Vec::new());
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
         let (tx, rx) = mpsc::channel(8);
         tx.send(RunnerInput::Cancel).await.expect("send cancel");
 
-        let mut state = TurnState::default();
+        let mut messages = Vec::new();
 
         let result = runner
-            .run_input_loop(&mut state.messages, rx, &mut |_output| {}, Vec::new)
+            .run_input_loop(
+                &provider,
+                test_config(10),
+                &mut messages,
+                rx,
+                &mut |_output| {},
+                Vec::new,
+            )
             .await;
 
         let err = result.expect_err("run should be cancelled");
@@ -1981,16 +1855,22 @@ mod tests {
         let provider = mock_provider_with_responses(Vec::new());
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
         let (tx, rx) = mpsc::channel(8);
         drop(tx);
 
-        let mut state = TurnState::default();
+        let mut messages = Vec::new();
 
         let result = runner
-            .run_input_loop(&mut state.messages, rx, &mut |_output| {}, Vec::new)
+            .run_input_loop(
+                &provider,
+                test_config(10),
+                &mut messages,
+                rx,
+                &mut |_output| {},
+                Vec::new,
+            )
             .await
             .expect("run input loop");
 
@@ -2002,20 +1882,21 @@ mod tests {
         let provider = mock_provider_with_responses(Vec::new());
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
         let (tx, rx) = mpsc::channel(8);
         tx.send(RunnerInput::Message(TestData::user_message("start")))
             .await
             .expect("send message");
 
-        let mut state = TurnState::default();
+        let mut messages = Vec::new();
         let mut outputs = Vec::new();
 
         let result = runner
             .run_input_loop(
-                &mut state.messages,
+                &provider,
+                test_config(10),
+                &mut messages,
                 rx,
                 &mut |output| outputs.push(output),
                 Vec::new,
@@ -2023,15 +1904,10 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert!(
-            outputs
-                .iter()
-                .any(|output| matches!(output, RunnerOutput::Error(_)))
-        );
     }
 
     #[tokio::test]
-    async fn run_input_loop_cancel_clears_pending_tool_calls() {
+    async fn run_input_loop_cancel_during_tool_execution() {
         let provider = mock_provider_with_responses(vec![TestData::provider_response(
             "",
             vec![TestData::tool_call("call-1", "slow_tool", json!({}))],
@@ -2042,30 +1918,35 @@ mod tests {
             dropped: Arc::new(AtomicBool::new(false)),
         };
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
         let (tx, rx) = mpsc::channel(8);
         tx.send(RunnerInput::Message(TestData::user_message("start")))
             .await
             .expect("send message");
         tokio::spawn(async move {
-            sleep(Duration::from_millis(25)).await;
+            sleep(Duration::from_millis(50)).await;
             let _ = tx.send(RunnerInput::Cancel).await;
         });
 
-        let mut state = TurnState::default();
+        let mut messages = Vec::new();
 
         let result = timeout(
-            Duration::from_millis(250),
-            runner.run_input_loop(&mut state.messages, rx, &mut |_output| {}, Vec::new),
+            Duration::from_millis(500),
+            runner.run_input_loop(
+                &provider,
+                test_config(10),
+                &mut messages,
+                rx,
+                &mut |_output| {},
+                Vec::new,
+            ),
         )
         .await
         .expect("run loop should resolve quickly");
 
         let err = result.expect_err("run should be cancelled");
         assert!(is_cancellation_error(&err));
-        assert!(!runner.has_pending_tool_calls());
     }
 
     #[tokio::test]
@@ -2086,30 +1967,36 @@ mod tests {
 
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
         let (tx, rx) = mpsc::channel(8);
         tx.send(RunnerInput::Message(TestData::user_message("initial")))
             .await
             .expect("send initial message");
 
-        let mut state = TurnState::default();
+        let mut messages = Vec::new();
         let drain_call_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         let answer = runner
-            .run_input_loop(&mut state.messages, rx, &mut |_output| {}, {
-                let drain_call_count = Arc::clone(&drain_call_count);
-                move || {
-                    let call_index =
-                        drain_call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    if call_index == 0 {
-                        return Vec::new();
-                    }
+            .run_input_loop(
+                &provider,
+                test_config(10),
+                &mut messages,
+                rx,
+                &mut |_output| {},
+                {
+                    let drain_call_count = Arc::clone(&drain_call_count);
+                    move || {
+                        let call_index =
+                            drain_call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if call_index == 0 {
+                            return Vec::new();
+                        }
 
-                    vec![TestData::user_message("follow up")]
-                }
-            })
+                        vec![TestData::user_message("follow up")]
+                    }
+                },
+            )
             .await
             .expect("run input loop");
 
@@ -2127,34 +2014,24 @@ mod tests {
 
     #[tokio::test]
     async fn process_tool_calls_emits_snapshot_updated_after_tool_result() {
-        let provider = mock_provider_with_responses(vec![TestData::provider_response(
-            "",
-            vec![TestData::tool_call("call-1", "todo_read", json!({}))],
-            false,
-            None,
-        )]);
+        let tool_calls = vec![TestData::tool_call("call-1", "todo_read", json!({}))];
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
-        let mut state = test_turn_state_with_user("run");
-
-        let turn = runner
-            .complete_turn(&state.messages, |_output| {})
-            .await
-            .expect("complete turn");
-
+        let mut messages = vec![TestData::user_message("run")];
         let mut outputs = Vec::new();
         let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
+        async fn not_expected(_questions: Vec<QuestionPrompt>) -> anyhow::Result<Vec<Vec<String>>> {
+            anyhow::bail!("question tool should not be called in this test")
+        }
 
         runner
             .process_tool_calls(
-                &mut state.messages,
-                turn.tool_calls,
+                &mut messages,
+                tool_calls,
                 &mut approve,
-                &mut ask_question,
+                &mut not_expected,
                 &mut |output| outputs.push(output),
             )
             .await
@@ -2168,7 +2045,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_turn_emits_snapshot_updated_before_turn_complete() {
+    async fn run_input_loop_emits_snapshot_before_turn_complete() {
         let provider = mock_provider_with_responses(vec![TestData::provider_response(
             "done",
             Vec::new(),
@@ -2177,23 +2054,27 @@ mod tests {
         )]);
         let tools = DelayedNonBlockingTools;
         let approvals = TestApprovals;
-        let core = AgentCore::new(&provider, "test".to_string(), String::new(), Vec::new(), 10);
-        let mut runner = AgentRunner::new(core, &tools, &approvals, RunnerState::default());
+        let mut runner = AgentRunner::new(&tools, &approvals, RunnerState::default());
 
-        let mut state = test_turn_state_with_user("run");
+        let (tx, rx) = mpsc::channel(8);
+        tx.send(RunnerInput::Message(TestData::user_message("run")))
+            .await
+            .expect("send message");
 
-        let mut approve = |_request: ApprovalRequest| async { Ok(ApprovalChoice::AllowOnce) };
-        let mut ask_question = test_ask_question_not_expected;
+        let mut messages = Vec::new();
+        let mut outputs = Vec::new();
 
-        let (answer, outputs) = runner
-            .execute_turn_with_outputs(
-                &mut state.messages,
-                &mut state.step,
-                &mut approve,
-                &mut ask_question,
+        let answer = runner
+            .run_input_loop(
+                &provider,
+                test_config(10),
+                &mut messages,
+                rx,
+                &mut |output| outputs.push(output),
+                Vec::new,
             )
             .await
-            .expect("execute turn");
+            .expect("run input loop");
 
         assert_eq!(answer.as_deref(), Some("done"));
         let snapshot_index = outputs

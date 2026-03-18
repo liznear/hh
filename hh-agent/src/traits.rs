@@ -27,6 +27,24 @@ pub trait Provider: Send + Sync {
 }
 
 #[async_trait]
+impl<P: Provider> Provider for &P {
+    async fn complete(&self, req: ProviderRequest) -> anyhow::Result<ProviderResponse> {
+        (**self).complete(req).await
+    }
+
+    async fn complete_stream<F>(
+        &self,
+        req: ProviderRequest,
+        on_event: F,
+    ) -> anyhow::Result<ProviderResponse>
+    where
+        F: FnMut(ProviderStreamEvent) + Send,
+    {
+        (**self).complete_stream(req, on_event).await
+    }
+}
+
+#[async_trait]
 pub trait ToolRegistry: Send + Sync {
     fn schemas(&self) -> Vec<ToolSchema>;
     fn is_blocking(&self, tool_name: &str) -> bool;

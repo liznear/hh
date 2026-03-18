@@ -36,6 +36,7 @@ where
     pending_tool_call_ids: HashSet<String>,
     tool_results: HashMap<String, ToolResult>,
     blocking_tools: HashSet<String>,
+    ephemeral_state: Option<Message>,
 }
 
 impl<P, R> AgentLoop<P, R>
@@ -57,6 +58,7 @@ where
             pending_tool_call_ids: HashSet::new(),
             tool_results: HashMap::new(),
             blocking_tools,
+            ephemeral_state: None,
         }
     }
 
@@ -87,6 +89,9 @@ where
                 Some(AgentInput::Message(message)) => first_message = Some(message),
                 Some(AgentInput::ToolResult { call_id, result }) => {
                     self.tool_results.insert(call_id, result);
+                }
+                Some(AgentInput::SetEphemeralState(state)) => {
+                    self.ephemeral_state = state;
                 }
                 Some(AgentInput::Cancel) => {
                     cancelled = true;
@@ -162,6 +167,9 @@ where
                             Some(AgentInput::ToolResult { call_id, result }) => {
                                 self.tool_results.insert(call_id, result);
                             }
+                            Some(AgentInput::SetEphemeralState(state)) => {
+                                self.ephemeral_state = state;
+                            }
                             Some(AgentInput::Cancel) => {
                                 cancelled = true;
                                 break;
@@ -182,19 +190,28 @@ where
 
     async fn execute_turn(
         &mut self,
-        messages: &[Message],
+        messages: &mut Vec<Message>,
         tool_schemas: Vec<crate::types::ToolSchema>,
         input_rx: &mut mpsc::Receiver<AgentInput>,
         emit_output: &mut (impl FnMut(AgentOutput) + Send),
         cancelled: &mut bool,
     ) -> anyhow::Result<Option<String>> {
+        let mut request_messages = messages.to_vec();
+        if let Some(state_message) = self.ephemeral_state.clone() {
+            request_messages.push(state_message);
+        }
         let req = ProviderRequest {
             model: self.config.model.clone(),
-            messages: messages.to_vec(),
+            messages: request_messages,
             tools: tool_schemas,
         };
 
         let response = self.execute_provider_turn(req, emit_output).await?;
+
+        // Emit any thinking content that came in the response (not streamed as deltas)
+        if let Some(ref thinking) = response.thinking {
+            emit_output(AgentOutput::ThinkingDelta(thinking.clone()));
+        }
 
         if let Some(tokens) = response.context_tokens {
             emit_output(AgentOutput::ContextUsage(tokens));
@@ -209,6 +226,7 @@ where
             tool_calls: response.tool_calls.clone(),
         };
 
+        messages.push(assistant_message.clone());
         emit_output(AgentOutput::MessageAdded(assistant_message));
 
         if response.done {
@@ -237,7 +255,7 @@ where
         req: ProviderRequest,
         emit_output: &mut (impl FnMut(AgentOutput) + Send),
     ) -> anyhow::Result<crate::types::ProviderResponse> {
-        let (tx, mut rx) = mpsc::channel::<crate::types::ProviderStreamEvent>(256);
+        let (tx, mut rx) = mpsc::channel::<crate::types::ProviderStreamEvent>(1024);
         let stream_future = self.provider.complete_stream(req, move |event| {
             let _ = tx.try_send(event);
         });
@@ -262,7 +280,24 @@ where
             handle_event(event);
         }
 
-        Ok(response)
+        // Use accumulated stream content if non-empty, otherwise fall back to response content
+        let final_content = if assistant_content.is_empty() {
+            response.assistant_message.content.clone()
+        } else {
+            assistant_content
+        };
+
+        Ok(crate::types::ProviderResponse {
+            assistant_message: Message {
+                role: Role::Assistant,
+                content: final_content,
+                ..response.assistant_message
+            },
+            tool_calls: response.tool_calls,
+            done: response.done,
+            thinking: response.thinking,
+            context_tokens: response.context_tokens,
+        })
     }
 
     async fn process_tool_calls(
@@ -298,6 +333,9 @@ where
                         Some(AgentInput::Message(_)) => {}
                         Some(AgentInput::ToolResult { call_id, result }) => {
                             self.register_tool_result(&call_id, result)?;
+                        }
+                        Some(AgentInput::SetEphemeralState(state)) => {
+                            self.ephemeral_state = state;
                         }
                         Some(AgentInput::Cancel) => {
                             *cancelled = true;
@@ -355,6 +393,9 @@ where
                     } else {
                         self.tool_results.insert(result_call_id, result);
                     }
+                }
+                Some(AgentInput::SetEphemeralState(state)) => {
+                    self.ephemeral_state = state;
                 }
                 Some(AgentInput::Cancel) => {
                     *cancelled = true;

@@ -1,15 +1,10 @@
-pub mod core;
 pub mod output_channel;
 pub mod runner;
 pub mod subagent_manager;
 pub mod types;
 
-pub use types::{
-    CoreInput, CoreOutput, ErrorPayload, RunnerInput, RunnerOutput, RunnerState, StateOp,
-    StatePatch,
-};
+pub use types::{ErrorPayload, RunnerInput, RunnerOutput, RunnerState, StateOp, StatePatch};
 
-use self::core::AgentCore as EngineCore;
 use self::runner::AgentRunner;
 use crate::core::{ApprovalPolicy, Message, Provider, SessionReader, SessionSink, ToolExecutor};
 use crate::session::{SessionEvent, event_id};
@@ -68,15 +63,7 @@ where
         let loaded_snapshot = self.session.load_runner_state_snapshot()?;
         let runner_snapshot = loaded_snapshot.clone().unwrap_or_default();
         let mut messages = self.session.replay_messages()?;
-        let core = EngineCore::new(
-            &self.provider,
-            self.model.clone(),
-            self.system_prompt.clone(),
-            self.tools.schemas(),
-            self.max_steps,
-        );
         let mut runner = AgentRunner::new(
-            core,
             &self.tools,
             &self.approvals,
             RunnerState {
@@ -87,13 +74,11 @@ where
         runner
             .hydrate_state_from_replayed_tool_results(&replayed_events, loaded_snapshot.is_some());
 
-        if runner.core.should_inject_system_prompt(&messages) {
-            push_message_and_record(
-                &self.session,
-                &mut messages,
-                runner.core.system_prompt_message(),
-            )?;
-        }
+        let config = hh_agent::AgentConfig {
+            model: self.model.clone(),
+            system_prompt: self.system_prompt.clone(),
+            max_steps: self.max_steps,
+        };
 
         let emit_error = EmitErrorSlot::default();
         let emit_error_for_emit = emit_error.clone();
@@ -110,6 +95,8 @@ where
         };
 
         let run_future = runner.run_input_loop(
+            &self.provider,
+            config,
             &mut messages,
             input_rx,
             &mut emit_wrapped,
@@ -142,18 +129,6 @@ fn take_emit_error(emit_error: &EmitErrorSlot) -> Option<String> {
         return Some("runner emit error slot poisoned".to_string());
     };
     slot.take()
-}
-
-fn push_message_and_record<S: SessionSink>(
-    session: &S,
-    messages: &mut Vec<Message>,
-    message: Message,
-) -> anyhow::Result<()> {
-    messages.push(message.clone());
-    session.append(&SessionEvent::Message {
-        id: event_id(),
-        message,
-    })
 }
 
 pub fn apply_runner_output_to_observer<E: RunnerOutputObserver>(

@@ -67,28 +67,6 @@ pub struct ErrorPayload {
 }
 
 #[derive(Debug, Clone)]
-pub enum CoreInput {
-    ToolResult {
-        call_id: String,
-        name: String,
-        result: ToolResult,
-    },
-    SetEphemeralState(Option<Message>),
-    Cancel,
-}
-
-#[derive(Debug, Clone)]
-pub enum CoreOutput {
-    ThinkingDelta(String),
-    AssistantDelta(String),
-    ContextUsage(usize),
-    ToolCallRequested(ToolCall),
-    MessageAdded(Message),
-    TurnComplete,
-    Error(ErrorPayload),
-}
-
-#[derive(Debug, Clone)]
 pub enum RunnerInput {
     Message(Message),
     ApprovalDecision {
@@ -144,8 +122,3 @@ pub enum RunnerOutput {
     TurnComplete,
     Error(ErrorPayload),
 }
-
-// Protocol invariants:
-// - Exactly one `CoreInput::ToolResult` must be sent for each requested tool `call_id`.
-// - The core will not start the next provider call until all tool results for the current turn
-//   are resolved (or the turn is cancelled).
