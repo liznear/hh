@@ -68,6 +68,7 @@ fn App(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
             width: layout.width,
             height: layout.height,
             padding: layout.padding,
+            background_color: theme.background(),
         ) {
             // Main column - takes remaining space
             View(
