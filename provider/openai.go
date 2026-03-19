@@ -15,6 +15,35 @@ type openAICompatibleProvider struct {
 	client openai.Client
 }
 
+// Streaming mapping contract (OpenAI chunk -> agent.ProviderResponse):
+//
+//  1. chunk.choices[0].delta.content
+//     -> ProviderResponse.MessageDelta
+//
+//  2. chunk.choices[0].delta.tool_calls[*]
+//     -> ProviderResponse.ToolCallDelta
+//        - index -> ToolCallDelta.Index
+//        - id -> ToolCallDelta.ID
+//        - type -> ToolCallDelta.Type
+//        - function.name -> ToolCallDelta.Name
+//        - function.arguments -> ToolCallDelta.Arguments
+//
+//  3. chunk.choices[0].finish_reason
+//     -> ProviderResponse.FinishReason
+//
+//  4. end of stream (accumulated via openai.ChatCompletionAccumulator)
+//     -> ProviderResponse.Message (final assistant content)
+//     -> ProviderResponse.ToolCalls (final fully assembled tool calls)
+//
+//  5. stream/transport/decode errors
+//     -> ProviderResponse.Error
+//
+// Notes:
+// - We currently map textual delta content to MessageDelta.
+// - ThinkingDelta is reserved but not emitted by this provider yet.
+// - Tool call deltas can arrive in pieces; final ToolCalls are reconstructed from
+//   the accumulator to provide complete arguments.
+
 func NewOpenAICompatibleProvider(baseURL string, apiKey string) agent.Provider {
 	return &openAICompatibleProvider{
 		client: openai.NewClient(
@@ -53,11 +82,16 @@ func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req
 			}
 
 			choice := chunk.Choices[0]
+
+			// Incremental assistant text.
 			if choice.Delta.Content != "" {
 				ch <- agent.ProviderResponse{MessageDelta: choice.Delta.Content}
 			}
 
+			// Incremental tool-call fragments.
 			for _, tc := range choice.Delta.ToolCalls {
+				// Some providers may use -1 for single tool-call streams.
+				// We normalize to 0 for deterministic downstream indexing.
 				ch <- agent.ProviderResponse{
 					ToolCallDelta: &agent.ToolCallDelta{
 						Index:     clampToZero(tc.Index),
@@ -69,6 +103,7 @@ func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req
 				}
 			}
 
+			// Per-choice completion boundary signal.
 			if choice.FinishReason != "" {
 				ch <- agent.ProviderResponse{FinishReason: agent.FinishReason(choice.FinishReason)}
 			}
@@ -83,12 +118,14 @@ func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req
 			return
 		}
 
+		// Final fully accumulated assistant message.
 		msg := agent.Message{
 			Role:    agent.RoleAssistant,
 			Content: acc.Choices[0].Message.Content,
 		}
 		ch <- agent.ProviderResponse{Message: &msg}
 
+		// Final fully accumulated tool calls.
 		toolCalls := toAgentToolCalls(acc.Choices[0].Message.ToolCalls)
 		if len(toolCalls) > 0 {
 			ch <- agent.ProviderResponse{ToolCalls: toolCalls}
