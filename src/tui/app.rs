@@ -1,6 +1,12 @@
-use crate::tui::components::{InputArea, Message, MessageArea};
+use crate::tui::components::{InputArea, Message, MessageArea, MessageRole};
 use crate::tui::theme::current_theme;
+use hh_coding_agent::core::agent::RunnerOutput;
 use iocraft::prelude::*;
+use std::sync::Arc;
+use tokio::sync::{Mutex, mpsc};
+
+static mut AGENT_INPUT_TX: Option<mpsc::Sender<String>> = None;
+static mut AGENT_OUTPUT_RX: Option<Arc<Mutex<Option<RunnerOutput>>>> = None;
 
 /// Layout configuration and computed dimensions for the app.
 struct Layout {
@@ -60,7 +66,7 @@ fn App(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let _system = hooks.use_context_mut::<SystemContext>();
 
     // State for messages
-    let messages = hooks.use_state(Vec::<Message>::new);
+    let mut messages = hooks.use_state(Vec::<Message>::new);
 
     element! {
         View(
@@ -89,8 +95,18 @@ fn App(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                 }
                 // Input area (bottom)
                 InputArea(
-                    on_submit: move |_content: String| {
-                        // TODO: Implement submission to coding agent
+                    on_submit: move |content: String| {
+                        let mut msgs = messages.read().clone();
+                        msgs.push(Message {
+                            role: MessageRole::User,
+                            content: content.clone(),
+                        });
+                        messages.set(msgs);
+                        unsafe {
+                            if let Some(ref tx) = AGENT_INPUT_TX {
+                                let _ = tx.try_send(content);
+                            }
+                        }
                     }
                 )
             }
@@ -115,6 +131,14 @@ fn App(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
 }
 
 pub fn run_app() -> anyhow::Result<()> {
-    smol::block_on(async { element!(App).fullscreen().await })?;
+    let (input_tx, output_slot) = crate::tui::start_simple_agent();
+
+    unsafe {
+        AGENT_INPUT_TX = Some(input_tx.clone());
+        AGENT_OUTPUT_RX = Some(output_slot);
+    }
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move { element!(App).fullscreen().await })?;
     Ok(())
 }

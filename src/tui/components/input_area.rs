@@ -29,7 +29,7 @@ pub fn InputArea(mut hooks: Hooks, props: &mut InputAreaProps) -> impl Into<AnyE
     // Handle keyboard input manually
     hooks.use_terminal_events({
         let mut value = value;
-        let _on_submit_handler = props.on_submit.take();
+        let mut on_submit = props.on_submit.take();
         move |event| {
             if let TerminalEvent::Key(key_event) = event
                 && key_event.kind == KeyEventKind::Press
@@ -37,7 +37,7 @@ pub fn InputArea(mut hooks: Hooks, props: &mut InputAreaProps) -> impl Into<AnyE
                 if key_event.code == KeyCode::Enter && key_event.modifiers.is_empty() {
                     let content = value.read().clone();
                     if !content.trim().is_empty() {
-                        // TODO: Call on_submit handler properly
+                        (on_submit)(content);
                         value.set(String::new());
                     }
                 }

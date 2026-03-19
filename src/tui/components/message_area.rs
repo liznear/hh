@@ -3,6 +3,15 @@ use iocraft::prelude::*;
 
 const HORIZONTAL_PADDING: u32 = 2;
 
+/// The role of a message sender
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum MessageRole {
+    #[default]
+    User,
+    #[allow(dead_code)]
+    Assistant,
+}
+
 /// A single message in the chat
 #[derive(Clone, Debug)]
 pub struct Message {
@@ -10,14 +19,6 @@ pub struct Message {
     pub role: MessageRole,
     /// The content of the message
     pub content: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub enum MessageRole {
-    #[default]
-    User,
-    #[allow(dead_code)]
-    Assistant,
 }
 
 /// The props which can be passed to the [`MessageArea`] component.
