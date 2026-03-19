@@ -1,3 +1,4 @@
+use crate::tui::theme::current_theme;
 use iocraft::prelude::*;
 
 const SIDEBAR_WIDTH: u32 = 45;
@@ -7,18 +8,7 @@ const MIN_WIDTH_FOR_SIDEBAR: u16 = 160;
 fn App(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let (width, height) = hooks.use_terminal_size();
     let show_sidebar = width >= MIN_WIDTH_FOR_SIDEBAR;
-
-    // Light grey color for sidebar
-    let sidebar_bg = Color::Rgb {
-        r: 220,
-        g: 220,
-        b: 220,
-    };
-    let main_bg = Color::Rgb {
-        r: 255,
-        g: 255,
-        b: 255,
-    };
+    let theme = current_theme();
 
     let main_width = if show_sidebar {
         width as u32 - SIDEBAR_WIDTH
@@ -37,11 +27,11 @@ fn App(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                 flex_direction: FlexDirection::Column,
                 width: main_width,
                 height: height as u32,
-                background_color: main_bg,
+                background_color: theme.background(),
                 flex_grow: 1.0,
                 flex_shrink: 0.0,
             ) {
-                Text(content: "Main Column", color: Color::Black)
+                Text(content: "Main Column", color: theme.foreground())
             }
             // Sidebar column - fixed 45 chars width, conditionally shown
             #(if show_sidebar {
@@ -50,10 +40,10 @@ fn App(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                         flex_direction: FlexDirection::Column,
                         width: SIDEBAR_WIDTH,
                         height: height as u32,
-                        background_color: sidebar_bg,
+                        background_color: theme.background_tertiary(),
                         flex_shrink: 0.0,
                     ) {
-                        Text(content: "Sidebar", color: Color::Black)
+                        Text(content: "Sidebar", color: theme.foreground())
                     }
                 })
             } else {
