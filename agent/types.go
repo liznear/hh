@@ -17,6 +17,36 @@ type Message struct {
 	CallID string
 }
 
-type Tool struct{}
+type ToolType string
 
-type ToolCall struct{}
+const (
+	ToolTypeFunction ToolType = "function"
+)
+
+type Tool struct {
+	Type     ToolType
+	Function ToolFunction
+}
+
+type ToolFunction struct {
+	Name        string
+	Description string
+	Parameters  map[string]any
+}
+
+type ToolCallType string
+
+const (
+	ToolCallTypeFunction ToolCallType = "function"
+)
+
+type ToolCall struct {
+	ID       string
+	Type     ToolCallType
+	Function ToolCallFunction
+}
+
+type ToolCallFunction struct {
+	Name      string
+	Arguments string
+}

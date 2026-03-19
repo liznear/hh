@@ -28,14 +28,34 @@ func (a *Agent) Run(ctx context.Context, aCtx Context) EventStream {
 
 	resCh, err := a.provider.ChatCompletionStream(ctx, req)
 	go func() {
-		defer close(resCh)
 		defer close(ch)
 		if err != nil {
-			ch <- Event{EventTypeError, err}
+			ch <- Event{Type: EventTypeError, Data: EventDataError{Err: err}}
 			return
 		}
 		for res := range resCh {
-			ch <- Event{EventTypeThinkingDelta, res}
+			if res.Error != nil {
+				ch <- Event{Type: EventTypeError, Data: EventDataError{Err: res.Error}}
+				continue
+			}
+			if res.ThinkingDelta != "" {
+				ch <- Event{Type: EventTypeThinkingDelta, Data: EventDataThinkingDelta{Delta: res.ThinkingDelta}}
+			}
+			if res.MessageDelta != "" {
+				ch <- Event{Type: EventTypeMessageDelta, Data: EventDataMessageDelta{Delta: res.MessageDelta}}
+			}
+			if res.ToolCallDelta != nil {
+				ch <- Event{Type: EventTypeToolCallDelta, Data: EventDataToolCallDelta{Delta: *res.ToolCallDelta}}
+			}
+			if res.Message != nil {
+				ch <- Event{Type: EventTypeMessage, Data: EventDataMessage{Message: *res.Message}}
+			}
+			if len(res.ToolCalls) > 0 {
+				ch <- Event{Type: EventTypeToolCalls, Data: EventDataToolCalls{ToolCalls: res.ToolCalls}}
+			}
+			if res.FinishReason != FinishReasonUnknown {
+				ch <- Event{Type: EventTypeDone, Data: EventDataDone{Reason: res.FinishReason}}
+			}
 		}
 	}()
 	return ret

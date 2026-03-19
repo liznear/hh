@@ -3,13 +3,46 @@ package agent
 type EventType int
 
 const (
-	EventTypeError         = 0
-	EventTypeThinkingDelta = 1
+	EventTypeError EventType = iota
+	EventTypeThinkingDelta
+	EventTypeMessageDelta
+	EventTypeToolCallDelta
+	EventTypeMessage
+	EventTypeToolCalls
+	EventTypeDone
 )
 
 type Event struct {
 	Type EventType
 	Data any
+}
+
+type EventDataError struct {
+	Err error
+}
+
+type EventDataThinkingDelta struct {
+	Delta string
+}
+
+type EventDataMessageDelta struct {
+	Delta string
+}
+
+type EventDataToolCallDelta struct {
+	Delta ToolCallDelta
+}
+
+type EventDataMessage struct {
+	Message Message
+}
+
+type EventDataToolCalls struct {
+	ToolCalls []ToolCall
+}
+
+type EventDataDone struct {
+	Reason FinishReason
 }
 
 type EventStream struct {
