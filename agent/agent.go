@@ -13,6 +13,34 @@ type Context struct {
 	Tools        []Tool
 }
 
+// Event mapping contract (ProviderResponse -> Event):
+//
+//  1. ProviderResponse.Error
+//     -> EventTypeError with EventDataError
+//
+//  2. ProviderResponse.ThinkingDelta
+//     -> EventTypeThinkingDelta with EventDataThinkingDelta
+//
+//  3. ProviderResponse.MessageDelta
+//     -> EventTypeMessageDelta with EventDataMessageDelta
+//
+//  4. ProviderResponse.ToolCallDelta
+//     -> EventTypeToolCallDelta with EventDataToolCallDelta
+//
+//  5. ProviderResponse.Message
+//     -> EventTypeMessage with EventDataMessage
+//
+//  6. ProviderResponse.ToolCalls
+//     -> EventTypeToolCalls with EventDataToolCalls
+//
+//  7. ProviderResponse.FinishReason (!= FinishReasonUnknown)
+//     -> EventTypeDone with EventDataDone
+//
+// Ordering notes:
+// - A single ProviderResponse may emit multiple Events (for example, delta + done).
+// - Error is emitted first for that response and remaining mappings are skipped.
+// - The EventStream closes when the provider response channel is exhausted.
+
 func (a *Agent) Run(ctx context.Context, aCtx Context) EventStream {
 	req := ProviderRequest{
 		Messages: []Message{{RoleSystem, aCtx.SystemPrompt, ""}},
@@ -34,6 +62,8 @@ func (a *Agent) Run(ctx context.Context, aCtx Context) EventStream {
 			return
 		}
 		for res := range resCh {
+			// Provider-level error maps directly to an error event and short-circuits
+			// further mapping for this response item.
 			if res.Error != nil {
 				ch <- Event{Type: EventTypeError, Data: EventDataError{Err: res.Error}}
 				continue
