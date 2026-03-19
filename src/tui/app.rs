@@ -1,3 +1,4 @@
+use crate::tui::components::{InputArea, Message, MessageArea};
 use crate::tui::theme::current_theme;
 use iocraft::prelude::*;
 
@@ -56,6 +57,10 @@ fn App(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let (width, height) = hooks.use_terminal_size();
     let layout = Layout::new(width, height);
     let theme = current_theme();
+    let _system = hooks.use_context_mut::<SystemContext>();
+
+    // State for messages
+    let messages = hooks.use_state(Vec::<Message>::new);
 
     element! {
         View(
@@ -73,7 +78,20 @@ fn App(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                 flex_grow: 1.0,
                 flex_shrink: 0.0,
             ) {
-                Text(content: "Main Column", color: theme.foreground())
+                // Message area (top)
+                View(
+                    flex_direction: FlexDirection::Column,
+                    width: 100pct,
+                    flex_grow: 1.0,
+                ) {
+                    MessageArea(messages: messages.read().clone())
+                }
+                // Input area (bottom)
+                InputArea(
+                    on_submit: move |_content: String| {
+                        // TODO: Implement submission to coding agent
+                    }
+                )
             }
             // Sidebar column - fixed width, conditionally shown
             #(if layout.show_sidebar() {

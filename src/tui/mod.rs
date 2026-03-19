@@ -1,4 +1,5 @@
 mod app;
+pub mod components;
 pub mod theme;
 
 pub use app::run_app;
