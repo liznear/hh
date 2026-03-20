@@ -1,6 +1,11 @@
 package agent
 
-import "context"
+import (
+	"context"
+	"fmt"
+
+	"github.com/liznear/hh/common"
+)
 
 type Agent struct {
 	provider Provider
@@ -12,34 +17,6 @@ type Context struct {
 	Prompts      []Message
 	Tools        []Tool
 }
-
-// Event mapping contract (ProviderResponse -> Event):
-//
-//  1. ProviderResponse.Error
-//     -> EventTypeError with EventDataError
-//
-//  2. ProviderResponse.ThinkingDelta
-//     -> EventTypeThinkingDelta with EventDataThinkingDelta
-//
-//  3. ProviderResponse.MessageDelta
-//     -> EventTypeMessageDelta with EventDataMessageDelta
-//
-//  4. ProviderResponse.ToolCallDelta
-//     -> EventTypeToolCallDelta with EventDataToolCallDelta
-//
-//  5. ProviderResponse.Message
-//     -> EventTypeMessage with EventDataMessage
-//
-//  6. ProviderResponse.ToolCalls
-//     -> EventTypeToolCalls with EventDataToolCalls
-//
-//  7. ProviderResponse.FinishReason (!= FinishReasonUnknown)
-//     -> EventTypeDone with EventDataDone
-//
-// Ordering notes:
-// - A single ProviderResponse may emit multiple Events (for example, delta + done).
-// - Error is emitted first for that response and remaining mappings are skipped.
-// - The EventStream closes when the provider response channel is exhausted.
 
 func (a *Agent) Run(ctx context.Context, aCtx Context) EventStream {
 	req := ProviderRequest{
@@ -61,32 +38,60 @@ func (a *Agent) Run(ctx context.Context, aCtx Context) EventStream {
 			ch <- Event{Type: EventTypeError, Data: EventDataError{Err: err}}
 			return
 		}
-		for res := range resCh {
-			// Provider-level error maps directly to an error event and short-circuits
-			// further mapping for this response item.
-			if res.Error != nil {
-				ch <- Event{Type: EventTypeError, Data: EventDataError{Err: res.Error}}
-				continue
-			}
-			if res.ThinkingDelta != "" {
-				ch <- Event{Type: EventTypeThinkingDelta, Data: EventDataThinkingDelta{Delta: res.ThinkingDelta}}
-			}
-			if res.MessageDelta != "" {
-				ch <- Event{Type: EventTypeMessageDelta, Data: EventDataMessageDelta{Delta: res.MessageDelta}}
-			}
-			if res.ToolCallDelta != nil {
-				ch <- Event{Type: EventTypeToolCallDelta, Data: EventDataToolCallDelta{Delta: *res.ToolCallDelta}}
-			}
-			if res.Message != nil {
-				ch <- Event{Type: EventTypeMessage, Data: EventDataMessage{Message: *res.Message}}
-			}
-			if len(res.ToolCalls) > 0 {
-				ch <- Event{Type: EventTypeToolCalls, Data: EventDataToolCalls{ToolCalls: res.ToolCalls}}
-			}
-			if res.FinishReason != FinishReasonUnknown {
-				ch <- Event{Type: EventTypeDone, Data: EventDataDone{Reason: res.FinishReason}}
-			}
-		}
+		common.BridgeChannel(ctx, resCh, ch, toEvent)
 	}()
 	return ret
+}
+
+func toEvent(res ProviderResponse) Event {
+	// Event mapping contract (ProviderResponse -> Event):
+	//
+	//  1. ProviderResponse.Error
+	//     -> EventTypeError with EventDataError
+	//
+	//  2. ProviderResponse.ThinkingDelta
+	//     -> EventTypeThinkingDelta with EventDataThinkingDelta
+	//
+	//  3. ProviderResponse.MessageDelta
+	//     -> EventTypeMessageDelta with EventDataMessageDelta
+	//
+	//  4. ProviderResponse.ToolCallDelta
+	//     -> EventTypeToolCallDelta with EventDataToolCallDelta
+	//
+	//  5. ProviderResponse.Message
+	//     -> EventTypeMessage with EventDataMessage
+	//
+	//  6. ProviderResponse.ToolCalls
+	//     -> EventTypeToolCalls with EventDataToolCalls
+	//
+	//  7. ProviderResponse.FinishReason (!= FinishReasonUnknown)
+	//     -> EventTypeDone with EventDataDone
+	//
+	// Ordering notes:
+	// - A single ProviderResponse only emits one Events.
+	//
+	// Provider-level error maps directly to an error event and short-circuits
+	// further mapping for this response item.
+	if res.Error != nil {
+		return Event{Type: EventTypeError, Data: EventDataError{Err: res.Error}}
+	}
+	if res.ThinkingDelta != "" {
+		return Event{Type: EventTypeThinkingDelta, Data: EventDataThinkingDelta{Delta: res.ThinkingDelta}}
+	}
+	if res.MessageDelta != "" {
+		return Event{Type: EventTypeMessageDelta, Data: EventDataMessageDelta{Delta: res.MessageDelta}}
+	}
+	if res.ToolCallDelta != nil {
+		return Event{Type: EventTypeToolCallDelta, Data: EventDataToolCallDelta{Delta: *res.ToolCallDelta}}
+	}
+	if res.Message != nil {
+		return Event{Type: EventTypeMessage, Data: EventDataMessage{Message: *res.Message}}
+	}
+	if len(res.ToolCalls) > 0 {
+		return Event{Type: EventTypeToolCalls, Data: EventDataToolCalls{ToolCalls: res.ToolCalls}}
+	}
+	if res.FinishReason != FinishReasonUnknown {
+		return Event{Type: EventTypeDone, Data: EventDataDone{Reason: res.FinishReason}}
+	}
+	return Event{Type: EventTypeError, Data: EventDataError{Err: fmt.Errorf("invalid response: %v", res)}}
 }
