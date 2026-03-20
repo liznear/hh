@@ -1,0 +1,8 @@
+{"Type":"agent_start","Data":{}}
+{"Type":"turn_start","Data":{}}
+{"Type":"tool_call_start","Data":{"Call":{"ID":"call_1","Name":"echo","Arguments":"{\"arg\":\"val\"}"}}}
+{"Type":"tool_call_end","Data":{"Call":{"ID":"call_1","Name":"echo","Arguments":"{\"arg\":\"val\"}"},"Result":{"IsErr":false,"ContentType":"","Data":"{\"arg\":\"val\"}"}}}
+{"Type":"turn_end","Data":{}}
+{"Type":"turn_start","Data":{}}
+{"Type":"turn_end","Data":{}}
+{"Type":"agent_end","Data":{"Messages":[{"Role":"user","Content":"Hello","CallID":""},{"Role":"tool","Content":"{\"arg\":\"val\"}","CallID":"call_1"},{"Role":"assistant","Content":"Final answer","CallID":""}]}}

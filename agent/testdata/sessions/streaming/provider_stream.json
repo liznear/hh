@@ -1,0 +1,22 @@
+[
+  {
+    "responses": [
+      {
+        "Message": {
+          "Role": "assistant",
+          "Content": "hello"
+        }
+      }
+    ],
+    "streamEvents": [
+      {
+        "ThinkingDelta": "hmm",
+        "MessageDelta": ""
+      },
+      {
+        "ThinkingDelta": "",
+        "MessageDelta": "hello"
+      }
+    ]
+  }
+]

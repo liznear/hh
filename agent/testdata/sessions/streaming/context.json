@@ -1,0 +1,7 @@
+{
+  "Model": "test-model",
+  "SystemPrompt": "test system prompt",
+  "History": [],
+  "Prompts": [],
+  "Tools": {}
+}

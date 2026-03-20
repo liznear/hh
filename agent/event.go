@@ -1,20 +1,20 @@
 package agent
 
-type EventType int
+type EventType string
 
 const (
-	EventTypeError EventType = iota
-	EventTypeAgentStart
-	EventTypeAgentEnd
-	EventTypeTurnStart
-	EventTypeTurnEnd
-	EventTypeThinkingDelta
-	EventTypeMessageDelta
-	EventTypeMessage
-	EventTypeToolCalls
-	EventTypeToolCallStart
-	EventTypeToolCallEnd
-	EventTypeDone
+	EventTypeError         EventType = "error"
+	EventTypeAgentStart    EventType = "agent_start"
+	EventTypeAgentEnd      EventType = "agent_end"
+	EventTypeTurnStart     EventType = "turn_start"
+	EventTypeTurnEnd       EventType = "turn_end"
+	EventTypeThinkingDelta EventType = "thinking_delta"
+	EventTypeMessageDelta  EventType = "message_delta"
+	EventTypeMessage       EventType = "message"
+	EventTypeToolCalls     EventType = "tool_calls"
+	EventTypeToolCallStart EventType = "tool_call_start"
+	EventTypeToolCallEnd   EventType = "tool_call_end"
+	EventTypeDone          EventType = "done"
 )
 
 type Event struct {

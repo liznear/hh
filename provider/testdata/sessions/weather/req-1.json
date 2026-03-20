@@ -2,7 +2,7 @@
   "Model": "glm-5",
   "Messages": [
     {
-      "Role": 2,
+      "Role": "user",
       "Content": "What's the weather in San Francisco?",
       "CallID": ""
     }

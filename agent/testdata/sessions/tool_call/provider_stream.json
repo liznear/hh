@@ -1,0 +1,28 @@
+[
+  {
+    "responses": [
+      {
+        "ToolCalls": [
+          {
+            "ID": "call_1",
+            "Name": "echo",
+            "Arguments": "{\"arg\":\"val\"}"
+          }
+        ]
+      }
+    ],
+    "streamEvents": []
+  },
+  {
+    "responses": [
+      {
+        "Message": {
+          "Role": "assistant",
+          "Content": "Final answer",
+          "CallID": ""
+        }
+      }
+    ],
+    "streamEvents": []
+  }
+]

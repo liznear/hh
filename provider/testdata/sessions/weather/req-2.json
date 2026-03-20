@@ -2,17 +2,17 @@
   "Model": "glm-5",
   "Messages": [
     {
-      "Role": 2,
+      "Role": "user",
       "Content": "What's the weather in San Francisco?",
       "CallID": ""
     },
     {
-      "Role": 3,
+      "Role": "assistant",
       "Content": "Let me check the weather first...",
       "CallID": ""
     },
     {
-      "Role": 4,
+      "Role": "tool",
       "Content": "{\"temperature\": 72, \"condition\": \"sunny\"}",
       "CallID": "call_abc123"
     }

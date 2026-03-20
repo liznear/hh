@@ -32,6 +32,7 @@ func RunAgentLoop(ctx context.Context, conf Config, aCtx Context, onEvent func(E
 	shouldContinue := true
 
 	onEvent(Event{EventTypeAgentStart, EventDataAgentStart{}})
+AgentLoop:
 	for shouldContinue {
 		shouldContinue = false
 
@@ -40,6 +41,7 @@ func RunAgentLoop(ctx context.Context, conf Config, aCtx Context, onEvent func(E
 			if err := ctx.Err(); err != nil {
 				onEvent(Event{Type: EventTypeError, Data: err})
 			}
+			break AgentLoop
 		default:
 		}
 
@@ -51,8 +53,12 @@ func RunAgentLoop(ctx context.Context, conf Config, aCtx Context, onEvent func(E
 		if err != nil {
 			onEvent(Event{Type: EventTypeError, Data: err})
 			onEvent(Event{EventTypeTurnEnd, EventDataTurnEnd{}})
+			break AgentLoop
 		}
 
+		if res.Message.Content != "" {
+			req.Messages = append(req.Messages, res.Message)
+		}
 		if len(res.ToolCalls) > 0 {
 			toolResults := executeTools(ctx, aCtx, res.ToolCalls, onEvent)
 			req.Messages = append(req.Messages, lo.Map(toolResults, func(r ToolResult, idx int) Message {

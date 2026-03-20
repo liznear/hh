@@ -1,0 +1,12 @@
+{
+  "Model": "test-model",
+  "SystemPrompt": "test system prompt",
+  "History": [
+    {
+      "Role": "user",
+      "Content": "Hello",
+      "CallID": ""
+    }
+  ],
+  "Prompts": []
+}

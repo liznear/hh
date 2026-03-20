@@ -1,13 +1,13 @@
 package agent
 
-type Role int
+type Role string
 
 const (
-	RoleUnknown   = 0
-	RoleSystem    = 1
-	RoleUser      = 2
-	RoleAssistant = 3
-	RoleTool      = 4
+	RoleUnknown   Role = "unknown"
+	RoleSystem    Role = "system"
+	RoleUser      Role = "user"
+	RoleAssistant Role = "assistant"
+	RoleTool      Role = "tool"
 )
 
 type Message struct {

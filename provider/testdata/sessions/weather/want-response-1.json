@@ -1,6 +1,6 @@
 {
   "Message": {
-    "Role": 3,
+    "Role": "assistant",
     "Content": "Let me check the weather first...",
     "CallID": ""
   },

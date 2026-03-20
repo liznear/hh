@@ -1,5 +1,5 @@
 {
-  "Message": {"Role": 3, "Content": "The weather in San Francisco is sunny.", "CallID": ""},
+  "Message": {"Role": "assistant", "Content": "The weather in San Francisco is sunny.", "CallID": ""},
   "Thinking": "",
   "ToolCalls": null,
   "FinishReason": "stop"

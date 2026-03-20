@@ -1,0 +1,6 @@
+{"Type":"agent_start","Data":{}}
+{"Type":"turn_start","Data":{}}
+{"Type":"thinking_delta","Data":{"Delta":"hmm"}}
+{"Type":"message_delta","Data":{"Delta":"hello"}}
+{"Type":"turn_end","Data":{}}
+{"Type":"agent_end","Data":{"Messages":[{"Role":"assistant","Content":"hello","CallID":""}]}}
