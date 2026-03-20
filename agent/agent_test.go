@@ -50,7 +50,7 @@ func TestRunAgentLoop(t *testing.T) {
 		t.Fatalf("failed to read sessions dir: %v", err)
 	}
 	tools := map[string]Tool{
-		"echo": Tool{
+		"echo": {
 			Name:        "echo",
 			Description: "Echo back the arguments",
 			Handler: func(ctx context.Context, args string) ToolResult {

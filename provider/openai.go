@@ -147,8 +147,6 @@ func toOpenAITool(t *agent.Tool) (openai.ChatCompletionToolUnionParam, bool) {
 		Description: openai.Opt(t.Description),
 		Parameters:  t.Schema,
 	}), true
-
-	return openai.ChatCompletionToolUnionParam{}, false
 }
 
 func toOpenAIMessage(m *agent.Message) openai.ChatCompletionMessageParamUnion {

@@ -8,18 +8,6 @@ import (
 	"golang.org/x/exp/maps"
 )
 
-type Config struct {
-	provider Provider
-}
-
-type Context struct {
-	Model        string
-	SystemPrompt string
-	History      []Message
-	Prompts      []Message
-	Tools        map[string]Tool
-}
-
 func RunAgentLoop(ctx context.Context, conf Config, aCtx Context, onEvent func(Event)) {
 	req := ProviderRequest{
 		Model:    aCtx.Model,
