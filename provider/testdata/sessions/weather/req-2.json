@@ -1,0 +1,21 @@
+{
+  "Model": "glm-5",
+  "Messages": [
+    {
+      "Role": 2,
+      "Content": "What's the weather in San Francisco?",
+      "CallID": ""
+    },
+    {
+      "Role": 3,
+      "Content": "Let me check the weather first...",
+      "CallID": ""
+    },
+    {
+      "Role": 4,
+      "Content": "{\"temperature\": 72, \"condition\": \"sunny\"}",
+      "CallID": "call_abc123"
+    }
+  ],
+  "Tools": null
+}

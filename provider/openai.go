@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/liznear/hh/agent"
@@ -83,11 +84,6 @@ func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req
 
 			choice := chunk.Choices[0]
 
-			// Incremental assistant text.
-			if choice.Delta.Content != "" {
-				ch <- agent.ProviderResponse{MessageDelta: choice.Delta.Content}
-			}
-
 			// Incremental tool-call fragments.
 			for _, tc := range choice.Delta.ToolCalls {
 				// Some providers may use -1 for single tool-call streams.
@@ -106,6 +102,19 @@ func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req
 			// Per-choice completion boundary signal.
 			if choice.FinishReason != "" {
 				ch <- agent.ProviderResponse{FinishReason: agent.FinishReason(choice.FinishReason)}
+			}
+
+			// Incremental thinking/reasoning text (DeepSeek-style reasoning_content)
+			if reasoningField, ok := choice.Delta.JSON.ExtraFields["reasoning_content"]; ok {
+				var reasoning string
+				if err := json.Unmarshal([]byte(reasoningField.Raw()), &reasoning); err == nil && reasoning != "" {
+					ch <- agent.ProviderResponse{ThinkingDelta: reasoning}
+				}
+			}
+
+			// Incremental assistant text.
+			if choice.Delta.Content != "" {
+				ch <- agent.ProviderResponse{MessageDelta: choice.Delta.Content}
 			}
 		}
 
@@ -153,7 +162,18 @@ func toOpenAITool(t *agent.Tool) (openai.ChatCompletionToolUnionParam, bool) {
 func toAgentToolCalls(calls []openai.ChatCompletionMessageToolCallUnion) []agent.ToolCall {
 	ret := make([]agent.ToolCall, 0, len(calls))
 	for _, call := range calls {
-		variant := call.AsAny()
+		// openai-go's ChatCompletionAccumulator has a quirk where AsAny() returns an empty struct
+		// unless the Union is unmarshaled from JSON. We roundtrip it here to ensure it works.
+		b, err := json.Marshal(call)
+		if err != nil {
+			continue
+		}
+		var union openai.ChatCompletionMessageToolCallUnion
+		if err := json.Unmarshal(b, &union); err != nil {
+			continue
+		}
+
+		variant := union.AsAny()
 		if variant == nil {
 			continue
 		}

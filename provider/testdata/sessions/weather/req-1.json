@@ -1,0 +1,30 @@
+{
+  "Model": "glm-5",
+  "Messages": [
+    {
+      "Role": 2,
+      "Content": "What's the weather in San Francisco?",
+      "CallID": ""
+    }
+  ],
+  "Tools": [
+    {
+      "Type": "function",
+      "Function": {
+        "Name": "get_weather",
+        "Description": "Get current weather in a location",
+        "Parameters": {
+          "properties": {
+            "location": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ],
+          "type": "object"
+        }
+      }
+    }
+  ]
+}

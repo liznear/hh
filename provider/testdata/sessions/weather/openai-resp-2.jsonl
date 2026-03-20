@@ -1,0 +1,5 @@
+{"id":"chatcmpl-2","object":"chat.completion.chunk","created":1700000005,"model":"glm-5","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}
+{"id":"chatcmpl-2","object":"chat.completion.chunk","created":1700000005,"model":"glm-5","choices":[{"index":0,"delta":{"content":"The weather "}}]}
+{"id":"chatcmpl-2","object":"chat.completion.chunk","created":1700000005,"model":"glm-5","choices":[{"index":0,"delta":{"content":"in San "}}]}
+{"id":"chatcmpl-2","object":"chat.completion.chunk","created":1700000005,"model":"glm-5","choices":[{"index":0,"delta":{"content":"Francisco is sunny."}}]}
+{"id":"chatcmpl-2","object":"chat.completion.chunk","created":1700000005,"model":"glm-5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}

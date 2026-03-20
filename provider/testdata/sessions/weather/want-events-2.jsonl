@@ -1,0 +1,5 @@
+{"Error":null,"ThinkingDelta":"","MessageDelta":"The weather ","ToolCallDelta":null,"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"in San ","ToolCallDelta":null,"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"Francisco is sunny.","ToolCallDelta":null,"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":null,"Message":null,"ToolCalls":null,"FinishReason":"stop"}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":null,"Message":{"Role":3,"Content":"The weather in San Francisco is sunny.","CallID":""},"ToolCalls":null,"FinishReason":""}

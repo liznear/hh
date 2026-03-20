@@ -1,0 +1,13 @@
+{"Error":null,"ThinkingDelta":"Thinking ","MessageDelta":"","ToolCallDelta":null,"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"about ","MessageDelta":"","ToolCallDelta":null,"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"the weather...","MessageDelta":"","ToolCallDelta":null,"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"Let ","ToolCallDelta":null,"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"me check ","ToolCallDelta":null,"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"the weather first...","ToolCallDelta":null,"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":{"Index":0,"ID":"call_abc123","Type":"function","Name":"get_weather","Arguments":""},"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":{"Index":0,"ID":"","Type":"","Name":"","Arguments":"{\"loc"},"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":{"Index":0,"ID":"","Type":"","Name":"","Arguments":"ation\": "},"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":{"Index":0,"ID":"","Type":"","Name":"","Arguments":"\"San Francisco\"}"},"Message":null,"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":null,"Message":null,"ToolCalls":null,"FinishReason":"tool_calls"}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":null,"Message":{"Role":3,"Content":"Let me check the weather first...","CallID":""},"ToolCalls":null,"FinishReason":""}
+{"Error":null,"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":null,"Message":null,"ToolCalls":[{"ID":"call_abc123","Type":"function","Function":{"Name":"get_weather","Arguments":"{\"location\": \"San Francisco\"}"}}],"FinishReason":""}
