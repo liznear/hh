@@ -41,7 +41,6 @@ type openAICompatibleProvider struct {
 //
 // Notes:
 // - We currently map textual delta content to MessageDelta.
-// - ThinkingDelta is reserved but not emitted by this provider yet.
 // - Tool call deltas can arrive in pieces; final ToolCalls are reconstructed from
 //   the accumulator to provide complete arguments.
 
@@ -104,12 +103,9 @@ func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req
 				ch <- agent.ProviderResponse{FinishReason: agent.FinishReason(choice.FinishReason)}
 			}
 
-			// Incremental thinking/reasoning text (DeepSeek-style reasoning_content)
-			if reasoningField, ok := choice.Delta.JSON.ExtraFields["reasoning_content"]; ok {
-				var reasoning string
-				if err := json.Unmarshal([]byte(reasoningField.Raw()), &reasoning); err == nil && reasoning != "" {
-					ch <- agent.ProviderResponse{ThinkingDelta: reasoning}
-				}
+			// Incremental thinking/reasoning text
+			if reasoning := extractReasoning(choice); reasoning != "" {
+				ch <- agent.ProviderResponse{ThinkingDelta: reasoning}
 			}
 
 			// Incremental assistant text.
@@ -135,12 +131,25 @@ func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req
 		ch <- agent.ProviderResponse{Message: &msg}
 
 		// Final fully accumulated tool calls.
-		toolCalls := toAgentToolCalls(acc.Choices[0].Message.ToolCalls)
+		toolCalls := openAIToAgentToolCall(acc.Choices[0].Message.ToolCalls)
 		if len(toolCalls) > 0 {
 			ch <- agent.ProviderResponse{ToolCalls: toolCalls}
 		}
 	}()
 	return ch, nil
+}
+
+func extractReasoning(choice openai.ChatCompletionChunkChoice) string {
+	// DeepSeek-style and other common fields
+	for _, field := range []string{"reasoning_content", "reasoning"} {
+		if reasoningField, ok := choice.Delta.JSON.ExtraFields[field]; ok {
+			var reasoning string
+			if err := json.Unmarshal([]byte(reasoningField.Raw()), &reasoning); err == nil && reasoning != "" {
+				return reasoning
+			}
+		}
+	}
+	return ""
 }
 
 func toOpenAITool(t *agent.Tool) (openai.ChatCompletionToolUnionParam, bool) {
@@ -159,7 +168,22 @@ func toOpenAITool(t *agent.Tool) (openai.ChatCompletionToolUnionParam, bool) {
 	return openai.ChatCompletionToolUnionParam{}, false
 }
 
-func toAgentToolCalls(calls []openai.ChatCompletionMessageToolCallUnion) []agent.ToolCall {
+func toOpenAIMessage(m *agent.Message) openai.ChatCompletionMessageParamUnion {
+	switch m.Role {
+	case agent.RoleSystem:
+		return openai.SystemMessage(m.Content)
+	case agent.RoleUser:
+		return openai.UserMessage(m.Content)
+	case agent.RoleAssistant:
+		return openai.AssistantMessage(m.Content)
+	case agent.RoleTool:
+		return openai.ToolMessage(m.Content, m.CallID)
+	default:
+		return openai.UserMessage(m.Content)
+	}
+}
+
+func openAIToAgentToolCall(calls []openai.ChatCompletionMessageToolCallUnion) []agent.ToolCall {
 	ret := make([]agent.ToolCall, 0, len(calls))
 	for _, call := range calls {
 		// openai-go's ChatCompletionAccumulator has a quirk where AsAny() returns an empty struct
@@ -200,21 +224,6 @@ func clampToZero(index int64) int {
 		return 0
 	}
 	return int(index)
-}
-
-func toOpenAIMessage(m *agent.Message) openai.ChatCompletionMessageParamUnion {
-	switch m.Role {
-	case agent.RoleSystem:
-		return openai.SystemMessage(m.Content)
-	case agent.RoleUser:
-		return openai.UserMessage(m.Content)
-	case agent.RoleAssistant:
-		return openai.AssistantMessage(m.Content)
-	case agent.RoleTool:
-		return openai.ToolMessage(m.Content, m.CallID)
-	default:
-		return openai.UserMessage(m.Content)
-	}
 }
 
 var _ agent.Provider = (*openAICompatibleProvider)(nil)
