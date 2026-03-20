@@ -7,7 +7,7 @@ import (
 	"github.com/liznear/hh/common"
 )
 
-type Agent struct {
+type Config struct {
 	provider Provider
 }
 
@@ -18,7 +18,7 @@ type Context struct {
 	Tools        []Tool
 }
 
-func (a *Agent) Run(ctx context.Context, aCtx Context) EventStream {
+func RunAgentLoop(ctx context.Context, conf Config, aCtx Context) EventStream {
 	req := ProviderRequest{
 		Messages: []Message{{RoleSystem, aCtx.SystemPrompt, ""}},
 		Tools:    aCtx.Tools,
@@ -31,7 +31,7 @@ func (a *Agent) Run(ctx context.Context, aCtx Context) EventStream {
 		ch: ch,
 	}
 
-	resCh, err := a.provider.ChatCompletionStream(ctx, req)
+	resCh, err := conf.provider.ChatCompletionStream(ctx, req)
 	go func() {
 		defer close(ch)
 		if err != nil {
