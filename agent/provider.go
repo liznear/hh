@@ -10,14 +10,17 @@ type ProviderRequest struct {
 	Tools    []Tool
 }
 
-type ProviderResponse struct {
-	Error         error
+type ProviderStreamEvent struct {
 	ThinkingDelta string
 	MessageDelta  string
 	ToolCallDelta *ToolCallDelta
-	Message       *Message
-	ToolCalls     []ToolCall
-	FinishReason  FinishReason
+}
+
+type ProviderResponse struct {
+	Message      Message
+	Thinking     string
+	ToolCalls    []ToolCall
+	FinishReason FinishReason
 }
 
 type ToolCallDelta struct {
@@ -40,5 +43,5 @@ const (
 )
 
 type Provider interface {
-	ChatCompletionStream(ctx context.Context, req ProviderRequest) (chan ProviderResponse, error)
+	ChatCompletionStream(ctx context.Context, req ProviderRequest, onEvent func(ProviderStreamEvent) error) (ProviderResponse, error)
 }

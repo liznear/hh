@@ -53,7 +53,7 @@ func NewOpenAICompatibleProvider(baseURL string, apiKey string) agent.Provider {
 	}
 }
 
-func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req agent.ProviderRequest) (chan agent.ProviderResponse, error) {
+func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req agent.ProviderRequest, onEvent func(agent.ProviderStreamEvent) error) (agent.ProviderResponse, error) {
 	resp := p.client.Chat.Completions.NewStreaming(ctx, openai.ChatCompletionNewParams{
 		Model: openai.ChatModel(req.Model),
 		Messages: lo.Map(req.Messages, func(m agent.Message, idx int) openai.ChatCompletionMessageParamUnion {
@@ -64,79 +64,80 @@ func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req
 			return tool, ok
 		}),
 	})
-	ch := make(chan agent.ProviderResponse)
-	go func() {
-		defer close(ch)
-		defer resp.Close()
+	defer resp.Close()
 
-		acc := openai.ChatCompletionAccumulator{}
-		for resp.Next() {
-			chunk := resp.Current()
-			if !acc.AddChunk(chunk) {
-				ch <- agent.ProviderResponse{Error: fmt.Errorf("failed to accumulate streamed chat completion chunk")}
-				return
-			}
+	acc := openai.ChatCompletionAccumulator{}
+	var reasoning string
 
-			if len(chunk.Choices) == 0 {
-				continue
-			}
+	for resp.Next() {
+		chunk := resp.Current()
+		if !acc.AddChunk(chunk) {
+			return agent.ProviderResponse{}, fmt.Errorf("failed to accumulate streamed chat completion chunk")
+		}
 
-			choice := chunk.Choices[0]
+		if len(chunk.Choices) == 0 {
+			continue
+		}
 
-			// Incremental tool-call fragments.
-			for _, tc := range choice.Delta.ToolCalls {
-				// Some providers may use -1 for single tool-call streams.
-				// We normalize to 0 for deterministic downstream indexing.
-				ch <- agent.ProviderResponse{
-					ToolCallDelta: &agent.ToolCallDelta{
-						Index:     clampToZero(tc.Index),
-						ID:        tc.ID,
-						Type:      agent.ToolCallType(tc.Type),
-						Name:      tc.Function.Name,
-						Arguments: tc.Function.Arguments,
-					},
-				}
-			}
+		choice := chunk.Choices[0]
 
-			// Per-choice completion boundary signal.
-			if choice.FinishReason != "" {
-				ch <- agent.ProviderResponse{FinishReason: agent.FinishReason(choice.FinishReason)}
-			}
-
-			// Incremental thinking/reasoning text
-			if reasoning := extractReasoning(choice); reasoning != "" {
-				ch <- agent.ProviderResponse{ThinkingDelta: reasoning}
-			}
-
-			// Incremental assistant text.
-			if choice.Delta.Content != "" {
-				ch <- agent.ProviderResponse{MessageDelta: choice.Delta.Content}
+		// Incremental tool-call fragments.
+		for _, tc := range choice.Delta.ToolCalls {
+			err := onEvent(agent.ProviderStreamEvent{
+				ToolCallDelta: &agent.ToolCallDelta{
+					Index:     clampToZero(tc.Index),
+					ID:        tc.ID,
+					Type:      agent.ToolCallType(tc.Type),
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				},
+			})
+			if err != nil {
+				return agent.ProviderResponse{}, err
 			}
 		}
 
-		if err := resp.Err(); err != nil {
-			ch <- agent.ProviderResponse{Error: err}
-			return
+		// Incremental thinking/reasoning text
+		if r := extractReasoning(choice); r != "" {
+			reasoning += r
+			err := onEvent(agent.ProviderStreamEvent{ThinkingDelta: r})
+			if err != nil {
+				return agent.ProviderResponse{}, err
+			}
 		}
 
-		if len(acc.Choices) == 0 {
-			return
+		// Incremental assistant text.
+		if choice.Delta.Content != "" {
+			err := onEvent(agent.ProviderStreamEvent{MessageDelta: choice.Delta.Content})
+			if err != nil {
+				return agent.ProviderResponse{}, err
+			}
 		}
+	}
 
-		// Final fully accumulated assistant message.
-		msg := agent.Message{
-			Role:    agent.RoleAssistant,
-			Content: acc.Choices[0].Message.Content,
-		}
-		ch <- agent.ProviderResponse{Message: &msg}
+	if err := resp.Err(); err != nil {
+		return agent.ProviderResponse{}, err
+	}
 
-		// Final fully accumulated tool calls.
-		toolCalls := openAIToAgentToolCall(acc.Choices[0].Message.ToolCalls)
-		if len(toolCalls) > 0 {
-			ch <- agent.ProviderResponse{ToolCalls: toolCalls}
-		}
-	}()
-	return ch, nil
+	if len(acc.Choices) == 0 {
+		return agent.ProviderResponse{}, nil
+	}
+
+	choice := acc.Choices[0]
+
+	msg := agent.Message{
+		Role:    agent.RoleAssistant,
+		Content: choice.Message.Content,
+	}
+
+	toolCalls := openAIToAgentToolCall(choice.Message.ToolCalls)
+
+	return agent.ProviderResponse{
+		Message:      msg,
+		Thinking:     reasoning,
+		ToolCalls:    toolCalls,
+		FinishReason: agent.FinishReason(choice.FinishReason),
+	}, nil
 }
 
 func extractReasoning(choice openai.ChatCompletionChunkChoice) string {
@@ -184,6 +185,9 @@ func toOpenAIMessage(m *agent.Message) openai.ChatCompletionMessageParamUnion {
 }
 
 func openAIToAgentToolCall(calls []openai.ChatCompletionMessageToolCallUnion) []agent.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
 	ret := make([]agent.ToolCall, 0, len(calls))
 	for _, call := range calls {
 		// openai-go's ChatCompletionAccumulator has a quirk where AsAny() returns an empty struct

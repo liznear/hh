@@ -1,0 +1,15 @@
+{
+  "Message": {"Role": 3, "Content": "Let me check the weather first...", "CallID": ""},
+  "Thinking": "Thinking about the weather...",
+  "ToolCalls": [
+    {
+      "ID": "call_abc123",
+      "Type": "function",
+      "Function": {
+        "Name": "get_weather",
+        "Arguments": "{\"location\": \"San Francisco\"}"
+      }
+    }
+  ],
+  "FinishReason": "tool_calls"
+}

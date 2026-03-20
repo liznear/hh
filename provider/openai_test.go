@@ -30,23 +30,25 @@ func Test_OpenAIChatCompletionStream(t *testing.T) {
 		}
 
 		req := loadProviderRequest(t, sessionName, step)
-		want := loadExpectedEvents(t, sessionName, step)
+		wantEvents := loadExpectedEvents(t, sessionName, step)
+		wantResponse := loadExpectedResponse(t, sessionName, step)
 
-		ch, err := p.ChatCompletionStream(ctx, req)
+		var gotEvents []agent.ProviderStreamEvent
+		gotResponse, err := p.ChatCompletionStream(ctx, req, func(e agent.ProviderStreamEvent) error {
+			gotEvents = append(gotEvents, e)
+			return nil
+		})
+
 		if err != nil {
 			t.Fatalf("fail to call ChatCompletionStream (step %d): %v", step, err)
 		}
 
-		var got []agent.ProviderResponse
-		for resp := range ch {
-			if resp.Error != nil {
-				t.Fatalf("stream error step %d: %v", step, resp.Error)
-			}
-			got = append(got, resp)
+		if !reflect.DeepEqual(gotEvents, wantEvents) {
+			t.Fatalf("step %d events mismatch\nGot:  %#v\nWant: %#v", step, gotEvents, wantEvents)
 		}
 
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("step %d responses mismatch\nGot:  %#v\nWant: %#v", step, got, want)
+		if !reflect.DeepEqual(gotResponse, wantResponse) {
+			t.Fatalf("step %d response mismatch\nGot:  %#v\nWant: %#v", step, gotResponse, wantResponse)
 		}
 	}
 }

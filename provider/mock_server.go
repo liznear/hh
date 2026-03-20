@@ -95,7 +95,7 @@ func loadProviderRequest(t *testing.T, sessionName string, step int) agent.Provi
 	return req
 }
 
-func loadExpectedEvents(t *testing.T, sessionName string, step int) []agent.ProviderResponse {
+func loadExpectedEvents(t *testing.T, sessionName string, step int) []agent.ProviderStreamEvent {
 	filename := filepath.Join("testdata", "sessions", sessionName, fmt.Sprintf("want-events-%d.jsonl", step))
 	f, err := os.Open(filename)
 	if err != nil {
@@ -103,14 +103,14 @@ func loadExpectedEvents(t *testing.T, sessionName string, step int) []agent.Prov
 	}
 	defer f.Close()
 
-	var events []agent.ProviderResponse
+	var events []agent.ProviderStreamEvent
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			continue
 		}
-		var e agent.ProviderResponse
+		var e agent.ProviderStreamEvent
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
 			t.Fatalf("failed to unmarshal event %s: %v", line, err)
 		}
@@ -120,4 +120,17 @@ func loadExpectedEvents(t *testing.T, sessionName string, step int) []agent.Prov
 		t.Fatalf("error reading events %s: %v", filename, err)
 	}
 	return events
+}
+
+func loadExpectedResponse(t *testing.T, sessionName string, step int) agent.ProviderResponse {
+	filename := filepath.Join("testdata", "sessions", sessionName, fmt.Sprintf("want-response-%d.json", step))
+	b, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", filename, err)
+	}
+	var resp agent.ProviderResponse
+	if err := json.Unmarshal(b, &resp); err != nil {
+		t.Fatalf("failed to unmarshal %s: %v", filename, err)
+	}
+	return resp
 }
