@@ -13,7 +13,6 @@ type ProviderRequest struct {
 type ProviderStreamEvent struct {
 	ThinkingDelta string
 	MessageDelta  string
-	ToolCallDelta *ToolCallDelta
 }
 
 type ProviderResponse struct {
@@ -21,14 +20,6 @@ type ProviderResponse struct {
 	Thinking     string
 	ToolCalls    []ToolCall
 	FinishReason FinishReason
-}
-
-type ToolCallDelta struct {
-	Index     int
-	ID        string
-	Type      ToolCallType
-	Name      string
-	Arguments string
 }
 
 type FinishReason string

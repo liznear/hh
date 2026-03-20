@@ -65,8 +65,5 @@ func toEvent(se ProviderStreamEvent) Event {
 	if se.MessageDelta != "" {
 		return Event{Type: EventTypeMessageDelta, Data: EventDataMessageDelta{Delta: se.MessageDelta}}
 	}
-	if se.ToolCallDelta != nil {
-		return Event{Type: EventTypeToolCallDelta, Data: EventDataToolCallDelta{Delta: *se.ToolCallDelta}}
-	}
 	return Event{Type: EventTypeError, Data: EventDataError{Err: fmt.Errorf("invalid stream event: %v", se)}}
 }

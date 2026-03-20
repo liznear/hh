@@ -81,22 +81,6 @@ func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req
 
 		choice := chunk.Choices[0]
 
-		// Incremental tool-call fragments.
-		for _, tc := range choice.Delta.ToolCalls {
-			err := onEvent(agent.ProviderStreamEvent{
-				ToolCallDelta: &agent.ToolCallDelta{
-					Index:     clampToZero(tc.Index),
-					ID:        tc.ID,
-					Type:      agent.ToolCallType(tc.Type),
-					Name:      tc.Function.Name,
-					Arguments: tc.Function.Arguments,
-				},
-			})
-			if err != nil {
-				return agent.ProviderResponse{}, err
-			}
-		}
-
 		// Incremental thinking/reasoning text
 		if r := extractReasoning(choice); r != "" {
 			reasoning += r

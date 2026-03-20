@@ -6,7 +6,6 @@ const (
 	EventTypeError EventType = iota
 	EventTypeThinkingDelta
 	EventTypeMessageDelta
-	EventTypeToolCallDelta
 	EventTypeMessage
 	EventTypeToolCalls
 	EventTypeDone
@@ -27,10 +26,6 @@ type EventDataThinkingDelta struct {
 
 type EventDataMessageDelta struct {
 	Delta string
-}
-
-type EventDataToolCallDelta struct {
-	Delta ToolCallDelta
 }
 
 type EventDataMessage struct {

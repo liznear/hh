@@ -1,10 +1,6 @@
-{"ThinkingDelta":"Thinking ","MessageDelta":"","ToolCallDelta":null}
-{"ThinkingDelta":"about ","MessageDelta":"","ToolCallDelta":null}
-{"ThinkingDelta":"the weather...","MessageDelta":"","ToolCallDelta":null}
-{"ThinkingDelta":"","MessageDelta":"Let ","ToolCallDelta":null}
-{"ThinkingDelta":"","MessageDelta":"me check ","ToolCallDelta":null}
-{"ThinkingDelta":"","MessageDelta":"the weather first...","ToolCallDelta":null}
-{"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":{"Index":0,"ID":"call_abc123","Type":"function","Name":"get_weather","Arguments":""}}
-{"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":{"Index":0,"ID":"","Type":"","Name":"","Arguments":"{\"loc"}}
-{"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":{"Index":0,"ID":"","Type":"","Name":"","Arguments":"ation\": "}}
-{"ThinkingDelta":"","MessageDelta":"","ToolCallDelta":{"Index":0,"ID":"","Type":"","Name":"","Arguments":"\"San Francisco\"}"}}
+{"ThinkingDelta":"Thinking ","MessageDelta":""}
+{"ThinkingDelta":"about ","MessageDelta":""}
+{"ThinkingDelta":"the weather...","MessageDelta":""}
+{"ThinkingDelta":"","MessageDelta":"Let "}
+{"ThinkingDelta":"","MessageDelta":"me check "}
+{"ThinkingDelta":"","MessageDelta":"the weather first..."}
