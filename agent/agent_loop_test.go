@@ -53,9 +53,10 @@ func TestRunAgentLoop(t *testing.T) {
 		"echo": {
 			Name:        "echo",
 			Description: "Echo back the arguments",
-			Handler: func(ctx context.Context, args string) ToolResult {
-				return ToolResult{Data: args}
-			},
+			Handler: FuncToolHandler(func(ctx context.Context, args map[string]any) ToolResult {
+				v, _ := json.Marshal(args)
+				return ToolResult{Data: string(v)}
+			}),
 		},
 	}
 

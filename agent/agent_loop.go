@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/samber/lo"
@@ -64,11 +65,16 @@ func executeTools(ctx context.Context, aContext Context, toolCalls []ToolCall, o
 	for _, toolCall := range toolCalls {
 		onEvent(Event{EventTypeToolCallStart, EventDataToolCallStart{toolCall}})
 		toolName := toolCall.Name
-		var result ToolResult
+		var (
+			result ToolResult
+			args   = make(map[string]any)
+		)
 		if tool, ok := aContext.Tools[toolName]; !ok {
 			result = ToolResult{IsErr: true, Data: "Not found"}
+		} else if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
+			result = ToolResult{IsErr: true, Data: fmt.Sprintf("Invalid arguments: %q", toolCall.Arguments)}
 		} else {
-			result = tool.Handler(ctx, toolCall.Arguments)
+			result = tool.Handler.Handle(ctx, args)
 		}
 		onEvent(Event{EventTypeToolCallEnd, EventDataToolCallEnd{toolCall, result}})
 		ret = append(ret, result)
