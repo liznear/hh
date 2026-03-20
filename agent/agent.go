@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
+
+	"github.com/samber/lo"
+	"golang.org/x/exp/maps"
 )
 
 type Config struct {
@@ -10,51 +13,72 @@ type Config struct {
 }
 
 type Context struct {
+	Model        string
 	SystemPrompt string
 	History      []Message
 	Prompts      []Message
-	Tools        []Tool
+	Tools        map[string]Tool
 }
 
-func RunAgentLoop(ctx context.Context, conf Config, aCtx Context) EventStream {
+func RunAgentLoop(ctx context.Context, conf Config, aCtx Context, onEvent func(Event)) {
 	req := ProviderRequest{
-		Messages: []Message{{RoleSystem, aCtx.SystemPrompt, ""}},
-		Tools:    aCtx.Tools,
+		Model:    aCtx.Model,
+		Messages: []Message{{Role: RoleSystem, Content: aCtx.SystemPrompt}},
+		Tools:    maps.Values(aCtx.Tools),
 	}
 	req.Messages = append(req.Messages, aCtx.History...)
 	req.Messages = append(req.Messages, aCtx.Prompts...)
 
-	ch := make(chan Event, 1)
-	ret := EventStream{
-		ch: ch,
-	}
+	shouldContinue := true
 
-	go func() {
-		defer close(ch)
+	onEvent(Event{EventTypeAgentStart, EventDataAgentStart{}})
+	for shouldContinue {
+		shouldContinue = false
 
-		res, err := conf.provider.ChatCompletionStream(ctx, req, func(se ProviderStreamEvent) error {
-			select {
-			case ch <- toEvent(se):
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
+		select {
+		case <-ctx.Done():
+			if err := ctx.Err(); err != nil {
+				onEvent(Event{Type: EventTypeError, Data: err})
 			}
+		default:
+		}
+
+		onEvent(Event{EventTypeTurnStart, EventDataTurnStart{}})
+		res, err := conf.provider.ChatCompletionStream(ctx, req, func(se ProviderStreamEvent) error {
+			onEvent(toEvent(se))
+			return nil
 		})
-
 		if err != nil {
-			ch <- Event{Type: EventTypeError, Data: EventDataError{Err: err}}
-			return
+			onEvent(Event{Type: EventTypeError, Data: err})
+			onEvent(Event{EventTypeTurnEnd, EventDataTurnEnd{}})
 		}
 
-		ch <- Event{Type: EventTypeMessage, Data: EventDataMessage{Message: res.Message}}
 		if len(res.ToolCalls) > 0 {
-			ch <- Event{Type: EventTypeToolCalls, Data: EventDataToolCalls{ToolCalls: res.ToolCalls}}
+			toolResults := executeTools(ctx, aCtx, res.ToolCalls, onEvent)
+			req.Messages = append(req.Messages, lo.Map(toolResults, func(r ToolResult, idx int) Message {
+				return Message{Role: RoleTool, Content: r.Data, CallID: res.ToolCalls[idx].ID}
+			})...)
+			shouldContinue = true
 		}
-		if res.FinishReason != FinishReasonUnknown {
-			ch <- Event{Type: EventTypeDone, Data: EventDataDone{Reason: res.FinishReason}}
-		}
-	}()
+		onEvent(Event{EventTypeTurnEnd, EventDataTurnEnd{}})
+	}
+	onEvent(Event{EventTypeAgentEnd, EventDataAgentEnd{req.Messages[1:]}})
+}
 
+func executeTools(ctx context.Context, aContext Context, toolCalls []ToolCall, onEvent func(Event)) []ToolResult {
+	ret := make([]ToolResult, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		onEvent(Event{EventTypeToolCallStart, EventDataToolCallStart{toolCall}})
+		toolName := toolCall.Name
+		var result ToolResult
+		if tool, ok := aContext.Tools[toolName]; !ok {
+			result = ToolResult{IsErr: true, Data: "Not found"}
+		} else {
+			result = tool.Handler(ctx, toolCall.Arguments)
+		}
+		onEvent(Event{EventTypeToolCallEnd, EventDataToolCallEnd{toolCall, result}})
+		ret = append(ret, result)
+	}
 	return ret
 }
 

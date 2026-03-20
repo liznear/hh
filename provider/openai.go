@@ -142,13 +142,11 @@ func toOpenAITool(t *agent.Tool) (openai.ChatCompletionToolUnionParam, bool) {
 		return openai.ChatCompletionToolUnionParam{}, false
 	}
 
-	if t.Type == agent.ToolTypeFunction && t.Function.Name != "" {
-		return openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-			Name:        t.Function.Name,
-			Description: openai.Opt(t.Function.Description),
-			Parameters:  t.Function.Parameters,
-		}), true
-	}
+	return openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+		Name:        t.Name,
+		Description: openai.Opt(t.Description),
+		Parameters:  t.Schema,
+	}), true
 
 	return openai.ChatCompletionToolUnionParam{}, false
 }
@@ -196,12 +194,9 @@ func openAIToAgentToolCall(calls []openai.ChatCompletionMessageToolCallUnion) []
 		}
 
 		ret = append(ret, agent.ToolCall{
-			ID:   functionCall.ID,
-			Type: agent.ToolCallType(functionCall.Type),
-			Function: agent.ToolCallFunction{
-				Name:      functionCall.Function.Name,
-				Arguments: functionCall.Function.Arguments,
-			},
+			ID:        functionCall.ID,
+			Name:      functionCall.Function.Name,
+			Arguments: functionCall.Function.Arguments,
 		})
 	}
 	return ret

@@ -5,6 +5,7 @@ go 1.25.4
 require (
 	github.com/openai/openai-go/v3 v3.29.0
 	github.com/samber/lo v1.53.0
+	golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90
 )
 
 require (

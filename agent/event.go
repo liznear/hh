@@ -4,10 +4,16 @@ type EventType int
 
 const (
 	EventTypeError EventType = iota
+	EventTypeAgentStart
+	EventTypeAgentEnd
+	EventTypeTurnStart
+	EventTypeTurnEnd
 	EventTypeThinkingDelta
 	EventTypeMessageDelta
 	EventTypeMessage
 	EventTypeToolCalls
+	EventTypeToolCallStart
+	EventTypeToolCallEnd
 	EventTypeDone
 )
 
@@ -19,6 +25,16 @@ type Event struct {
 type EventDataError struct {
 	Err error
 }
+
+type EventDataAgentStart struct{}
+
+type EventDataAgentEnd struct {
+	Messages []Message
+}
+
+type EventDataTurnStart struct{}
+
+type EventDataTurnEnd struct{}
 
 type EventDataThinkingDelta struct {
 	Delta string
@@ -34,6 +50,15 @@ type EventDataMessage struct {
 
 type EventDataToolCalls struct {
 	ToolCalls []ToolCall
+}
+
+type EventDataToolCallStart struct {
+	Call ToolCall
+}
+
+type EventDataToolCallEnd struct {
+	Call   ToolCall
+	Result ToolResult
 }
 
 type EventDataDone struct {
