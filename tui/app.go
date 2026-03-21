@@ -29,9 +29,8 @@ type model struct {
 	lines      []string
 	eventCount int
 
-	assistantStreaming bool
-	assistantLineIdx   int
-	assistantBuffer    string
+	activeDeltaType agent.EventType
+	activeDeltaLine int
 }
 
 type agentStreamStartedMsg struct {
@@ -101,8 +100,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lines = append(m.lines, fmt.Sprintf("user: %s", prompt))
 			m.input.SetValue("")
 			m.busy = true
-			m.assistantStreaming = false
-			m.assistantBuffer = ""
+			m.activeDeltaType = ""
+			m.activeDeltaLine = -1
 			m.refreshViewport()
 
 			return m, startAgentStreamCmd(m.runner, prompt)
@@ -128,8 +127,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lines = append(m.lines, fmt.Sprintf("error: %v", msg.err))
 		}
 		m.stream = nil
-		m.assistantStreaming = false
-		m.assistantBuffer = ""
+		m.activeDeltaType = ""
+		m.activeDeltaLine = -1
 		m.refreshViewport()
 		return m, nil
 	}
@@ -211,25 +210,22 @@ func (m model) View() string {
 }
 
 func (m *model) handleAgentEvent(e agent.Event) {
+	if e.Type != agent.EventTypeThinkingDelta && e.Type != agent.EventTypeMessageDelta {
+		m.activeDeltaType = ""
+		m.activeDeltaLine = -1
+	}
+
 	switch e.Type {
 	case agent.EventTypeThinkingDelta:
-		if data, ok := e.Data.(agent.EventDataThinkingDelta); ok && strings.TrimSpace(data.Delta) != "" {
-			m.lines = append(m.lines, fmt.Sprintf("thinking: %s", data.Delta))
+		if data, ok := e.Data.(agent.EventDataThinkingDelta); ok {
+			m.appendDeltaLine(agent.EventTypeThinkingDelta, "thinking: ", data.Delta)
 		}
 	case agent.EventTypeMessageDelta:
 		data, ok := e.Data.(agent.EventDataMessageDelta)
 		if !ok {
 			return
 		}
-
-		if !m.assistantStreaming {
-			m.assistantStreaming = true
-			m.assistantBuffer = ""
-			m.lines = append(m.lines, "assistant: ")
-			m.assistantLineIdx = len(m.lines) - 1
-		}
-		m.assistantBuffer += data.Delta
-		m.lines[m.assistantLineIdx] = "assistant: " + m.assistantBuffer
+		m.appendDeltaLine(agent.EventTypeMessageDelta, "assistant: ", data.Delta)
 
 	case agent.EventTypeToolCallStart:
 		if data, ok := e.Data.(agent.EventDataToolCallStart); ok {
@@ -254,9 +250,22 @@ func (m *model) handleAgentEvent(e agent.Event) {
 		default:
 			m.lines = append(m.lines, "error: unknown")
 		}
-	case agent.EventTypeTurnEnd:
-		m.assistantStreaming = false
 	}
+}
+
+func (m *model) appendDeltaLine(t agent.EventType, prefix, delta string) {
+	if delta == "" {
+		return
+	}
+
+	if m.activeDeltaType == t && m.activeDeltaLine >= 0 && m.activeDeltaLine < len(m.lines) {
+		m.lines[m.activeDeltaLine] += delta
+		return
+	}
+
+	m.lines = append(m.lines, prefix+delta)
+	m.activeDeltaType = t
+	m.activeDeltaLine = len(m.lines) - 1
 }
 
 func (m *model) syncLayout() {
@@ -281,8 +290,61 @@ func (m *model) syncLayout() {
 }
 
 func (m *model) refreshViewport() {
-	m.viewport.SetContent(strings.Join(m.lines, "\n"))
+	m.viewport.SetContent(wrapLines(m.lines, m.viewport.Width))
 	m.viewport.GotoBottom()
+}
+
+func wrapLines(lines []string, width int) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	if width <= 0 {
+		return strings.Join(lines, "\n")
+	}
+
+	wrapped := make([]string, 0, len(lines))
+	for _, line := range lines {
+		wrapped = append(wrapped, wrapLine(line, width)...)
+	}
+
+	return strings.Join(wrapped, "\n")
+}
+
+func wrapLine(line string, width int) []string {
+	if width <= 0 {
+		return []string{line}
+	}
+	if line == "" {
+		return []string{""}
+	}
+
+	runes := []rune(line)
+	ret := make([]string, 0, 1)
+
+	for len(runes) > width {
+		breakAt := width
+		for i := width; i > 0; i-- {
+			if runes[i-1] == ' ' || runes[i-1] == '\t' {
+				breakAt = i
+				break
+			}
+		}
+
+		chunk := strings.TrimRight(string(runes[:breakAt]), " \t")
+		if chunk == "" {
+			breakAt = width
+			chunk = string(runes[:breakAt])
+		}
+		ret = append(ret, chunk)
+
+		runes = runes[breakAt:]
+		for len(runes) > 0 && (runes[0] == ' ' || runes[0] == '\t') {
+			runes = runes[1:]
+		}
+	}
+
+	ret = append(ret, string(runes))
+	return ret
 }
 
 func computePaneHeights(total int) (messageHeight int, inputHeight int) {
