@@ -65,7 +65,7 @@ func Run(runner *agent.AgentRunner, modelName string) error {
 
 func newModel(runner *agent.AgentRunner, modelName string) *model {
 	in := textinput.New()
-	in.Prompt = "> "
+	in.Prompt = ""
 	in.Placeholder = "Type a prompt and press Enter"
 	in.Focus()
 
@@ -167,7 +167,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	return m, nil
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
 }
 
 func (m *model) View() tea.View {
@@ -206,10 +208,18 @@ func (m *model) View() tea.View {
 		status = "Agent is running..."
 	}
 
+	inputBox := lipgloss.NewStyle().
+		Width(max(1, mainW-2)).
+		Height(inputInnerLines).
+		Padding(0, 1).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(m.theme.Muted()).
+		Render(m.input.View())
+
 	inputBlock := lipgloss.JoinVertical(
 		lipgloss.Left,
 		lipgloss.NewStyle().Foreground(m.theme.Muted()).Render(status),
-		m.input.View(),
+		inputBox,
 	)
 	inputPane := lipgloss.NewStyle().
 		Width(mainW).
@@ -340,7 +350,7 @@ func (m *model) syncLayout() {
 
 	m.viewport.SetWidth(mainW)
 	m.viewport.SetHeight(messageH)
-	m.input.SetWidth(max(1, mainW-2))
+	m.input.SetWidth(max(1, mainW-6))
 }
 
 func (m *model) refreshViewport() {
