@@ -15,7 +15,7 @@ import (
 type model struct {
 	runner    *agent.AgentRunner
 	modelName string
-	theme     Base16Theme
+	theme     Theme
 
 	width  int
 	height int
@@ -62,7 +62,7 @@ func newModel(runner *agent.AgentRunner, modelName string) model {
 	return model{
 		runner:    runner,
 		modelName: modelName,
-		theme:     DefaultBase16Theme(),
+		theme:     DefaultTheme(),
 		input:     in,
 		viewport:  vp,
 		lines: []string{
@@ -167,7 +167,7 @@ func (m model) View() string {
 
 	inputBlock := lipgloss.JoinVertical(
 		lipgloss.Left,
-		lipgloss.NewStyle().Foreground(m.theme.Base03).Render(status),
+		lipgloss.NewStyle().Foreground(m.theme.Muted()).Render(status),
 		m.input.View(),
 	)
 	inputPane := lipgloss.NewStyle().
@@ -193,8 +193,8 @@ func (m model) View() string {
 			Width(sidebarWidth).
 			Height(innerH).
 			Padding(1).
-			Background(m.theme.Base01).
-			Foreground(m.theme.Base06).
+			Background(m.theme.Surface()).
+			Foreground(m.theme.Emphasis()).
 			Render(sidebarText)
 
 		content = lipgloss.JoinHorizontal(lipgloss.Top, mainPane, sidebarPane)
@@ -203,8 +203,8 @@ func (m model) View() string {
 	return lipgloss.NewStyle().
 		Width(m.width).
 		Height(m.height).
-		Background(m.theme.Base00).
-		Foreground(m.theme.Base05).
+		Background(lipgloss.NoColor{}).
+		Foreground(lipgloss.NoColor{}).
 		Padding(appPadding).
 		Render(content)
 }

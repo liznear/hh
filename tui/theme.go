@@ -2,7 +2,7 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-type Base16Theme struct {
+type Base16Palette struct {
 	Base00 lipgloss.Color
 	Base01 lipgloss.Color
 	Base02 lipgloss.Color
@@ -21,23 +21,71 @@ type Base16Theme struct {
 	Base0F lipgloss.Color
 }
 
-func DefaultBase16Theme() Base16Theme {
-	return Base16Theme{
-		Base00: lipgloss.Color("#181818"),
-		Base01: lipgloss.Color("#282828"),
-		Base02: lipgloss.Color("#383838"),
-		Base03: lipgloss.Color("#585858"),
-		Base04: lipgloss.Color("#b8b8b8"),
-		Base05: lipgloss.Color("#d8d8d8"),
-		Base06: lipgloss.Color("#e8e8e8"),
-		Base07: lipgloss.Color("#f8f8f8"),
-		Base08: lipgloss.Color("#ab4642"),
-		Base09: lipgloss.Color("#dc9656"),
-		Base0A: lipgloss.Color("#f7ca88"),
-		Base0B: lipgloss.Color("#a1b56c"),
-		Base0C: lipgloss.Color("#86c1b9"),
-		Base0D: lipgloss.Color("#7cafc2"),
-		Base0E: lipgloss.Color("#ba8baf"),
-		Base0F: lipgloss.Color("#a16946"),
+func TerminalBase16Palette() Base16Palette {
+	return Base16Palette{
+		Base00: lipgloss.Color("0"),
+		Base01: lipgloss.Color("8"),
+		Base02: lipgloss.Color("0"),
+		Base03: lipgloss.Color("8"),
+		Base04: lipgloss.Color("7"),
+		Base05: lipgloss.Color("7"),
+		Base06: lipgloss.Color("15"),
+		Base07: lipgloss.Color("15"),
+		Base08: lipgloss.Color("1"),
+		Base09: lipgloss.Color("3"),
+		Base0A: lipgloss.Color("3"),
+		Base0B: lipgloss.Color("2"),
+		Base0C: lipgloss.Color("6"),
+		Base0D: lipgloss.Color("4"),
+		Base0E: lipgloss.Color("5"),
+		Base0F: lipgloss.Color("1"),
 	}
+}
+
+type Theme struct {
+	palette Base16Palette
+}
+
+func NewTheme(palette Base16Palette) Theme {
+	return Theme{palette: palette}
+}
+
+func DefaultTheme() Theme {
+	return NewTheme(TerminalBase16Palette())
+}
+
+func (t Theme) Background() lipgloss.Color {
+	return t.palette.Base00
+}
+
+func (t Theme) Surface() lipgloss.Color {
+	return t.palette.Base01
+}
+
+func (t Theme) Foreground() lipgloss.Color {
+	return t.palette.Base05
+}
+
+func (t Theme) Emphasis() lipgloss.Color {
+	return t.palette.Base06
+}
+
+func (t Theme) Muted() lipgloss.Color {
+	return t.palette.Base03
+}
+
+func (t Theme) Error() lipgloss.Color {
+	return t.palette.Base08
+}
+
+func (t Theme) Warning() lipgloss.Color {
+	return t.palette.Base09
+}
+
+func (t Theme) Success() lipgloss.Color {
+	return t.palette.Base0B
+}
+
+func (t Theme) Info() lipgloss.Color {
+	return t.palette.Base0D
 }
