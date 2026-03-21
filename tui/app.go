@@ -45,6 +45,7 @@ type model struct {
 
 	activeDeltaType agent.EventType
 	activeDeltaLine int
+	toolCallLines   map[string][]int
 
 	spinner       spinner.Model
 	stopwatch     stopwatch.Model
@@ -108,6 +109,7 @@ func newModel(runner *agent.AgentRunner, modelName string) *model {
 		autoScroll:    true,
 		debug:         isDebugEnabled(),
 		markdownCache: map[string]string{},
+		toolCallLines: map[string][]int{},
 		lines: []string{
 			"hh-cli ready",
 		},
@@ -188,6 +190,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.viewport.YOffset() != prevOffset {
 			m.autoScroll = m.viewport.AtBottom()
 			return m, tea.Batch(statusCmd, cmd)
+		}
+		return m, statusCmd
+
+	case spinner.TickMsg:
+		if m.busy {
+			m.refreshViewport()
 		}
 		return m, statusCmd
 
@@ -338,15 +346,33 @@ func (m *model) handleAgentEvent(e agent.Event) {
 
 	case agent.EventTypeToolCallStart:
 		if data, ok := e.Data.(agent.EventDataToolCallStart); ok {
-			m.lines = append(m.lines, fmt.Sprintf("tool_start: %s", data.Call.Name))
+			key := toolCallKey(data.Call)
+			lineIdx := len(m.lines)
+			m.toolCallLines[key] = append(m.toolCallLines[key], lineIdx)
+			m.lines = append(m.lines, formatPendingToolCallLine(data.Call))
 		}
 	case agent.EventTypeToolCallEnd:
 		if data, ok := e.Data.(agent.EventDataToolCallEnd); ok {
-			status := "ok"
-			if data.Result.IsErr {
-				status = "error"
+			isErr := data.Result.IsErr
+
+			key := toolCallKey(data.Call)
+			lineIndexes := m.toolCallLines[key]
+			if len(lineIndexes) == 0 {
+				m.lines = append(m.lines, formatCompletedToolCallLine(isErr, data.Call))
+				return
 			}
-			m.lines = append(m.lines, fmt.Sprintf("tool_end: %s (%s)", data.Call.Name, status))
+
+			lineIdx := lineIndexes[0]
+			m.toolCallLines[key] = lineIndexes[1:]
+			if len(m.toolCallLines[key]) == 0 {
+				delete(m.toolCallLines, key)
+			}
+
+			if lineIdx >= 0 && lineIdx < len(m.lines) {
+				m.lines[lineIdx] = formatCompletedToolCallLine(isErr, data.Call)
+			} else {
+				m.lines = append(m.lines, formatCompletedToolCallLine(isErr, data.Call))
+			}
 		}
 	case agent.EventTypeError:
 		switch data := e.Data.(type) {
@@ -426,6 +452,21 @@ func (m *model) formatLinesForViewport(lines []string, width int) string {
 		if strings.HasPrefix(line, "assistant: ") {
 			wrapped = append(wrapped, "assistant:")
 			wrapped = append(wrapped, m.renderMarkdown(strings.TrimPrefix(line, "assistant: "), width, renderer))
+			continue
+		}
+
+		if strings.HasPrefix(line, toolCallPendingPrefix) {
+			wrapped = append(wrapped, wrapLine(m.renderPendingToolCallLine(line), width)...)
+			continue
+		}
+
+		if strings.HasPrefix(line, toolCallSuccessPrefix) {
+			wrapped = append(wrapped, m.renderCompletedToolCallLine(line, true, width)...)
+			continue
+		}
+
+		if strings.HasPrefix(line, toolCallFailurePrefix) {
+			wrapped = append(wrapped, m.renderCompletedToolCallLine(line, false, width)...)
 			continue
 		}
 
@@ -609,4 +650,75 @@ func formatElapsedSeconds(d time.Duration) string {
 		d = 0
 	}
 	return fmt.Sprintf("%ds", int(d.Truncate(time.Second)/time.Second))
+}
+
+const toolCallPendingPrefix = "tool_call_pending: "
+const toolCallSuccessPrefix = "tool_call_success: "
+const toolCallFailurePrefix = "tool_call_failure: "
+
+func toolCallKey(call agent.ToolCall) string {
+	if call.ID != "" {
+		return call.ID
+	}
+	return call.Name + "|" + call.Arguments
+}
+
+func formatPendingToolCallLine(call agent.ToolCall) string {
+	return toolCallPendingPrefix + formatToolCallBody(call)
+}
+
+func (m *model) renderPendingToolCallLine(line string) string {
+	body := strings.TrimPrefix(line, toolCallPendingPrefix)
+	return fmt.Sprintf("%s %s", m.spinner.View(), body)
+}
+
+func (m *model) renderCompletedToolCallLine(line string, success bool, width int) []string {
+	body := strings.TrimPrefix(line, toolCallFailurePrefix)
+	if success {
+		body = strings.TrimPrefix(line, toolCallSuccessPrefix)
+	}
+
+	icon := "⨯"
+	color := m.theme.Error()
+	if success {
+		icon = "✓"
+		color = m.theme.Success()
+	}
+
+	iconView := lipgloss.NewStyle().Foreground(color).Render(icon)
+	bodyWidth := max(1, width-2)
+	bodyLines := wrapLine(body, bodyWidth)
+	if len(bodyLines) == 0 {
+		return []string{iconView}
+	}
+
+	out := make([]string, 0, len(bodyLines))
+	out = append(out, fmt.Sprintf("%s %s", iconView, bodyLines[0]))
+	for _, line := range bodyLines[1:] {
+		out = append(out, "  "+line)
+	}
+	return out
+}
+
+func formatCompletedToolCallLine(isErr bool, call agent.ToolCall) string {
+	body := formatToolCallBody(call)
+	if isErr {
+		return toolCallFailurePrefix + body
+	}
+	return toolCallSuccessPrefix + body
+}
+
+func formatToolCallBody(call agent.ToolCall) string {
+	args := strings.TrimSpace(call.Arguments)
+	if args == "" || args == "{}" {
+		return call.Name
+	}
+
+	const maxArgLen = 120
+	runes := []rune(args)
+	if len(runes) > maxArgLen {
+		args = string(runes[:maxArgLen-1]) + "…"
+	}
+
+	return fmt.Sprintf("%s %s", call.Name, args)
 }
