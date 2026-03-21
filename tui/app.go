@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
@@ -24,7 +24,7 @@ type model struct {
 	width  int
 	height int
 
-	input    textinput.Model
+	input    textarea.Model
 	viewport viewport.Model
 
 	stream     <-chan tea.Msg
@@ -64,9 +64,25 @@ func Run(runner *agent.AgentRunner, modelName string) error {
 }
 
 func newModel(runner *agent.AgentRunner, modelName string) *model {
-	in := textinput.New()
+	in := textarea.New()
 	in.Prompt = ""
-	in.Placeholder = "Type a prompt and press Enter"
+	in.Placeholder = "Type a prompt (Enter to send, Shift+Enter for newline)"
+	in.ShowLineNumbers = false
+	in.SetHeight(inputInnerLines)
+	inputStyles := textarea.DefaultStyles(false)
+	inputStyles.Focused.Base = inputStyles.Focused.Base.UnsetBackground()
+	inputStyles.Focused.Text = inputStyles.Focused.Text.UnsetBackground()
+	inputStyles.Focused.CursorLine = inputStyles.Focused.CursorLine.UnsetBackground()
+	inputStyles.Focused.Placeholder = inputStyles.Focused.Placeholder.UnsetBackground()
+	inputStyles.Focused.Prompt = inputStyles.Focused.Prompt.UnsetBackground()
+	inputStyles.Focused.EndOfBuffer = inputStyles.Focused.EndOfBuffer.UnsetBackground()
+	inputStyles.Blurred.Base = inputStyles.Blurred.Base.UnsetBackground()
+	inputStyles.Blurred.Text = inputStyles.Blurred.Text.UnsetBackground()
+	inputStyles.Blurred.CursorLine = inputStyles.Blurred.CursorLine.UnsetBackground()
+	inputStyles.Blurred.Placeholder = inputStyles.Blurred.Placeholder.UnsetBackground()
+	inputStyles.Blurred.Prompt = inputStyles.Blurred.Prompt.UnsetBackground()
+	inputStyles.Blurred.EndOfBuffer = inputStyles.Blurred.EndOfBuffer.UnsetBackground()
+	in.SetStyles(inputStyles)
 	in.Focus()
 
 	vp := viewport.New()
@@ -88,7 +104,7 @@ func newModel(runner *agent.AgentRunner, modelName string) *model {
 }
 
 func (m *model) Init() tea.Cmd {
-	return textinput.Blink
+	return textarea.Blink
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -109,10 +125,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, viewportCmd
 		}
 
-		switch msg.String() {
-		case "ctrl+c", "q":
-			return m, tea.Quit
-		case "enter":
+		key := msg.Key()
+		if key.Code == tea.KeyEnter {
+			if key.Mod&tea.ModShift != 0 {
+				m.input.InsertRune('\n')
+				return m, nil
+			}
+
 			if m.busy {
 				return m, nil
 			}
@@ -129,6 +148,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshViewport()
 
 			return m, startAgentStreamCmd(m.runner, prompt)
+		}
+
+		switch msg.String() {
+		case "ctrl+c", "q":
+			return m, tea.Quit
 		}
 
 		var cmd tea.Cmd
@@ -203,7 +227,7 @@ func (m *model) View() tea.View {
 		Height(messageH).
 		Render(m.viewport.View())
 
-	status := "Enter to send, PgUp/PgDn to scroll, q to quit"
+	status := "Enter to send, Shift+Enter newline, PgUp/PgDn scroll, q quit"
 	if m.busy {
 		status = "Agent is running..."
 	}
@@ -350,7 +374,8 @@ func (m *model) syncLayout() {
 
 	m.viewport.SetWidth(mainW)
 	m.viewport.SetHeight(messageH)
-	m.input.SetWidth(max(1, mainW-6))
+	m.input.SetWidth(max(1, mainW-4))
+	m.input.SetHeight(inputInnerLines)
 }
 
 func (m *model) refreshViewport() {
