@@ -12,10 +12,10 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/stopwatch"
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/liznear/hh/agent"
 	"github.com/liznear/hh/tui/components"
 	"github.com/liznear/hh/tui/session"
@@ -30,8 +30,11 @@ type model struct {
 	width  int
 	height int
 
-	input    textarea.Model
-	viewport viewport.Model
+	input          textarea.Model
+	messageWidth   int
+	messageHeight  int
+	listOffsetIdx  int
+	listOffsetLine int
 
 	stream     <-chan tea.Msg
 	busy       bool
@@ -62,7 +65,6 @@ type model struct {
 	markdownRendererWidth int
 	markdownCache         map[string]string
 	itemRenderCache       map[uintptr]itemRenderCacheEntry
-	lastViewportContent   string
 }
 
 type itemRenderCacheEntry struct {
@@ -134,8 +136,6 @@ func newModel(runner *agent.AgentRunner, modelName string) *model {
 	in.SetStyles(inputStyles)
 	in.Focus()
 
-	vp := viewport.New()
-	vp.MouseWheelEnabled = true
 	theme := DefaultTheme()
 	spin := spinner.New(spinner.WithSpinner(spinner.Dot))
 	sw := stopwatch.New(stopwatch.WithInterval(time.Second))
@@ -161,7 +161,6 @@ func newModel(runner *agent.AgentRunner, modelName string) *model {
 		theme:           theme,
 		storage:         store,
 		input:           in,
-		viewport:        vp,
 		spinner:         spin,
 		stopwatch:       sw,
 		autoScroll:      true,
@@ -208,12 +207,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, statusCmd
 
 	case tea.KeyPressMsg:
-		prevOffset := m.viewport.YOffset()
-		var viewportCmd tea.Cmd
-		viewportUpdateStart := time.Now()
-		m.viewport, viewportCmd = m.viewport.Update(msg)
-		if m.viewport.YOffset() != prevOffset {
-			m.autoScroll = m.viewport.AtBottom()
+		prevOffset := m.currentListOffset(m.messageWidth)
+		scrollUpdateStart := time.Now()
+		scrolled, deltaRows := m.handleScrollKey(msg)
+		if scrolled {
+			m.autoScroll = m.isListAtBottom(m.messageWidth, m.messageHeight)
 			m.suppressRefreshUntil = time.Now().Add(scrollPriorityWindow)
 			if m.pendingScrollAt.IsZero() {
 				m.pendingScrollAt = time.Now()
@@ -227,8 +225,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.debug {
 				m.lastScrollStats = scrollPerfStats{
 					inputType:      "keyboard",
-					viewportUpdate: time.Since(viewportUpdateStart),
-					deltaRows:      m.viewport.YOffset() - prevOffset,
+					viewportUpdate: time.Since(scrollUpdateStart),
+					deltaRows:      deltaRows,
 					updateGap:      updateGap,
 					timeSinceView:  timeSinceView,
 				}
@@ -236,7 +234,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.maxScrollStats.updateGap = maxDuration(m.maxScrollStats.updateGap, m.lastScrollStats.updateGap)
 				m.maxScrollStats.timeSinceView = maxDuration(m.maxScrollStats.timeSinceView, m.lastScrollStats.timeSinceView)
 			}
-			return m, tea.Batch(statusCmd, viewportCmd)
+			if deltaRows == 0 {
+				deltaRows = m.currentListOffset(m.messageWidth) - prevOffset
+			}
+			return m, statusCmd
 		}
 
 		key := msg.Key()
@@ -277,12 +278,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(statusCmd, cmd)
 
 	case tea.MouseWheelMsg:
-		prevOffset := m.viewport.YOffset()
-		var cmd tea.Cmd
-		viewportUpdateStart := time.Now()
-		m.viewport, cmd = m.viewport.Update(msg)
-		if m.viewport.YOffset() != prevOffset {
-			m.autoScroll = m.viewport.AtBottom()
+		scrollUpdateStart := time.Now()
+		deltaRows := m.handleMouseWheelScroll(msg)
+		if deltaRows != 0 {
+			m.autoScroll = m.isListAtBottom(m.messageWidth, m.messageHeight)
 			m.suppressRefreshUntil = time.Now().Add(scrollPriorityWindow)
 			if m.pendingScrollAt.IsZero() {
 				m.pendingScrollAt = time.Now()
@@ -296,8 +295,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.debug {
 				m.lastScrollStats = scrollPerfStats{
 					inputType:      "mouse",
-					viewportUpdate: time.Since(viewportUpdateStart),
-					deltaRows:      m.viewport.YOffset() - prevOffset,
+					viewportUpdate: time.Since(scrollUpdateStart),
+					deltaRows:      deltaRows,
 					updateGap:      updateGap,
 					timeSinceView:  timeSinceView,
 				}
@@ -305,12 +304,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.maxScrollStats.updateGap = maxDuration(m.maxScrollStats.updateGap, m.lastScrollStats.updateGap)
 				m.maxScrollStats.timeSinceView = maxDuration(m.maxScrollStats.timeSinceView, m.lastScrollStats.timeSinceView)
 			}
-			return m, tea.Batch(statusCmd, cmd)
+			return m, statusCmd
 		}
 		return m, statusCmd
 
 	case spinner.TickMsg:
-		if m.busy && m.hasPendingToolCalls() && (m.autoScroll || m.viewport.AtBottom()) && m.shouldRefreshNow() {
+		if m.busy && m.hasPendingToolCalls() && (m.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight)) && m.shouldRefreshNow() {
 			m.refreshViewport()
 			m.lastRefreshAt = time.Now()
 		} else if m.busy && m.hasPendingToolCalls() {
@@ -327,7 +326,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for _, e := range msg.events {
 				m.handleAgentEvent(e)
 			}
-			if m.autoScroll || m.viewport.AtBottom() {
+			if m.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight) {
 				if m.shouldRefreshNow() {
 					m.refreshViewport()
 					m.viewportDirty = false
@@ -362,7 +361,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentEventMsg:
 		m.handleAgentEvent(msg.event)
-		if m.autoScroll || m.viewport.AtBottom() {
+		if m.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight) {
 			if m.shouldRefreshNow() {
 				m.refreshViewport()
 				m.viewportDirty = false
@@ -437,7 +436,7 @@ func (m *model) View() tea.View {
 
 	messageH, inputH := computePaneHeights(innerH)
 
-	viewportView := m.viewport.View()
+	viewportView := m.renderMessageList(mainW, messageH)
 
 	messagePane := lipgloss.NewStyle().
 		Width(mainW).
@@ -720,29 +719,325 @@ func (m *model) syncLayout() {
 	}
 
 	messageH, _ := computePaneHeights(innerH)
-
-	m.viewport.SetWidth(mainW)
-	m.viewport.SetHeight(messageH)
+	wasAtBottom := m.isListAtBottom(m.messageWidth, m.messageHeight)
+	m.messageWidth = mainW
+	m.messageHeight = messageH
+	if m.autoScroll || wasAtBottom {
+		m.scrollListToBottom(m.messageWidth, m.messageHeight)
+	} else {
+		m.clampListOffset(m.messageWidth, m.messageHeight)
+	}
 	m.input.SetWidth(max(1, mainW-4))
 	m.input.SetHeight(inputInnerLines)
 }
 
 func (m *model) refreshViewport() {
-	prevOffset := m.viewport.YOffset()
-	wasAtBottom := m.viewport.AtBottom()
-
-	content, _ := m.formatSessionForViewport(m.viewport.Width(), false)
-	if content != m.lastViewportContent {
-		m.viewport.SetContent(content)
-		m.lastViewportContent = content
+	if m.messageWidth <= 0 || m.messageHeight <= 0 {
+		return
 	}
-
-	if m.autoScroll || wasAtBottom {
-		m.viewport.GotoBottom()
+	if m.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight) {
+		m.scrollListToBottom(m.messageWidth, m.messageHeight)
 		m.autoScroll = true
 		return
 	}
-	m.viewport.SetYOffset(prevOffset)
+	m.clampListOffset(m.messageWidth, m.messageHeight)
+}
+
+func (m *model) renderMessageList(width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	items := m.session.AllItems()
+	if len(items) == 0 {
+		return "hh-cli ready"
+	}
+
+	m.clampListOffset(width, height)
+	renderer := m.getMarkdownRenderer(width)
+
+	visible := make([]string, 0, height)
+	idx := m.listOffsetIdx
+	offset := m.listOffsetLine
+
+	for len(visible) < height && idx < len(items) {
+		lines := m.renderItemLines(items[idx], width, renderer)
+		if len(lines) == 0 {
+			lines = []string{""}
+		}
+		if offset < len(lines) {
+			visible = append(visible, lines[offset:]...)
+		}
+		idx++
+		offset = 0
+	}
+
+	if len(visible) > height {
+		visible = visible[:height]
+	}
+
+	for len(visible) < height {
+		visible = append(visible, "")
+	}
+
+	return strings.Join(visible, "\n")
+}
+
+func (m *model) handleScrollKey(msg tea.KeyPressMsg) (bool, int) {
+	if m.messageWidth <= 0 || m.messageHeight <= 0 {
+		return false, 0
+	}
+
+	lines := 0
+	moveToTop := false
+	moveToBottom := false
+
+	switch msg.String() {
+	case "up":
+		lines = -1
+	case "down":
+		lines = 1
+	case "pgup":
+		lines = -max(1, m.messageHeight-1)
+	case "pgdown":
+		lines = max(1, m.messageHeight-1)
+	case "ctrl+u":
+		lines = -max(1, m.messageHeight/2)
+	case "ctrl+d":
+		lines = max(1, m.messageHeight/2)
+	case "home":
+		moveToTop = true
+	case "end":
+		moveToBottom = true
+	default:
+		return false, 0
+	}
+
+	before := m.currentListOffset(m.messageWidth)
+	if moveToTop {
+		m.listOffsetIdx = 0
+		m.listOffsetLine = 0
+	} else if moveToBottom {
+		m.scrollListToBottom(m.messageWidth, m.messageHeight)
+	} else {
+		m.scrollListBy(lines, m.messageWidth, m.messageHeight)
+	}
+	after := m.currentListOffset(m.messageWidth)
+
+	if before == after {
+		return false, 0
+	}
+	return true, after - before
+}
+
+func (m *model) handleMouseWheelScroll(msg tea.MouseWheelMsg) int {
+	if m.messageWidth <= 0 || m.messageHeight <= 0 {
+		return 0
+	}
+
+	const wheelStep = 3
+	before := m.currentListOffset(m.messageWidth)
+
+	switch msg.Mouse().Button {
+	case tea.MouseWheelUp:
+		m.scrollListBy(-wheelStep, m.messageWidth, m.messageHeight)
+	case tea.MouseWheelDown:
+		m.scrollListBy(wheelStep, m.messageWidth, m.messageHeight)
+	default:
+		s := msg.String()
+		if strings.Contains(s, "wheelup") {
+			m.scrollListBy(-wheelStep, m.messageWidth, m.messageHeight)
+		} else if strings.Contains(s, "wheeldown") {
+			m.scrollListBy(wheelStep, m.messageWidth, m.messageHeight)
+		}
+	}
+
+	after := m.currentListOffset(m.messageWidth)
+	return after - before
+}
+
+func (m *model) isListAtBottom(width, height int) bool {
+	items := m.session.AllItems()
+	if len(items) == 0 || width <= 0 || height <= 0 {
+		return true
+	}
+	renderer := m.getMarkdownRenderer(width)
+	total := 0
+	for i := m.listOffsetIdx; i < len(items); i++ {
+		total += len(m.renderItemLines(items[i], width, renderer))
+		if total > height+m.listOffsetLine {
+			return false
+		}
+	}
+	return total-m.listOffsetLine <= height
+}
+
+func (m *model) clampListOffset(width, height int) {
+	items := m.session.AllItems()
+	if len(items) == 0 {
+		m.listOffsetIdx = 0
+		m.listOffsetLine = 0
+		return
+	}
+	if m.listOffsetIdx < 0 {
+		m.listOffsetIdx = 0
+	}
+	if m.listOffsetIdx >= len(items) {
+		m.listOffsetIdx = len(items) - 1
+		m.listOffsetLine = 0
+	}
+	lastIdx, lastLine := m.lastListOffset(width, height)
+	if m.listOffsetIdx > lastIdx || (m.listOffsetIdx == lastIdx && m.listOffsetLine > lastLine) {
+		m.listOffsetIdx = lastIdx
+		m.listOffsetLine = lastLine
+	}
+	if m.listOffsetLine < 0 {
+		m.listOffsetLine = 0
+	}
+}
+
+func (m *model) scrollListToBottom(width, height int) {
+	idx, line := m.lastListOffset(width, height)
+	m.listOffsetIdx = idx
+	m.listOffsetLine = line
+}
+
+func (m *model) lastListOffset(width, height int) (int, int) {
+	items := m.session.AllItems()
+	if len(items) == 0 {
+		return 0, 0
+	}
+	renderer := m.getMarkdownRenderer(width)
+	total := 0
+	idx := len(items) - 1
+	for ; idx >= 0; idx-- {
+		total += len(m.renderItemLines(items[idx], width, renderer))
+		if total > height {
+			break
+		}
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	lineOffset := max(total-height, 0)
+	return idx, lineOffset
+}
+
+func (m *model) scrollListBy(lines, width, height int) {
+	if lines == 0 {
+		return
+	}
+	items := m.session.AllItems()
+	if len(items) == 0 {
+		return
+	}
+	renderer := m.getMarkdownRenderer(width)
+	if lines > 0 {
+		m.listOffsetLine += lines
+		for m.listOffsetIdx < len(items) {
+			itemHeight := len(m.renderItemLines(items[m.listOffsetIdx], width, renderer))
+			if itemHeight <= 0 {
+				itemHeight = 1
+			}
+			if m.listOffsetLine < itemHeight {
+				break
+			}
+			m.listOffsetLine -= itemHeight
+			m.listOffsetIdx++
+			if m.listOffsetIdx >= len(items) {
+				m.scrollListToBottom(width, height)
+				return
+			}
+		}
+		lastIdx, lastLine := m.lastListOffset(width, height)
+		if m.listOffsetIdx > lastIdx || (m.listOffsetIdx == lastIdx && m.listOffsetLine > lastLine) {
+			m.listOffsetIdx = lastIdx
+			m.listOffsetLine = lastLine
+		}
+		return
+	}
+
+	m.listOffsetLine += lines
+	for m.listOffsetLine < 0 {
+		m.listOffsetIdx--
+		if m.listOffsetIdx < 0 {
+			m.listOffsetIdx = 0
+			m.listOffsetLine = 0
+			return
+		}
+		itemHeight := len(m.renderItemLines(items[m.listOffsetIdx], width, renderer))
+		if itemHeight <= 0 {
+			itemHeight = 1
+		}
+		m.listOffsetLine += itemHeight
+	}
+}
+
+func (m *model) currentListOffset(width int) int {
+	items := m.session.AllItems()
+	if len(items) == 0 || width <= 0 {
+		return 0
+	}
+	renderer := m.getMarkdownRenderer(width)
+	offset := 0
+	maxIdx := min(m.listOffsetIdx, len(items))
+	for i := 0; i < maxIdx; i++ {
+		offset += len(m.renderItemLines(items[i], width, renderer))
+	}
+	offset += m.listOffsetLine
+	return offset
+}
+
+func (m *model) renderItemLines(item session.Item, width int, renderer *glamour.TermRenderer) []string {
+	if cached, ok := m.getCachedRenderedItem(item, width); ok {
+		return cached
+	}
+
+	var lines []string
+	switch v := item.(type) {
+	case *session.UserMessage:
+		lines = components.WrapLine("user: "+v.Content, width)
+
+	case *session.AssistantMessage:
+		renderedMarkdown, _ := m.renderMarkdown(v.Content, width, renderer)
+		lines = []string{"assistant:"}
+		lines = append(lines, strings.Split(renderedMarkdown, "\n")...)
+
+	case *session.ThinkingBlock:
+		lines = components.WrapLine("thinking: "+v.Content, width)
+
+	case *session.ToolCallItem:
+		lines = components.RenderToolCall(v, width, m.theme.Success(), m.theme.Error(), m.theme.Info(), m.theme.Success(), m.theme.Error())
+
+	case *session.ErrorItem:
+		lines = components.WrapLine("error: "+v.Message, width)
+
+	default:
+		lines = []string{""}
+	}
+
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	lines = normalizeLinesForWidth(lines, width)
+	m.setCachedRenderedItem(item, width, lines)
+	return lines
+}
+
+func normalizeLinesForWidth(lines []string, width int) []string {
+	if width <= 0 || len(lines) == 0 {
+		return lines
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		wrapped := ansi.Hardwrap(line, width, true)
+		parts := strings.Split(wrapped, "\n")
+		if len(parts) == 0 {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, parts...)
+	}
+	return out
 }
 
 func (m *model) formatSessionForViewport(width int, _ bool) (string, formatPerfStats) {
@@ -759,37 +1054,7 @@ func (m *model) formatSessionForViewport(width int, _ bool) (string, formatPerfS
 	wrapped := make([]string, 0, len(items))
 
 	for _, item := range items {
-		if cached, ok := m.getCachedRenderedItem(item, width); ok {
-			wrapped = append(wrapped, cached...)
-			continue
-		}
-
-		switch v := item.(type) {
-		case *session.UserMessage:
-			lines := components.WrapLine("user: "+v.Content, width)
-			wrapped = append(wrapped, lines...)
-			m.setCachedRenderedItem(item, width, lines)
-
-		case *session.AssistantMessage:
-			lines := []string{"assistant:"}
-			renderedMarkdown, _ := m.renderMarkdown(v.Content, width, renderer)
-			lines = append(lines, renderedMarkdown)
-			wrapped = append(wrapped, lines...)
-			m.setCachedRenderedItem(item, width, lines)
-
-		case *session.ThinkingBlock:
-			lines := components.WrapLine("thinking: "+v.Content, width)
-			wrapped = append(wrapped, lines...)
-			m.setCachedRenderedItem(item, width, lines)
-
-		case *session.ToolCallItem:
-			m.formatToolCallItem(v, width, &wrapped)
-
-		case *session.ErrorItem:
-			lines := components.WrapLine("error: "+v.Message, width)
-			wrapped = append(wrapped, lines...)
-			m.setCachedRenderedItem(item, width, lines)
-		}
+		wrapped = append(wrapped, m.renderItemLines(item, width, renderer)...)
 	}
 
 	return strings.Join(wrapped, "\n"), stats
@@ -897,19 +1162,6 @@ func (m *model) formatSessionRaw() string {
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-func (m *model) formatToolCallItem(item *session.ToolCallItem, width int, wrapped *[]string) {
-	lines := components.RenderToolCall(
-		item,
-		width,
-		m.theme.Success(),
-		m.theme.Error(),
-		m.theme.Info(),
-		m.theme.Success(),
-		m.theme.Error(),
-	)
-	*wrapped = append(*wrapped, lines...)
 }
 
 func formatToolCallBody(name, args string) string {
@@ -1081,6 +1333,13 @@ func maxDuration(a, b time.Duration) time.Duration {
 
 func maxInt(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b
