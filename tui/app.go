@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/liznear/hh/agent"
+	"github.com/liznear/hh/tui/components"
 )
 
 type model struct {
@@ -259,7 +260,15 @@ func (m *model) View() tea.View {
 		Height(messageH).
 		Render(m.viewport.View())
 
-	status := m.statusLine()
+	status := components.RenderStatusLine(components.StatusLineParams{
+		Busy:          m.busy,
+		ShowRunResult: m.showRunResult,
+		SpinnerView:   m.spinner.View(),
+		Elapsed:       m.stopwatch.Elapsed(),
+		InfoColor:     m.theme.Info(),
+		MutedColor:    m.theme.Muted(),
+		SuccessColor:  m.theme.Success(),
+	})
 
 	inputBox := lipgloss.NewStyle().
 		Width(max(1, mainW-2)).
@@ -456,21 +465,25 @@ func (m *model) formatLinesForViewport(lines []string, width int) string {
 		}
 
 		if strings.HasPrefix(line, toolCallPendingPrefix) {
-			wrapped = append(wrapped, wrapLine(m.renderPendingToolCallLine(line), width)...)
+			body := strings.TrimPrefix(line, toolCallPendingPrefix)
+			pending := components.RenderPendingToolCallLine(body, m.spinner.View())
+			wrapped = append(wrapped, components.WrapLine(pending, width)...)
 			continue
 		}
 
 		if strings.HasPrefix(line, toolCallSuccessPrefix) {
-			wrapped = append(wrapped, m.renderCompletedToolCallLine(line, true, width)...)
+			body := strings.TrimPrefix(line, toolCallSuccessPrefix)
+			wrapped = append(wrapped, components.RenderCompletedToolCallLine(body, true, width, m.theme.Success(), m.theme.Error())...)
 			continue
 		}
 
 		if strings.HasPrefix(line, toolCallFailurePrefix) {
-			wrapped = append(wrapped, m.renderCompletedToolCallLine(line, false, width)...)
+			body := strings.TrimPrefix(line, toolCallFailurePrefix)
+			wrapped = append(wrapped, components.RenderCompletedToolCallLine(body, false, width, m.theme.Success(), m.theme.Error())...)
 			continue
 		}
 
-		wrapped = append(wrapped, wrapLine(line, width)...)
+		wrapped = append(wrapped, components.WrapLine(line, width)...)
 	}
 
 	return strings.Join(wrapped, "\n")
@@ -509,14 +522,14 @@ func (m *model) renderMarkdown(content string, width int, renderer *glamour.Term
 	}
 
 	if renderer == nil {
-		fallback := strings.Join(wrapLine(content, width), "\n")
+		fallback := strings.Join(components.WrapLine(content, width), "\n")
 		m.markdownCache[cacheKey] = fallback
 		return fallback
 	}
 
 	rendered, err := renderer.Render(content)
 	if err != nil {
-		fallback := strings.Join(wrapLine(content, width), "\n")
+		fallback := strings.Join(components.WrapLine(content, width), "\n")
 		m.markdownCache[cacheKey] = fallback
 		return fallback
 	}
@@ -524,43 +537,6 @@ func (m *model) renderMarkdown(content string, width int, renderer *glamour.Term
 	trimmed := strings.TrimRight(rendered, "\n")
 	m.markdownCache[cacheKey] = trimmed
 	return trimmed
-}
-
-func wrapLine(line string, width int) []string {
-	if width <= 0 {
-		return []string{line}
-	}
-	if line == "" {
-		return []string{""}
-	}
-
-	runes := []rune(line)
-	ret := make([]string, 0, 1)
-
-	for len(runes) > width {
-		breakAt := width
-		for i := width; i > 0; i-- {
-			if runes[i-1] == ' ' || runes[i-1] == '\t' {
-				breakAt = i
-				break
-			}
-		}
-
-		chunk := strings.TrimRight(string(runes[:breakAt]), " \t")
-		if chunk == "" {
-			breakAt = width
-			chunk = string(runes[:breakAt])
-		}
-		ret = append(ret, chunk)
-
-		runes = runes[breakAt:]
-		for len(runes) > 0 && (runes[0] == ' ' || runes[0] == '\t') {
-			runes = runes[1:]
-		}
-	}
-
-	ret = append(ret, string(runes))
-	return ret
 }
 
 func computePaneHeights(total int) (messageHeight int, inputHeight int) {
@@ -609,22 +585,6 @@ func waitForStreamCmd(ch <-chan tea.Msg) tea.Cmd {
 	}
 }
 
-func (m *model) statusLine() string {
-	if m.busy {
-		spinnerView := lipgloss.NewStyle().Foreground(m.theme.Info()).Render(m.spinner.View())
-		durationView := lipgloss.NewStyle().Foreground(m.theme.Muted()).Render(" " + formatElapsedSeconds(m.stopwatch.Elapsed()))
-		return spinnerView + durationView
-	}
-
-	if m.showRunResult {
-		checkView := lipgloss.NewStyle().Foreground(m.theme.Success()).Render("✓")
-		durationView := lipgloss.NewStyle().Foreground(m.theme.Muted()).Render(" " + formatElapsedSeconds(m.stopwatch.Elapsed()))
-		return checkView + durationView
-	}
-
-	return lipgloss.NewStyle().Foreground(m.theme.Muted()).Render("Enter to send, Shift+Enter newline, PgUp/PgDn scroll, q quit")
-}
-
 func ternary[T any](cond bool, ifTrue, ifFalse T) T {
 	if cond {
 		return ifTrue
@@ -645,13 +605,6 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dus", d.Microseconds())
 }
 
-func formatElapsedSeconds(d time.Duration) string {
-	if d < 0 {
-		d = 0
-	}
-	return fmt.Sprintf("%ds", int(d.Truncate(time.Second)/time.Second))
-}
-
 const toolCallPendingPrefix = "tool_call_pending: "
 const toolCallSuccessPrefix = "tool_call_success: "
 const toolCallFailurePrefix = "tool_call_failure: "
@@ -665,39 +618,6 @@ func toolCallKey(call agent.ToolCall) string {
 
 func formatPendingToolCallLine(call agent.ToolCall) string {
 	return toolCallPendingPrefix + formatToolCallBody(call)
-}
-
-func (m *model) renderPendingToolCallLine(line string) string {
-	body := strings.TrimPrefix(line, toolCallPendingPrefix)
-	return fmt.Sprintf("%s %s", m.spinner.View(), body)
-}
-
-func (m *model) renderCompletedToolCallLine(line string, success bool, width int) []string {
-	body := strings.TrimPrefix(line, toolCallFailurePrefix)
-	if success {
-		body = strings.TrimPrefix(line, toolCallSuccessPrefix)
-	}
-
-	icon := "⨯"
-	color := m.theme.Error()
-	if success {
-		icon = "✓"
-		color = m.theme.Success()
-	}
-
-	iconView := lipgloss.NewStyle().Foreground(color).Render(icon)
-	bodyWidth := max(1, width-2)
-	bodyLines := wrapLine(body, bodyWidth)
-	if len(bodyLines) == 0 {
-		return []string{iconView}
-	}
-
-	out := make([]string, 0, len(bodyLines))
-	out = append(out, fmt.Sprintf("%s %s", iconView, bodyLines[0]))
-	for _, line := range bodyLines[1:] {
-		out = append(out, "  "+line)
-	}
-	return out
 }
 
 func formatCompletedToolCallLine(isErr bool, call agent.ToolCall) string {
