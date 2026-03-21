@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/liznear/hh/agent"
 )
@@ -28,6 +29,10 @@ type model struct {
 
 	lines      []string
 	eventCount int
+
+	markdownRenderer      *glamour.TermRenderer
+	markdownRendererWidth int
+	markdownCache         map[string]string
 
 	activeDeltaType agent.EventType
 	activeDeltaLine int
@@ -60,11 +65,12 @@ func newModel(runner *agent.AgentRunner, modelName string) model {
 	vp := viewport.New(0, 0)
 
 	return model{
-		runner:    runner,
-		modelName: modelName,
-		theme:     DefaultTheme(),
-		input:     in,
-		viewport:  vp,
+		runner:        runner,
+		modelName:     modelName,
+		theme:         DefaultTheme(),
+		input:         in,
+		viewport:      vp,
+		markdownCache: map[string]string{},
 		lines: []string{
 			"hh-cli ready",
 		},
@@ -142,7 +148,6 @@ func (m model) View() string {
 	}
 
 	m.syncLayout()
-	m.refreshViewport()
 
 	innerW := max(1, m.width-(appPadding*2))
 	innerH := max(1, m.height-(appPadding*2))
@@ -290,11 +295,11 @@ func (m *model) syncLayout() {
 }
 
 func (m *model) refreshViewport() {
-	m.viewport.SetContent(wrapLines(m.lines, m.viewport.Width))
+	m.viewport.SetContent(m.formatLinesForViewport(m.lines, m.viewport.Width))
 	m.viewport.GotoBottom()
 }
 
-func wrapLines(lines []string, width int) string {
+func (m *model) formatLinesForViewport(lines []string, width int) string {
 	if len(lines) == 0 {
 		return ""
 	}
@@ -302,12 +307,70 @@ func wrapLines(lines []string, width int) string {
 		return strings.Join(lines, "\n")
 	}
 
+	renderer := m.getMarkdownRenderer(width)
+
 	wrapped := make([]string, 0, len(lines))
 	for _, line := range lines {
+		if strings.HasPrefix(line, "assistant: ") {
+			wrapped = append(wrapped, "assistant:")
+			wrapped = append(wrapped, m.renderMarkdown(strings.TrimPrefix(line, "assistant: "), width, renderer))
+			continue
+		}
+
 		wrapped = append(wrapped, wrapLine(line, width)...)
 	}
 
 	return strings.Join(wrapped, "\n")
+}
+
+func (m *model) getMarkdownRenderer(width int) *glamour.TermRenderer {
+	if m.markdownRenderer != nil && m.markdownRendererWidth == width {
+		return m.markdownRenderer
+	}
+
+	renderer, err := glamour.NewTermRenderer(
+		glamour.WithStandardStyle("light"),
+		glamour.WithPreservedNewLines(),
+		glamour.WithWordWrap(max(20, width)),
+	)
+	if err != nil {
+		m.markdownRenderer = nil
+		m.markdownRendererWidth = 0
+		return nil
+	}
+
+	m.markdownRenderer = renderer
+	m.markdownRendererWidth = width
+	m.markdownCache = map[string]string{}
+	return m.markdownRenderer
+}
+
+func (m *model) renderMarkdown(content string, width int, renderer *glamour.TermRenderer) string {
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+
+	cacheKey := fmt.Sprintf("%d:%s", width, content)
+	if cached, ok := m.markdownCache[cacheKey]; ok {
+		return cached
+	}
+
+	if renderer == nil {
+		fallback := strings.Join(wrapLine(content, width), "\n")
+		m.markdownCache[cacheKey] = fallback
+		return fallback
+	}
+
+	rendered, err := renderer.Render(content)
+	if err != nil {
+		fallback := strings.Join(wrapLine(content, width), "\n")
+		m.markdownCache[cacheKey] = fallback
+		return fallback
+	}
+
+	trimmed := strings.TrimRight(rendered, "\n")
+	m.markdownCache[cacheKey] = trimmed
+	return trimmed
 }
 
 func wrapLine(line string, width int) []string {
