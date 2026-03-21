@@ -12,16 +12,10 @@ import (
 	"github.com/liznear/hh/agent"
 )
 
-const (
-	sidebarWidth      = 45
-	sidebarHideWidth  = 150
-	appPadding        = 1
-	defaultInputLines = 3
-)
-
 type model struct {
 	runner    *agent.AgentRunner
 	modelName string
+	theme     Base16Theme
 
 	width  int
 	height int
@@ -69,6 +63,7 @@ func newModel(runner *agent.AgentRunner, modelName string) model {
 	return model{
 		runner:    runner,
 		modelName: modelName,
+		theme:     DefaultBase16Theme(),
 		input:     in,
 		viewport:  vp,
 		lines: []string{
@@ -173,7 +168,7 @@ func (m model) View() string {
 
 	inputBlock := lipgloss.JoinVertical(
 		lipgloss.Left,
-		lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(status),
+		lipgloss.NewStyle().Foreground(m.theme.Base03).Render(status),
 		m.input.View(),
 	)
 	inputPane := lipgloss.NewStyle().
@@ -199,8 +194,8 @@ func (m model) View() string {
 			Width(sidebarWidth).
 			Height(innerH).
 			Padding(1).
-			Background(lipgloss.Color("236")).
-			Foreground(lipgloss.Color("252")).
+			Background(m.theme.Base01).
+			Foreground(m.theme.Base06).
 			Render(sidebarText)
 
 		content = lipgloss.JoinHorizontal(lipgloss.Top, mainPane, sidebarPane)
@@ -209,6 +204,8 @@ func (m model) View() string {
 	return lipgloss.NewStyle().
 		Width(m.width).
 		Height(m.height).
+		Background(m.theme.Base00).
+		Foreground(m.theme.Base05).
 		Padding(appPadding).
 		Render(content)
 }
