@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/stopwatch"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -43,6 +45,10 @@ type model struct {
 
 	activeDeltaType agent.EventType
 	activeDeltaLine int
+
+	spinner       spinner.Model
+	stopwatch     stopwatch.Model
+	showRunResult bool
 }
 
 type agentStreamStartedMsg struct {
@@ -87,13 +93,18 @@ func newModel(runner *agent.AgentRunner, modelName string) *model {
 
 	vp := viewport.New()
 	vp.MouseWheelEnabled = true
+	theme := DefaultTheme()
+	spin := spinner.New(spinner.WithSpinner(spinner.Dot))
+	sw := stopwatch.New(stopwatch.WithInterval(time.Second))
 
 	return &model{
 		runner:        runner,
 		modelName:     modelName,
-		theme:         DefaultTheme(),
+		theme:         theme,
 		input:         in,
 		viewport:      vp,
+		spinner:       spin,
+		stopwatch:     sw,
 		autoScroll:    true,
 		debug:         isDebugEnabled(),
 		markdownCache: map[string]string{},
@@ -108,13 +119,21 @@ func (m *model) Init() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var spinnerCmd tea.Cmd
+	if m.busy {
+		m.spinner, spinnerCmd = m.spinner.Update(msg)
+	}
+	var stopwatchCmd tea.Cmd
+	m.stopwatch, stopwatchCmd = m.stopwatch.Update(msg)
+	statusCmd := tea.Batch(spinnerCmd, stopwatchCmd)
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.syncLayout()
 		m.refreshViewport()
-		return m, nil
+		return m, statusCmd
 
 	case tea.KeyPressMsg:
 		prevOffset := m.viewport.YOffset()
@@ -122,32 +141,35 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport, viewportCmd = m.viewport.Update(msg)
 		if m.viewport.YOffset() != prevOffset {
 			m.autoScroll = m.viewport.AtBottom()
-			return m, viewportCmd
+			return m, tea.Batch(statusCmd, viewportCmd)
 		}
 
 		key := msg.Key()
 		if key.Code == tea.KeyEnter {
 			if key.Mod&tea.ModShift != 0 {
 				m.input.InsertRune('\n')
-				return m, nil
+				return m, statusCmd
 			}
 
 			if m.busy {
-				return m, nil
+				return m, statusCmd
 			}
 			prompt := strings.TrimSpace(m.input.Value())
 			if prompt == "" {
-				return m, nil
+				return m, statusCmd
 			}
 
 			m.lines = append(m.lines, fmt.Sprintf("user: %s", prompt))
 			m.input.SetValue("")
 			m.busy = true
+			m.showRunResult = false
 			m.activeDeltaType = ""
 			m.activeDeltaLine = -1
 			m.refreshViewport()
 
-			return m, startAgentStreamCmd(m.runner, prompt)
+			return m, tea.Batch(startAgentStreamCmd(m.runner, prompt), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
+				return m.spinner.Tick()
+			})
 		}
 
 		switch msg.String() {
@@ -157,7 +179,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
-		return m, cmd
+		return m, tea.Batch(statusCmd, cmd)
 
 	case tea.MouseWheelMsg:
 		prevOffset := m.viewport.YOffset()
@@ -165,22 +187,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport, cmd = m.viewport.Update(msg)
 		if m.viewport.YOffset() != prevOffset {
 			m.autoScroll = m.viewport.AtBottom()
-			return m, cmd
+			return m, tea.Batch(statusCmd, cmd)
 		}
-		return m, nil
+		return m, statusCmd
 
 	case agentStreamStartedMsg:
 		m.stream = msg.ch
-		return m, waitForStreamCmd(m.stream)
+		return m, tea.Batch(statusCmd, waitForStreamCmd(m.stream))
 
 	case agentEventMsg:
 		m.eventCount++
 		m.handleAgentEvent(msg.event)
 		m.refreshViewport()
-		return m, waitForStreamCmd(m.stream)
+		return m, tea.Batch(statusCmd, waitForStreamCmd(m.stream))
 
 	case agentRunDoneMsg:
 		m.busy = false
+		m.stopwatch, _ = m.stopwatch.Update(stopwatch.StartStopMsg{ID: m.stopwatch.ID()})
+		m.showRunResult = true
 		if msg.err != nil {
 			m.lines = append(m.lines, fmt.Sprintf("error: %v", msg.err))
 		}
@@ -188,12 +212,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activeDeltaType = ""
 		m.activeDeltaLine = -1
 		m.refreshViewport()
-		return m, nil
+		return m, statusCmd
 	}
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	return m, cmd
+	return m, tea.Batch(statusCmd, cmd)
 }
 
 func (m *model) View() tea.View {
@@ -227,10 +251,7 @@ func (m *model) View() tea.View {
 		Height(messageH).
 		Render(m.viewport.View())
 
-	status := "Enter to send, Shift+Enter newline, PgUp/PgDn scroll, q quit"
-	if m.busy {
-		status = "Agent is running..."
-	}
+	status := m.statusLine()
 
 	inputBox := lipgloss.NewStyle().
 		Width(max(1, mainW-2)).
@@ -242,7 +263,7 @@ func (m *model) View() tea.View {
 
 	inputBlock := lipgloss.JoinVertical(
 		lipgloss.Left,
-		lipgloss.NewStyle().Foreground(m.theme.Muted()).Render(status),
+		status,
 		inputBox,
 	)
 	inputPane := lipgloss.NewStyle().
@@ -547,6 +568,22 @@ func waitForStreamCmd(ch <-chan tea.Msg) tea.Cmd {
 	}
 }
 
+func (m *model) statusLine() string {
+	if m.busy {
+		spinnerView := lipgloss.NewStyle().Foreground(m.theme.Info()).Render(m.spinner.View())
+		durationView := lipgloss.NewStyle().Foreground(m.theme.Muted()).Render(" " + formatElapsedSeconds(m.stopwatch.Elapsed()))
+		return spinnerView + durationView
+	}
+
+	if m.showRunResult {
+		checkView := lipgloss.NewStyle().Foreground(m.theme.Success()).Render("✓")
+		durationView := lipgloss.NewStyle().Foreground(m.theme.Muted()).Render(" " + formatElapsedSeconds(m.stopwatch.Elapsed()))
+		return checkView + durationView
+	}
+
+	return lipgloss.NewStyle().Foreground(m.theme.Muted()).Render("Enter to send, Shift+Enter newline, PgUp/PgDn scroll, q quit")
+}
+
 func ternary[T any](cond bool, ifTrue, ifFalse T) T {
 	if cond {
 		return ifTrue
@@ -565,4 +602,11 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%.2fms", float64(d)/float64(time.Millisecond))
 	}
 	return fmt.Sprintf("%dus", d.Microseconds())
+}
+
+func formatElapsedSeconds(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	return fmt.Sprintf("%ds", int(d.Truncate(time.Second)/time.Second))
 }
