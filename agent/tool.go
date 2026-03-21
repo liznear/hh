@@ -22,6 +22,7 @@ type ToolHandler interface {
 
 type ToolResult struct {
 	IsErr       bool
+	Result      any
 	ContentType string
 	Data        string
 }

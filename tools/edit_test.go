@@ -33,4 +33,12 @@ func TestEditTool(t *testing.T) {
 	if string(updated) != "hi world\nhi world\n" {
 		t.Fatalf("unexpected file content after edit: %q", string(updated))
 	}
+
+	structured, ok := res.Result.(EditResult)
+	if !ok {
+		t.Fatalf("unexpected result type: %T", res.Result)
+	}
+	if structured.ReplacementCount != 2 {
+		t.Fatalf("unexpected replacement count: %d", structured.ReplacementCount)
+	}
 }

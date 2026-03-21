@@ -4,10 +4,26 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
+	"strings"
 
 	"github.com/liznear/hh/agent"
 )
+
+type GrepResult struct {
+	Pattern    string
+	TargetPath string
+	MatchCount int
+	FileCount  int
+}
+
+func (r GrepResult) Summary() string {
+	if r.MatchCount == 0 {
+		return "no matches"
+	}
+	return fmt.Sprintf("%d matches in %d files", r.MatchCount, r.FileCount)
+}
 
 func NewGrepTool() agent.Tool {
 	return agent.Tool{
@@ -49,7 +65,7 @@ func handleGrep(ctx context.Context, params map[string]any) agent.ToolResult {
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			return agent.ToolResult{Data: ""}
+			return agent.ToolResult{Data: "", Result: GrepResult{Pattern: pattern, TargetPath: target}}
 		}
 		if stderr.Len() > 0 {
 			return toolErr("rg failed: %s", stderr.String())
@@ -57,5 +73,40 @@ func handleGrep(ctx context.Context, params map[string]any) agent.ToolResult {
 		return toolErr("rg failed: %v", err)
 	}
 
-	return agent.ToolResult{Data: stdout.String()}
+	output := stdout.String()
+	return agent.ToolResult{
+		Data: output,
+		Result: GrepResult{
+			Pattern:    pattern,
+			TargetPath: target,
+			MatchCount: countNonEmptyLines(output),
+			FileCount:  countMatchedFiles(output),
+		},
+	}
+}
+
+func countNonEmptyLines(s string) int {
+	count := 0
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+	return count
+}
+
+func countMatchedFiles(s string) int {
+	files := map[string]struct{}{}
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		idx := strings.Index(line, ":")
+		if idx <= 0 {
+			continue
+		}
+		files[line[:idx]] = struct{}{}
+	}
+	return len(files)
 }

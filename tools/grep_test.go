@@ -33,4 +33,12 @@ func TestGrepTool(t *testing.T) {
 	if !strings.Contains(res.Data, "sample.txt:2:beta") {
 		t.Fatalf("unexpected grep output: %q", res.Data)
 	}
+
+	structured, ok := res.Result.(GrepResult)
+	if !ok {
+		t.Fatalf("unexpected result type: %T", res.Result)
+	}
+	if structured.MatchCount != 1 || structured.FileCount != 1 {
+		t.Fatalf("unexpected grep summary: %+v", structured)
+	}
 }

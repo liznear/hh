@@ -1,7 +1,7 @@
 {"Type":"agent_start","Data":{}}
 {"Type":"turn_start","Data":{}}
 {"Type":"tool_call_start","Data":{"Call":{"ID":"call_1","Name":"echo","Arguments":"{\"arg\":\"val\"}"}}}
-{"Type":"tool_call_end","Data":{"Call":{"ID":"call_1","Name":"echo","Arguments":"{\"arg\":\"val\"}"},"Result":{"IsErr":false,"ContentType":"","Data":"{\"arg\":\"val\"}"}}}
+{"Type":"tool_call_end","Data":{"Call":{"ID":"call_1","Name":"echo","Arguments":"{\"arg\":\"val\"}"},"Result":{"IsErr":false,"Result":null,"ContentType":"","Data":"{\"arg\":\"val\"}"}}}
 {"Type":"turn_end","Data":{}}
 {"Type":"turn_start","Data":{}}
 {"Type":"turn_end","Data":{}}

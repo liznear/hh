@@ -10,6 +10,17 @@ import (
 	"github.com/liznear/hh/agent"
 )
 
+type ReadResult struct {
+	Path      string
+	Start     int
+	Limit     int
+	LineCount int
+}
+
+func (r ReadResult) Summary() string {
+	return fmt.Sprintf("%d lines", r.LineCount)
+}
+
 func NewReadTool() agent.Tool {
 	return agent.Tool{
 		Name:        "read",
@@ -78,7 +89,15 @@ func handleRead(_ context.Context, params map[string]any) agent.ToolResult {
 		return toolErr("failed to read file: %v", err)
 	}
 
-	return agent.ToolResult{Data: strings.Join(lines, "\n")}
+	return agent.ToolResult{
+		Data: strings.Join(lines, "\n"),
+		Result: ReadResult{
+			Path:      path,
+			Start:     start,
+			Limit:     limit,
+			LineCount: len(lines),
+		},
+	}
 }
 
 func toolErr(format string, args ...any) agent.ToolResult {

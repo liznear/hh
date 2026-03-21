@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,18 @@ import (
 	"github.com/liznear/hh/agent"
 	ignore "github.com/sabhiram/go-gitignore"
 )
+
+type ListResult struct {
+	Path       string
+	Recursive  bool
+	EntryCount int
+	FileCount  int
+	DirCount   int
+}
+
+func (r ListResult) Summary() string {
+	return fmt.Sprintf("%d items", r.EntryCount)
+}
 
 func NewListTool() agent.Tool {
 	return agent.Tool{
@@ -69,7 +82,26 @@ func handleList(_ context.Context, params map[string]any) agent.ToolResult {
 		return toolErr("failed to list directory: %v", err)
 	}
 
-	return agent.ToolResult{Data: strings.Join(entries, "\n")}
+	fileCount := 0
+	dirCount := 0
+	for _, entry := range entries {
+		if strings.HasSuffix(entry, "/") {
+			dirCount++
+		} else {
+			fileCount++
+		}
+	}
+
+	return agent.ToolResult{
+		Data: strings.Join(entries, "\n"),
+		Result: ListResult{
+			Path:       path,
+			Recursive:  recursive,
+			EntryCount: len(entries),
+			FileCount:  fileCount,
+			DirCount:   dirCount,
+		},
+	}
 }
 
 func listFlat(path string, gitIgnore *ignore.GitIgnore) ([]string, error) {

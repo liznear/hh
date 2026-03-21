@@ -28,4 +28,12 @@ func TestReadTool(t *testing.T) {
 	if res.Data != "line1\nline2" {
 		t.Fatalf("unexpected read output: %q", res.Data)
 	}
+
+	structured, ok := res.Result.(ReadResult)
+	if !ok {
+		t.Fatalf("unexpected result type: %T", res.Result)
+	}
+	if structured.LineCount != 2 {
+		t.Fatalf("unexpected line count: %d", structured.LineCount)
+	}
 }

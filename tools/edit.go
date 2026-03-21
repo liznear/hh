@@ -2,11 +2,24 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 
 	"github.com/liznear/hh/agent"
 )
+
+type EditResult struct {
+	Path             string
+	ReplacementCount int
+}
+
+func (r EditResult) Summary() string {
+	if r.ReplacementCount == 0 {
+		return "no changes"
+	}
+	return fmt.Sprintf("%d replacements", r.ReplacementCount)
+}
 
 func NewEditTool() agent.Tool {
 	return agent.Tool{
@@ -54,6 +67,7 @@ func handleEdit(_ context.Context, params map[string]any) agent.ToolResult {
 	}
 
 	updated := strings.ReplaceAll(content, oldString, newString)
+	replacementCount := strings.Count(content, oldString)
 	info, err := os.Stat(path)
 	if err != nil {
 		return toolErr("failed to stat file: %v", err)
@@ -62,5 +76,11 @@ func handleEdit(_ context.Context, params map[string]any) agent.ToolResult {
 		return toolErr("failed to write file: %v", err)
 	}
 
-	return agent.ToolResult{Data: "ok"}
+	return agent.ToolResult{
+		Data: "ok",
+		Result: EditResult{
+			Path:             path,
+			ReplacementCount: replacementCount,
+		},
+	}
 }
