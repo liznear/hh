@@ -46,7 +46,13 @@ func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event))
 		},
 		Tools: a.state.Tools,
 	}
-	RunAgentLoop(ctx, aCtx, onEvent)
+	RunAgentLoop(ctx, aCtx, func(event Event) {
+		onEvent(event)
+		switch event.Type {
+		case EventTypeAgentEnd:
+			a.state.Messages = event.Data.(EventDataAgentEnd).Messages
+		}
+	})
 	return nil
 }
 
