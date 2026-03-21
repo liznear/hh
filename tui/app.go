@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -48,53 +49,26 @@ type model struct {
 	pendingScrollEvents  int
 	lastUpdateAt         time.Time
 	lastViewDoneAt       time.Time
-	lastLoopStats        loopPerfStats
-	maxLoopStats         loopPerfStats
 	lastFrameBytes       int
 	maxFrameBytes        int
 	lastRefreshAt        time.Time
-	pendingEventRefresh  int
 	suppressRefreshUntil time.Time
 
 	lastRenderLatency     time.Duration
 	maxRenderLatency      time.Duration
-	lastFormatStats       formatPerfStats
-	maxFormatStats        formatPerfStats
-	lastViewStats         viewPerfStats
-	maxViewStats          viewPerfStats
 	lastScrollStats       scrollPerfStats
 	maxScrollStats        scrollPerfStats
 	markdownRenderer      *glamour.TermRenderer
 	markdownRendererWidth int
 	markdownCache         map[string]string
+	itemRenderCache       map[uintptr]itemRenderCacheEntry
 	lastViewportContent   string
 }
 
-type formatPerfStats struct {
-	lineCount          int
-	assistantLineCount int
-	formatDuration     time.Duration
-	setContentDuration time.Duration
-	refreshDuration    time.Duration
-	wrapDuration       time.Duration
-	markdownDuration   time.Duration
-	markdownCalls      int
-	markdownCacheHits  int
-	markdownFallbacks  int
-}
-
-type markdownPerfStats struct {
-	calls          int
-	cacheHits      int
-	renderDuration time.Duration
-	fallbackToWrap bool
-}
-
-type viewPerfStats struct {
-	viewportViewDuration time.Duration
-	statusDuration       time.Duration
-	inputDuration        time.Duration
-	layoutDuration       time.Duration
+type itemRenderCacheEntry struct {
+	width     int
+	signature string
+	lines     []string
 }
 
 type scrollPerfStats struct {
@@ -108,10 +82,10 @@ type scrollPerfStats struct {
 	timeSinceView    time.Duration
 }
 
-type loopPerfStats struct {
-	updateGap      time.Duration
-	updateDuration time.Duration
-	timeSinceView  time.Duration
+type formatPerfStats struct{}
+
+type markdownPerfStats struct {
+	fallbackToWrap bool
 }
 
 type agentStreamStartedMsg struct {
@@ -182,19 +156,20 @@ func newModel(runner *agent.AgentRunner, modelName string) *model {
 	}
 
 	return &model{
-		runner:        runner,
-		modelName:     modelName,
-		theme:         theme,
-		storage:       store,
-		input:         in,
-		viewport:      vp,
-		spinner:       spin,
-		stopwatch:     sw,
-		autoScroll:    true,
-		debug:         isDebugEnabled(),
-		markdownCache: map[string]string{},
-		session:       state,
-		toolCalls:     map[string]*session.ToolCallItem{},
+		runner:          runner,
+		modelName:       modelName,
+		theme:           theme,
+		storage:         store,
+		input:           in,
+		viewport:        vp,
+		spinner:         spin,
+		stopwatch:       sw,
+		autoScroll:      true,
+		debug:           isDebugEnabled(),
+		markdownCache:   map[string]string{},
+		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
+		session:         state,
+		toolCalls:       map[string]*session.ToolCallItem{},
 	}
 }
 
@@ -206,24 +181,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updateStart := time.Now()
 	updateGap := time.Duration(0)
 	timeSinceView := time.Duration(0)
-	if m.debug {
-		if !m.lastUpdateAt.IsZero() {
-			updateGap = updateStart.Sub(m.lastUpdateAt)
-		}
-		if !m.lastViewDoneAt.IsZero() {
-			timeSinceView = updateStart.Sub(m.lastViewDoneAt)
-		}
-		m.lastLoopStats.updateGap = updateGap
-		m.lastLoopStats.timeSinceView = timeSinceView
-		m.maxLoopStats.updateGap = maxDuration(m.maxLoopStats.updateGap, updateGap)
-		m.maxLoopStats.timeSinceView = maxDuration(m.maxLoopStats.timeSinceView, timeSinceView)
+	if !m.lastUpdateAt.IsZero() {
+		updateGap = updateStart.Sub(m.lastUpdateAt)
+	}
+	if !m.lastViewDoneAt.IsZero() {
+		timeSinceView = updateStart.Sub(m.lastViewDoneAt)
 	}
 	defer func() {
-		if m.debug {
-			d := time.Since(updateStart)
-			m.lastLoopStats.updateDuration = d
-			m.maxLoopStats.updateDuration = maxDuration(m.maxLoopStats.updateDuration, d)
-		}
 		m.lastUpdateAt = updateStart
 	}()
 
@@ -368,14 +332,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.refreshViewport()
 					m.viewportDirty = false
 					m.lastRefreshAt = time.Now()
-					m.pendingEventRefresh = 0
 				} else {
 					m.viewportDirty = true
-					m.pendingEventRefresh += len(msg.events)
 				}
 			} else {
 				m.viewportDirty = true
-				m.pendingEventRefresh += len(msg.events)
 			}
 		}
 
@@ -394,7 +355,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshViewport()
 			m.lastRefreshAt = time.Now()
 			m.viewportDirty = false
-			m.pendingEventRefresh = 0
 			return m, statusCmd
 		}
 
@@ -407,14 +367,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshViewport()
 				m.viewportDirty = false
 				m.lastRefreshAt = time.Now()
-				m.pendingEventRefresh = 0
 			} else {
 				m.viewportDirty = true
-				m.pendingEventRefresh++
 			}
 		} else {
 			m.viewportDirty = true
-			m.pendingEventRefresh++
 		}
 		return m, tea.Batch(statusCmd, waitForStreamCmd(m.stream))
 
@@ -433,7 +390,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		m.lastRefreshAt = time.Now()
 		m.viewportDirty = false
-		m.pendingEventRefresh = 0
 		return m, statusCmd
 	}
 
@@ -481,19 +437,13 @@ func (m *model) View() tea.View {
 
 	messageH, inputH := computePaneHeights(innerH)
 
-	viewportViewStart := time.Now()
 	viewportView := m.viewport.View()
-	if m.debug {
-		m.lastViewStats.viewportViewDuration = time.Since(viewportViewStart)
-		m.maxViewStats.viewportViewDuration = maxDuration(m.maxViewStats.viewportViewDuration, m.lastViewStats.viewportViewDuration)
-	}
 
 	messagePane := lipgloss.NewStyle().
 		Width(mainW).
 		Height(messageH).
 		Render(viewportView)
 
-	statusStart := time.Now()
 	status := components.RenderStatusLine(components.StatusLineParams{
 		Busy:          m.busy,
 		ShowRunResult: m.showRunResult,
@@ -503,12 +453,7 @@ func (m *model) View() tea.View {
 		MutedColor:    m.theme.Muted(),
 		SuccessColor:  m.theme.Success(),
 	})
-	if m.debug {
-		m.lastViewStats.statusDuration = time.Since(statusStart)
-		m.maxViewStats.statusDuration = maxDuration(m.maxViewStats.statusDuration, m.lastViewStats.statusDuration)
-	}
 
-	inputStart := time.Now()
 	inputBox := lipgloss.NewStyle().
 		Width(max(1, mainW-2)).
 		Height(inputInnerLines).
@@ -516,10 +461,6 @@ func (m *model) View() tea.View {
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(m.theme.Muted()).
 		Render(m.input.View())
-	if m.debug {
-		m.lastViewStats.inputDuration = time.Since(inputStart)
-		m.maxViewStats.inputDuration = maxDuration(m.maxViewStats.inputDuration, m.lastViewStats.inputDuration)
-	}
 
 	inputBlock := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -531,7 +472,6 @@ func (m *model) View() tea.View {
 		Height(inputH).
 		Render(inputBlock)
 
-	layoutStart := time.Now()
 	mainPane := lipgloss.NewStyle().
 		Width(mainW).
 		Height(innerH).
@@ -547,47 +487,16 @@ func (m *model) View() tea.View {
 			fmt.Sprintf("Items: %d", m.session.ItemCount()),
 		}
 		if m.debug {
-			cacheHitRate := "n/a"
-			if m.lastFormatStats.markdownCalls > 0 {
-				rate := (float64(m.lastFormatStats.markdownCacheHits) / float64(m.lastFormatStats.markdownCalls)) * 100
-				cacheHitRate = fmt.Sprintf("%.0f%%", rate)
-			}
-			maxCacheHitRate := "n/a"
-			if m.maxFormatStats.markdownCalls > 0 {
-				rate := (float64(m.maxFormatStats.markdownCacheHits) / float64(m.maxFormatStats.markdownCalls)) * 100
-				maxCacheHitRate = fmt.Sprintf("%.0f%%", rate)
-			}
-			suppressRemaining := time.Until(m.suppressRefreshUntil)
-			if suppressRemaining < 0 {
-				suppressRemaining = 0
-			}
 			sidebarLines = append(sidebarLines,
 				"",
 				"Debug",
 				fmt.Sprintf("Render: %s (max %s)", formatDuration(m.lastRenderLatency), formatDuration(m.maxRenderLatency)),
-				fmt.Sprintf("Update gap/dur: %s / %s", formatDuration(m.lastLoopStats.updateGap), formatDuration(m.lastLoopStats.updateDuration)),
-				fmt.Sprintf("Update gap/dur max: %s / %s", formatDuration(m.maxLoopStats.updateGap), formatDuration(m.maxLoopStats.updateDuration)),
-				fmt.Sprintf("Since View: %s (max %s)", formatDuration(m.lastLoopStats.timeSinceView), formatDuration(m.maxLoopStats.timeSinceView)),
-				fmt.Sprintf("Viewport.View: %s (max %s)", formatDuration(m.lastViewStats.viewportViewDuration), formatDuration(m.maxViewStats.viewportViewDuration)),
-				fmt.Sprintf("Status/Input: %s / %s", formatDuration(m.lastViewStats.statusDuration), formatDuration(m.lastViewStats.inputDuration)),
-				fmt.Sprintf("Status/Input max: %s / %s", formatDuration(m.maxViewStats.statusDuration), formatDuration(m.maxViewStats.inputDuration)),
-				fmt.Sprintf("Layout: %s (max %s)", formatDuration(m.lastViewStats.layoutDuration), formatDuration(m.maxViewStats.layoutDuration)),
 				fmt.Sprintf("Scroll[%s]: %s (max %s, dy=%d)", m.lastScrollStats.inputType, formatDuration(m.lastScrollStats.viewportUpdate), formatDuration(m.maxScrollStats.viewportUpdate), m.lastScrollStats.deltaRows),
 				fmt.Sprintf("Scroll gap/view: %s / %s", formatDuration(m.lastScrollStats.updateGap), formatDuration(m.lastScrollStats.timeSinceView)),
 				fmt.Sprintf("Scroll gap/view max: %s / %s", formatDuration(m.maxScrollStats.updateGap), formatDuration(m.maxScrollStats.timeSinceView)),
 				fmt.Sprintf("Scroll->View: %s / %s", formatDuration(m.lastScrollStats.inputToViewStart), formatDuration(m.lastScrollStats.inputToViewDone)),
 				fmt.Sprintf("Scroll->View max: %s / %s (events max %d)", formatDuration(m.maxScrollStats.inputToViewStart), formatDuration(m.maxScrollStats.inputToViewDone), m.maxScrollStats.coalescedEvents),
 				fmt.Sprintf("Frame bytes: %d (max %d)", m.lastFrameBytes, m.maxFrameBytes),
-				fmt.Sprintf("Pending refresh events: %d", m.pendingEventRefresh),
-				fmt.Sprintf("Refresh suppress: %s", formatDuration(suppressRemaining)),
-				fmt.Sprintf("Refresh: %s (max %s)", formatDuration(m.lastFormatStats.refreshDuration), formatDuration(m.maxFormatStats.refreshDuration)),
-				fmt.Sprintf("Format: %s (max %s)", formatDuration(m.lastFormatStats.formatDuration), formatDuration(m.maxFormatStats.formatDuration)),
-				fmt.Sprintf("SetContent: %s (max %s)", formatDuration(m.lastFormatStats.setContentDuration), formatDuration(m.maxFormatStats.setContentDuration)),
-				fmt.Sprintf("Markdown: %s (max %s)", formatDuration(m.lastFormatStats.markdownDuration), formatDuration(m.maxFormatStats.markdownDuration)),
-				fmt.Sprintf("MD cache: %s (%d/%d), max %s", cacheHitRate, m.lastFormatStats.markdownCacheHits, m.lastFormatStats.markdownCalls, maxCacheHitRate),
-				fmt.Sprintf("MD fallback: %d (max %d)", m.lastFormatStats.markdownFallbacks, m.maxFormatStats.markdownFallbacks),
-				fmt.Sprintf("Wrap: %s (max %s)", formatDuration(m.lastFormatStats.wrapDuration), formatDuration(m.maxFormatStats.wrapDuration)),
-				fmt.Sprintf("Lines: %d (%d md), max %d (%d md)", m.lastFormatStats.lineCount, m.lastFormatStats.assistantLineCount, m.maxFormatStats.lineCount, m.maxFormatStats.assistantLineCount),
 			)
 		}
 		sidebarText := strings.Join(sidebarLines, "\n")
@@ -613,10 +522,6 @@ func (m *model) View() tea.View {
 	if m.debug {
 		m.lastFrameBytes = len(content)
 		m.maxFrameBytes = maxInt(m.maxFrameBytes, m.lastFrameBytes)
-	}
-	if m.debug {
-		m.lastViewStats.layoutDuration = time.Since(layoutStart)
-		m.maxViewStats.layoutDuration = maxDuration(m.maxViewStats.layoutDuration, m.lastViewStats.layoutDuration)
 	}
 
 	v := tea.NewView(content)
@@ -823,48 +728,24 @@ func (m *model) syncLayout() {
 }
 
 func (m *model) refreshViewport() {
-	refreshStart := time.Now()
 	prevOffset := m.viewport.YOffset()
 	wasAtBottom := m.viewport.AtBottom()
 
-	formatStart := time.Now()
-	content, stats := m.formatSessionForViewport(m.viewport.Width(), m.debug)
-	if m.debug {
-		stats.formatDuration = time.Since(formatStart)
-	}
-
-	setContentStart := time.Now()
+	content, _ := m.formatSessionForViewport(m.viewport.Width(), false)
 	if content != m.lastViewportContent {
 		m.viewport.SetContent(content)
 		m.lastViewportContent = content
-	}
-	if m.debug {
-		stats.setContentDuration = time.Since(setContentStart)
-		stats.refreshDuration = time.Since(refreshStart)
-		m.lastFormatStats = stats
-		m.maxFormatStats.refreshDuration = maxDuration(m.maxFormatStats.refreshDuration, stats.refreshDuration)
-		m.maxFormatStats.formatDuration = maxDuration(m.maxFormatStats.formatDuration, stats.formatDuration)
-		m.maxFormatStats.setContentDuration = maxDuration(m.maxFormatStats.setContentDuration, stats.setContentDuration)
-		m.maxFormatStats.markdownDuration = maxDuration(m.maxFormatStats.markdownDuration, stats.markdownDuration)
-		m.maxFormatStats.wrapDuration = maxDuration(m.maxFormatStats.wrapDuration, stats.wrapDuration)
-		m.maxFormatStats.lineCount = maxInt(m.maxFormatStats.lineCount, stats.lineCount)
-		m.maxFormatStats.assistantLineCount = maxInt(m.maxFormatStats.assistantLineCount, stats.assistantLineCount)
-		m.maxFormatStats.markdownCalls = maxInt(m.maxFormatStats.markdownCalls, stats.markdownCalls)
-		m.maxFormatStats.markdownCacheHits = maxInt(m.maxFormatStats.markdownCacheHits, stats.markdownCacheHits)
-		m.maxFormatStats.markdownFallbacks = maxInt(m.maxFormatStats.markdownFallbacks, stats.markdownFallbacks)
 	}
 
 	if m.autoScroll || wasAtBottom {
 		m.viewport.GotoBottom()
 		m.autoScroll = true
-		m.pendingEventRefresh = 0
 		return
 	}
 	m.viewport.SetYOffset(prevOffset)
-	m.pendingEventRefresh = 0
 }
 
-func (m *model) formatSessionForViewport(width int, collectPerf bool) (string, formatPerfStats) {
+func (m *model) formatSessionForViewport(width int, _ bool) (string, formatPerfStats) {
 	stats := formatPerfStats{}
 	items := m.session.AllItems()
 	if len(items) == 0 {
@@ -874,58 +755,129 @@ func (m *model) formatSessionForViewport(width int, collectPerf bool) (string, f
 		return m.formatSessionRaw(), stats
 	}
 
-	if collectPerf {
-		stats.lineCount = len(items)
-	}
-
 	renderer := m.getMarkdownRenderer(width)
 	wrapped := make([]string, 0, len(items))
 
 	for _, item := range items {
+		if cached, ok := m.getCachedRenderedItem(item, width); ok {
+			wrapped = append(wrapped, cached...)
+			continue
+		}
+
 		switch v := item.(type) {
 		case *session.UserMessage:
-			wrapStart := time.Now()
-			wrapped = append(wrapped, components.WrapLine("user: "+v.Content, width)...)
-			if collectPerf {
-				stats.wrapDuration += time.Since(wrapStart)
-			}
+			lines := components.WrapLine("user: "+v.Content, width)
+			wrapped = append(wrapped, lines...)
+			m.setCachedRenderedItem(item, width, lines)
 
 		case *session.AssistantMessage:
-			if collectPerf {
-				stats.assistantLineCount++
-			}
-			wrapped = append(wrapped, "assistant:")
-			renderedMarkdown, markdownStats := m.renderMarkdown(v.Content, width, renderer)
-			if collectPerf {
-				stats.markdownDuration += markdownStats.renderDuration
-				stats.markdownCalls += markdownStats.calls
-				stats.markdownCacheHits += markdownStats.cacheHits
-				if markdownStats.fallbackToWrap {
-					stats.markdownFallbacks++
-				}
-			}
-			wrapped = append(wrapped, renderedMarkdown)
+			lines := []string{"assistant:"}
+			renderedMarkdown, _ := m.renderMarkdown(v.Content, width, renderer)
+			lines = append(lines, renderedMarkdown)
+			wrapped = append(wrapped, lines...)
+			m.setCachedRenderedItem(item, width, lines)
 
 		case *session.ThinkingBlock:
-			wrapStart := time.Now()
-			wrapped = append(wrapped, components.WrapLine("thinking: "+v.Content, width)...)
-			if collectPerf {
-				stats.wrapDuration += time.Since(wrapStart)
-			}
+			lines := components.WrapLine("thinking: "+v.Content, width)
+			wrapped = append(wrapped, lines...)
+			m.setCachedRenderedItem(item, width, lines)
 
 		case *session.ToolCallItem:
-			m.formatToolCallItem(v, width, &wrapped, &stats, collectPerf)
+			m.formatToolCallItem(v, width, &wrapped)
 
 		case *session.ErrorItem:
-			wrapStart := time.Now()
-			wrapped = append(wrapped, components.WrapLine("error: "+v.Message, width)...)
-			if collectPerf {
-				stats.wrapDuration += time.Since(wrapStart)
-			}
+			lines := components.WrapLine("error: "+v.Message, width)
+			wrapped = append(wrapped, lines...)
+			m.setCachedRenderedItem(item, width, lines)
 		}
 	}
 
 	return strings.Join(wrapped, "\n"), stats
+}
+
+func (m *model) getCachedRenderedItem(item session.Item, width int) ([]string, bool) {
+	if m.itemRenderCache == nil {
+		return nil, false
+	}
+	if item == nil {
+		return nil, false
+	}
+	if tc, ok := item.(*session.ToolCallItem); ok && tc.Status == session.ToolCallStatusPending {
+		return nil, false
+	}
+	key := itemCacheKey(item)
+	if key == 0 {
+		return nil, false
+	}
+	entry, ok := m.itemRenderCache[key]
+	if !ok {
+		return nil, false
+	}
+	sig, ok := itemCacheSignature(item)
+	if !ok || entry.width != width || entry.signature != sig {
+		return nil, false
+	}
+	return cloneStringSlice(entry.lines), true
+}
+
+func (m *model) setCachedRenderedItem(item session.Item, width int, lines []string) {
+	if m.itemRenderCache == nil {
+		return
+	}
+	if item == nil {
+		return
+	}
+	if tc, ok := item.(*session.ToolCallItem); ok && tc.Status == session.ToolCallStatusPending {
+		return
+	}
+	key := itemCacheKey(item)
+	if key == 0 {
+		return
+	}
+	sig, ok := itemCacheSignature(item)
+	if !ok {
+		return
+	}
+	m.itemRenderCache[key] = itemRenderCacheEntry{
+		width:     width,
+		signature: sig,
+		lines:     cloneStringSlice(lines),
+	}
+}
+
+func itemCacheKey(item session.Item) uintptr {
+	v := reflect.ValueOf(item)
+	if !v.IsValid() || v.Kind() != reflect.Ptr || v.IsNil() {
+		return 0
+	}
+	return v.Pointer()
+}
+
+func itemCacheSignature(item session.Item) (string, bool) {
+	switch v := item.(type) {
+	case *session.UserMessage:
+		return "user:" + v.Content, true
+	case *session.AssistantMessage:
+		return "assistant:" + v.Content, true
+	case *session.ThinkingBlock:
+		return "thinking:" + v.Content, true
+	case *session.ToolCallItem:
+		summary := ""
+		if v.Result != nil {
+			summary = v.ResultSummary()
+		}
+		return fmt.Sprintf("tool:%d:%s:%s:%s:%t", v.Status, v.Name, v.Arguments, summary, v.Result != nil), true
+	case *session.ErrorItem:
+		return "error:" + v.Message, true
+	default:
+		return "", false
+	}
+}
+
+func cloneStringSlice(in []string) []string {
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
 }
 
 func (m *model) formatSessionRaw() string {
@@ -947,51 +899,17 @@ func (m *model) formatSessionRaw() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m *model) formatToolCallItem(item *session.ToolCallItem, width int, wrapped *[]string, stats *formatPerfStats, collectPerf bool) {
-	body := formatToolCallBodyWithResult(item)
-
-	switch item.Status {
-	case session.ToolCallStatusPending:
-		line := components.RenderPendingToolCallLine(body, m.spinner.View())
-		wrapStart := time.Now()
-		*wrapped = append(*wrapped, components.WrapLine(line, width)...)
-		if collectPerf {
-			stats.wrapDuration += time.Since(wrapStart)
-		}
-
-	case session.ToolCallStatusSuccess:
-		*wrapped = append(*wrapped, components.RenderCompletedToolCallLine(body, true, width, m.theme.Success(), m.theme.Error())...)
-
-	case session.ToolCallStatusError:
-		*wrapped = append(*wrapped, components.RenderCompletedToolCallLine(body, false, width, m.theme.Success(), m.theme.Error())...)
-	}
-}
-
-func formatToolCallBodyWithResult(item *session.ToolCallItem) string {
-	args := strings.TrimSpace(item.Arguments)
-	if args == "" || args == "{}" {
-		args = ""
-	}
-
-	const maxArgLen = 80
-	if args != "" {
-		runes := []rune(args)
-		if len(runes) > maxArgLen {
-			args = string(runes[:maxArgLen-1]) + "…"
-		}
-	}
-
-	body := item.Name
-	if args != "" {
-		body = fmt.Sprintf("%s %s", item.Name, args)
-	}
-
-	// Add result summary for completed tool calls
-	if summary := item.ResultSummary(); summary != "" {
-		body = fmt.Sprintf("%s [%s]", body, summary)
-	}
-
-	return body
+func (m *model) formatToolCallItem(item *session.ToolCallItem, width int, wrapped *[]string) {
+	lines := components.RenderToolCall(
+		item,
+		width,
+		m.theme.Success(),
+		m.theme.Error(),
+		m.theme.Info(),
+		m.theme.Success(),
+		m.theme.Error(),
+	)
+	*wrapped = append(*wrapped, lines...)
 }
 
 func formatToolCallBody(name, args string) string {
@@ -1048,11 +966,9 @@ func (m *model) renderMarkdown(content string, width int, renderer *glamour.Term
 	if strings.TrimSpace(content) == "" {
 		return "", stats
 	}
-	stats.calls = 1
 
 	cacheKey := fmt.Sprintf("%d:%s", width, content)
 	if cached, ok := m.markdownCache[cacheKey]; ok {
-		stats.cacheHits = 1
 		return cached, stats
 	}
 
@@ -1062,9 +978,7 @@ func (m *model) renderMarkdown(content string, width int, renderer *glamour.Term
 		return fallback, stats
 	}
 
-	renderStart := time.Now()
 	rendered, err := renderer.Render(content)
-	stats.renderDuration = time.Since(renderStart)
 	if err != nil {
 		fallback := strings.Join(components.WrapLine(content, width), "\n")
 		m.markdownCache[cacheKey] = fallback
@@ -1072,12 +986,6 @@ func (m *model) renderMarkdown(content string, width int, renderer *glamour.Term
 	}
 
 	trimmed := strings.TrimRight(rendered, "\n")
-	if len(trimmed) > markdownRenderByteBudget {
-		fallback := strings.Join(components.WrapLine(content, width), "\n")
-		m.markdownCache[cacheKey] = fallback
-		stats.fallbackToWrap = true
-		return fallback, stats
-	}
 	m.markdownCache[cacheKey] = trimmed
 	return trimmed, stats
 }
@@ -1194,7 +1102,6 @@ func formatDuration(d time.Duration) string {
 const renderRefreshInterval = 33 * time.Millisecond
 const scrollPriorityWindow = 120 * time.Millisecond
 const streamBatchMaxEvents = 64
-const markdownRenderByteBudget = 16000
 
 func toolCallKey(call agent.ToolCall) string {
 	if call.ID != "" {

@@ -7,18 +7,21 @@ import (
 	"strings"
 
 	"github.com/liznear/hh/agent"
+	"github.com/pmezard/go-difflib/difflib"
 )
 
 type EditResult struct {
-	Path             string
-	ReplacementCount int
+	Path         string
+	UnifiedDiff  string
+	AddedLines   int
+	DeletedLines int
 }
 
 func (r EditResult) Summary() string {
-	if r.ReplacementCount == 0 {
+	if r.AddedLines == 0 && r.DeletedLines == 0 {
 		return "no changes"
 	}
-	return fmt.Sprintf("%d replacements", r.ReplacementCount)
+	return fmt.Sprintf("+%d -%d", r.AddedLines, r.DeletedLines)
 }
 
 func NewEditTool() agent.Tool {
@@ -67,7 +70,6 @@ func handleEdit(_ context.Context, params map[string]any) agent.ToolResult {
 	}
 
 	updated := strings.ReplaceAll(content, oldString, newString)
-	replacementCount := strings.Count(content, oldString)
 	info, err := os.Stat(path)
 	if err != nil {
 		return toolErr("failed to stat file: %v", err)
@@ -76,11 +78,56 @@ func handleEdit(_ context.Context, params map[string]any) agent.ToolResult {
 		return toolErr("failed to write file: %v", err)
 	}
 
+	unifiedDiff, err := buildUnifiedDiff(path, content, updated)
+	if err != nil {
+		return toolErr("failed to generate unified diff: %v", err)
+	}
+	addedLines, deletedLines := countUnifiedDiffChanges(unifiedDiff)
+
 	return agent.ToolResult{
 		Data: "ok",
 		Result: EditResult{
-			Path:             path,
-			ReplacementCount: replacementCount,
+			Path:         path,
+			UnifiedDiff:  unifiedDiff,
+			AddedLines:   addedLines,
+			DeletedLines: deletedLines,
 		},
 	}
+}
+
+func buildUnifiedDiff(path string, original string, updated string) (string, error) {
+	text, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
+		A:        difflib.SplitLines(original),
+		B:        difflib.SplitLines(updated),
+		FromFile: path,
+		ToFile:   path,
+		Context:  3,
+	})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(text, "\n"), nil
+}
+
+func countUnifiedDiffChanges(diff string) (added int, deleted int) {
+	if strings.TrimSpace(diff) == "" {
+		return 0, 0
+	}
+
+	for _, line := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++"):
+			continue
+		case strings.HasPrefix(line, "---"):
+			continue
+		case strings.HasPrefix(line, "@@"):
+			continue
+		case strings.HasPrefix(line, "+"):
+			added++
+		case strings.HasPrefix(line, "-"):
+			deleted++
+		}
+	}
+
+	return added, deleted
 }

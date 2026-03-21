@@ -38,7 +38,10 @@ func TestEditTool(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected result type: %T", res.Result)
 	}
-	if structured.ReplacementCount != 2 {
-		t.Fatalf("unexpected replacement count: %d", structured.ReplacementCount)
+	if structured.AddedLines != 2 || structured.DeletedLines != 2 {
+		t.Fatalf("unexpected edit counts: %+v", structured)
+	}
+	if structured.UnifiedDiff == "" {
+		t.Fatalf("expected unified diff in edit result")
 	}
 }
