@@ -3,11 +3,14 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
+	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/liznear/hh/agent"
@@ -24,11 +27,15 @@ type model struct {
 	input    textinput.Model
 	viewport viewport.Model
 
-	stream <-chan tea.Msg
-	busy   bool
+	stream     <-chan tea.Msg
+	busy       bool
+	autoScroll bool
+	debug      bool
 
 	lines      []string
 	eventCount int
+
+	lastRenderLatency time.Duration
 
 	markdownRenderer      *glamour.TermRenderer
 	markdownRendererWidth int
@@ -51,25 +58,28 @@ type agentRunDoneMsg struct {
 }
 
 func Run(runner *agent.AgentRunner, modelName string) error {
-	p := tea.NewProgram(newModel(runner, modelName), tea.WithAltScreen())
+	p := tea.NewProgram(newModel(runner, modelName))
 	_, err := p.Run()
 	return err
 }
 
-func newModel(runner *agent.AgentRunner, modelName string) model {
+func newModel(runner *agent.AgentRunner, modelName string) *model {
 	in := textinput.New()
 	in.Prompt = "> "
 	in.Placeholder = "Type a prompt and press Enter"
 	in.Focus()
 
-	vp := viewport.New(0, 0)
+	vp := viewport.New()
+	vp.MouseWheelEnabled = true
 
-	return model{
+	return &model{
 		runner:        runner,
 		modelName:     modelName,
 		theme:         DefaultTheme(),
 		input:         in,
 		viewport:      vp,
+		autoScroll:    true,
+		debug:         isDebugEnabled(),
 		markdownCache: map[string]string{},
 		lines: []string{
 			"hh-cli ready",
@@ -77,11 +87,11 @@ func newModel(runner *agent.AgentRunner, modelName string) model {
 	}
 }
 
-func (m model) Init() tea.Cmd {
+func (m *model) Init() tea.Cmd {
 	return textinput.Blink
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -90,7 +100,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
+		prevOffset := m.viewport.YOffset()
+		var viewportCmd tea.Cmd
+		m.viewport, viewportCmd = m.viewport.Update(msg)
+		if m.viewport.YOffset() != prevOffset {
+			m.autoScroll = m.viewport.AtBottom()
+			return m, viewportCmd
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
@@ -117,6 +135,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 
+	case tea.MouseWheelMsg:
+		prevOffset := m.viewport.YOffset()
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		if m.viewport.YOffset() != prevOffset {
+			m.autoScroll = m.viewport.AtBottom()
+			return m, cmd
+		}
+		return m, nil
+
 	case agentStreamStartedMsg:
 		m.stream = msg.ch
 		return m, waitForStreamCmd(m.stream)
@@ -142,9 +170,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) View() string {
+func (m *model) View() tea.View {
+	start := time.Now()
+	defer func() {
+		m.lastRenderLatency = time.Since(start)
+	}()
+
 	if m.width == 0 || m.height == 0 {
-		return ""
+		v := tea.NewView("")
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
 	}
 
 	m.syncLayout()
@@ -165,7 +201,7 @@ func (m model) View() string {
 		Height(messageH).
 		Render(m.viewport.View())
 
-	status := "Enter to send, q to quit"
+	status := "Enter to send, PgUp/PgDn to scroll, q to quit"
 	if m.busy {
 		status = "Agent is running..."
 	}
@@ -187,12 +223,20 @@ func (m model) View() string {
 
 	content := mainPane
 	if showSidebar {
-		sidebarText := strings.Join([]string{
+		sidebarLines := []string{
 			"Session",
 			fmt.Sprintf("Model: %s", m.modelName),
 			fmt.Sprintf("Status: %s", ternary(m.busy, "running", "idle")),
 			fmt.Sprintf("Events: %d", m.eventCount),
-		}, "\n")
+		}
+		if m.debug {
+			sidebarLines = append(sidebarLines,
+				"",
+				"Debug",
+				fmt.Sprintf("Render: %s", formatDuration(m.lastRenderLatency)),
+			)
+		}
+		sidebarText := strings.Join(sidebarLines, "\n")
 
 		sidebarPane := lipgloss.NewStyle().
 			Width(sidebarWidth).
@@ -205,13 +249,18 @@ func (m model) View() string {
 		content = lipgloss.JoinHorizontal(lipgloss.Top, mainPane, sidebarPane)
 	}
 
-	return lipgloss.NewStyle().
+	content = lipgloss.NewStyle().
 		Width(m.width).
 		Height(m.height).
 		Background(lipgloss.NoColor{}).
 		Foreground(lipgloss.NoColor{}).
 		Padding(appPadding).
 		Render(content)
+
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
 }
 
 func (m *model) handleAgentEvent(e agent.Event) {
@@ -289,14 +338,21 @@ func (m *model) syncLayout() {
 
 	messageH, _ := computePaneHeights(innerH)
 
-	m.viewport.Width = mainW
-	m.viewport.Height = messageH
-	m.input.Width = max(1, mainW-2)
+	m.viewport.SetWidth(mainW)
+	m.viewport.SetHeight(messageH)
+	m.input.SetWidth(max(1, mainW-2))
 }
 
 func (m *model) refreshViewport() {
-	m.viewport.SetContent(m.formatLinesForViewport(m.lines, m.viewport.Width))
-	m.viewport.GotoBottom()
+	prevOffset := m.viewport.YOffset()
+	wasAtBottom := m.viewport.AtBottom()
+	m.viewport.SetContent(m.formatLinesForViewport(m.lines, m.viewport.Width()))
+	if m.autoScroll || wasAtBottom {
+		m.viewport.GotoBottom()
+		m.autoScroll = true
+		return
+	}
+	m.viewport.SetYOffset(prevOffset)
 }
 
 func (m *model) formatLinesForViewport(lines []string, width int) string {
@@ -461,4 +517,17 @@ func ternary[T any](cond bool, ifTrue, ifFalse T) T {
 		return ifTrue
 	}
 	return ifFalse
+}
+
+func isDebugEnabled() bool {
+	v := strings.TrimSpace(os.Getenv("HH_DEBUG"))
+	enabled, err := strconv.ParseBool(v)
+	return err == nil && enabled
+}
+
+func formatDuration(d time.Duration) string {
+	if d >= time.Millisecond {
+		return fmt.Sprintf("%.2fms", float64(d)/float64(time.Millisecond))
+	}
+	return fmt.Sprintf("%dus", d.Microseconds())
 }
