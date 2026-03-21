@@ -6,9 +6,10 @@ import (
 )
 
 var toolsCreator = map[string]func() agent.Tool{
-	"read": NewReadTool,
-	"edit": NewEditTool,
-	"grep": NewGrepTool,
+	"read":  NewReadTool,
+	"edit":  NewEditTool,
+	"grep":  NewGrepTool,
+	"list":  NewListTool,
 }
 
 func AllTools() map[string]agent.Tool {
