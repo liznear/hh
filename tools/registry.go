@@ -1,15 +1,24 @@
 package tools
 
-import "github.com/liznear/hh/agent"
+import (
+	"github.com/liznear/hh/agent"
+	"golang.org/x/exp/maps"
+)
+
+var toolsCreator = map[string]func() agent.Tool{
+	"read": NewReadTool,
+	"edit": NewEditTool,
+	"grep": NewGrepTool,
+}
 
 func AllTools() map[string]agent.Tool {
-	ret := map[string]agent.Tool{}
-	for _, tool := range []agent.Tool{
-		NewReadTool(),
-		NewEditTool(),
-		NewGrepTool(),
-	} {
-		ret[tool.Name] = tool
+	return GetTools(maps.Keys(toolsCreator))
+}
+
+func GetTools(tools []string) map[string]agent.Tool {
+	ret := make(map[string]agent.Tool, len(tools))
+	for _, tool := range tools {
+		ret[tool] = toolsCreator[tool]()
 	}
 	return ret
 }

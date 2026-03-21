@@ -68,17 +68,6 @@ func TestRunAgentLoop(t *testing.T) {
 		t.Run(sessionName, func(t *testing.T) {
 			sessionDir := filepath.Join(sessionsDir, sessionName)
 
-			// Load Context
-			ctxBytes, err := os.ReadFile(filepath.Join(sessionDir, "context.json"))
-			if err != nil {
-				t.Fatalf("failed to read context.json: %v", err)
-			}
-			var aCtx Context
-			if err := json.Unmarshal(ctxBytes, &aCtx); err != nil {
-				t.Fatalf("failed to unmarshal context.json: %v", err)
-			}
-			aCtx.Tools = tools
-
 			// Load Provider Setup
 			providerBytes, err := os.ReadFile(filepath.Join(sessionDir, "provider_stream.json"))
 			if err != nil {
@@ -98,11 +87,20 @@ func TestRunAgentLoop(t *testing.T) {
 				streamEvents = append(streamEvents, setup.StreamEvents)
 			}
 
-			mockP := &mockProvider{
+			// Load Context
+			ctxBytes, err := os.ReadFile(filepath.Join(sessionDir, "context.json"))
+			if err != nil {
+				t.Fatalf("failed to read context.json: %v", err)
+			}
+			var aCtx Context
+			if err := json.Unmarshal(ctxBytes, &aCtx); err != nil {
+				t.Fatalf("failed to unmarshal context.json: %v", err)
+			}
+			aCtx.Tools = tools
+			aCtx.Provider = &mockProvider{
 				responses:    responses,
 				streamEvents: streamEvents,
 			}
-			conf := Config{provider: mockP}
 
 			var events []Event
 			onEvent := func(e Event) {
@@ -125,7 +123,7 @@ func TestRunAgentLoop(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			RunAgentLoop(ctx, conf, aCtx, onEvent)
+			RunAgentLoop(ctx, aCtx, onEvent)
 
 			if len(events) != len(expectedEvents) {
 				t.Fatalf("expected %d events, got %d. events: %v", len(expectedEvents), len(events), events)
@@ -176,9 +174,9 @@ func TestRunAgentLoop_ProviderError(t *testing.T) {
 		err: expectedErr,
 	}
 
-	conf := Config{provider: mockP}
 	aCtx := Context{
 		Model:        "test-model",
+		Provider:     mockP,
 		SystemPrompt: "test system prompt",
 		Tools:        map[string]Tool{},
 	}
@@ -188,7 +186,7 @@ func TestRunAgentLoop_ProviderError(t *testing.T) {
 		events = append(events, e)
 	}
 
-	RunAgentLoop(context.Background(), conf, aCtx, onEvent)
+	RunAgentLoop(context.Background(), aCtx, onEvent)
 
 	expectedEventTypes := []EventType{
 		EventTypeAgentStart,
@@ -224,8 +222,9 @@ func TestRunAgentLoop_ContextCanceled(t *testing.T) {
 		},
 	}
 
-	conf := Config{provider: mockP}
-	aCtx := Context{}
+	aCtx := Context{
+		Provider: mockP,
+	}
 
 	var events []Event
 	onEvent := func(e Event) {
@@ -235,7 +234,7 @@ func TestRunAgentLoop_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel the context before running
 
-	RunAgentLoop(ctx, conf, aCtx, onEvent)
+	RunAgentLoop(ctx, aCtx, onEvent)
 
 	expectedEventTypes := []EventType{
 		EventTypeAgentStart,

@@ -31,17 +31,10 @@ func main() {
 		os.Exit(2)
 	}
 
-	conf := agent.NewConfig(p)
-	aCtx := agent.Context{
-		Model: *model,
-		Prompts: []agent.Message{
-			{Role: agent.RoleUser, Content: *prompt},
-		},
-		Tools: tools.AllTools(),
-	}
+	runner := agent.NewAgentRunner(*model, p, agent.WithTools(tools.AllTools()))
 
 	var finalMessages []agent.Message
-	agent.RunAgentLoop(context.Background(), conf, aCtx, func(e agent.Event) {
+	runner.Run(context.Background(), agent.Input{Content: *prompt, Type: "text"}, func(e agent.Event) {
 		printEvent(e)
 		if e.Type != agent.EventTypeAgentEnd {
 			return

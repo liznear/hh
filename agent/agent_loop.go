@@ -9,7 +9,7 @@ import (
 	"golang.org/x/exp/maps"
 )
 
-func RunAgentLoop(ctx context.Context, conf Config, aCtx Context, onEvent func(Event)) {
+func RunAgentLoop(ctx context.Context, aCtx Context, onEvent func(Event)) {
 	req := ProviderRequest{
 		Model:    aCtx.Model,
 		Messages: []Message{{Role: RoleSystem, Content: aCtx.SystemPrompt}},
@@ -35,7 +35,7 @@ AgentLoop:
 		}
 
 		onEvent(Event{EventTypeTurnStart, EventDataTurnStart{}})
-		res, err := conf.provider.ChatCompletionStream(ctx, req, func(se ProviderStreamEvent) error {
+		res, err := aCtx.Provider.ChatCompletionStream(ctx, req, func(se ProviderStreamEvent) error {
 			onEvent(toEvent(se))
 			return nil
 		})
