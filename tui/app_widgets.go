@@ -66,6 +66,12 @@ func (m *model) renderUserMessageWidget(item *session.UserMessage, width int) []
 func (m *model) renderAssistantMessageWidget(item *session.AssistantMessage, width int, renderer *glamour.TermRenderer) []string {
 	renderedMarkdown, _ := m.renderMarkdown(item.Content, max(1, width-2), renderer)
 	assistantLines := strings.Split(renderedMarkdown, "\n")
+	for len(assistantLines) > 0 && strings.TrimSpace(ansi.Strip(assistantLines[0])) == "" {
+		assistantLines = assistantLines[1:]
+	}
+	if len(assistantLines) == 0 {
+		assistantLines = []string{""}
+	}
 	lines := make([]string, 0, len(assistantLines))
 	for _, line := range assistantLines {
 		lines = append(lines, trimOneLeadingSpace(line))

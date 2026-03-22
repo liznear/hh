@@ -60,7 +60,7 @@ func (m *model) renderMessageList(width, height int) string {
 	offset := m.listOffsetLine
 
 	for len(visible) < height && idx < len(items) {
-		lines := m.renderItemLines(items[idx], width, renderer)
+		lines := m.renderItemLinesAt(items, idx, width, renderer)
 		if len(lines) == 0 {
 			lines = []string{""}
 		}
@@ -163,7 +163,7 @@ func (m *model) isListAtBottom(width, height int) bool {
 	renderer := m.getMarkdownRenderer(width)
 	total := 0
 	for i := m.listOffsetIdx; i < len(items); i++ {
-		total += len(m.renderItemLines(items[i], width, renderer))
+		total += len(m.renderItemLinesAt(items, i, width, renderer))
 		if total > height+m.listOffsetLine {
 			return false
 		}
@@ -210,7 +210,7 @@ func (m *model) lastListOffset(width, height int) (int, int) {
 	total := 0
 	idx := len(items) - 1
 	for ; idx >= 0; idx-- {
-		total += len(m.renderItemLines(items[idx], width, renderer))
+		total += len(m.renderItemLinesAt(items, idx, width, renderer))
 		if total > height {
 			break
 		}
@@ -234,7 +234,7 @@ func (m *model) scrollListBy(lines, width, height int) {
 	if lines > 0 {
 		m.listOffsetLine += lines
 		for m.listOffsetIdx < len(items) {
-			itemHeight := len(m.renderItemLines(items[m.listOffsetIdx], width, renderer))
+			itemHeight := len(m.renderItemLinesAt(items, m.listOffsetIdx, width, renderer))
 			if itemHeight <= 0 {
 				itemHeight = 1
 			}
@@ -264,7 +264,7 @@ func (m *model) scrollListBy(lines, width, height int) {
 			m.listOffsetLine = 0
 			return
 		}
-		itemHeight := len(m.renderItemLines(items[m.listOffsetIdx], width, renderer))
+		itemHeight := len(m.renderItemLinesAt(items, m.listOffsetIdx, width, renderer))
 		if itemHeight <= 0 {
 			itemHeight = 1
 		}
@@ -281,10 +281,53 @@ func (m *model) currentListOffset(width int) int {
 	offset := 0
 	maxIdx := min(m.listOffsetIdx, len(items))
 	for i := 0; i < maxIdx; i++ {
-		offset += len(m.renderItemLines(items[i], width, renderer))
+		offset += len(m.renderItemLinesAt(items, i, width, renderer))
 	}
 	offset += m.listOffsetLine
 	return offset
+}
+
+func (m *model) renderItemLinesAt(items []session.Item, idx int, width int, renderer *glamour.TermRenderer) []string {
+	if idx < 0 || idx >= len(items) {
+		return []string{""}
+	}
+
+	lines := m.renderItemLines(items[idx], width, renderer)
+	if idx <= 0 || !needsSpacerBetweenItems(items[idx-1], items[idx]) {
+		return lines
+	}
+
+	out := make([]string, 0, len(lines)+1)
+	out = append(out, "")
+	out = append(out, lines...)
+	return out
+}
+
+func needsSpacerBetweenItems(prev session.Item, curr session.Item) bool {
+	if !isMessageBlock(prev) || !isMessageBlock(curr) {
+		return false
+	}
+	if prev.Type() == session.ItemTypeToolCall && curr.Type() == session.ItemTypeToolCall {
+		return false
+	}
+	return true
+}
+
+func isMessageBlock(item session.Item) bool {
+	if item == nil {
+		return false
+	}
+
+	switch item.Type() {
+	case session.ItemTypeUserMessage,
+		session.ItemTypeAssistantMessage,
+		session.ItemTypeThinkingBlock,
+		session.ItemTypeToolCall,
+		session.ItemTypeError:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *model) renderItemLines(item session.Item, width int, renderer *glamour.TermRenderer) []string {

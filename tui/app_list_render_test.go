@@ -31,6 +31,47 @@ func TestRenderMessageList_MixedContentRespectsWidthAndHeight(t *testing.T) {
 	assertRenderedFrameFits(t, m.renderMessageList(width, height), width, height)
 }
 
+func TestRenderMessageList_InsertsSingleBlankLineBetweenMessageBlocks(t *testing.T) {
+	m := &model{
+		theme:           DefaultTheme(),
+		session:         session.NewState("test-model"),
+		markdownCache:   map[string]string{},
+		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
+	}
+
+	m.session.AddItem(&session.UserMessage{Content: "user message"})
+	m.session.AddItem(&session.ThinkingBlock{Content: "thinking message"})
+	m.session.AddItem(&session.ToolCallItem{Name: "read", Arguments: `{"path":"a.txt"}`})
+	m.session.AddItem(&session.ToolCallItem{Name: "list", Arguments: `{"path":"."}`})
+	m.session.AddItem(&session.AssistantMessage{Content: "assistant message"})
+
+	frame := ansi.Strip(m.renderMessageList(120, 40))
+	lines := strings.Split(frame, "\n")
+
+	userIdx := lineIndexContaining(lines, "user message")
+	thinkingIdx := lineIndexContaining(lines, "thinking message")
+	readIdx := lineIndexContaining(lines, "Read a.txt")
+	listIdx := lineIndexContaining(lines, "List .")
+	assistantIdx := lineIndexContaining(lines, "assistant message")
+
+	if userIdx < 0 || thinkingIdx < 0 || readIdx < 0 || listIdx < 0 || assistantIdx < 0 {
+		t.Fatalf("missing expected rendered content in frame: %q", frame)
+	}
+
+	if thinkingIdx != userIdx+2 {
+		t.Fatalf("expected one blank line between user and thinking blocks, got user=%d thinking=%d", userIdx, thinkingIdx)
+	}
+	if readIdx != thinkingIdx+2 {
+		t.Fatalf("expected one blank line between thinking and tool blocks, got thinking=%d read=%d", thinkingIdx, readIdx)
+	}
+	if listIdx != readIdx+1 {
+		t.Fatalf("expected no blank line between consecutive tool lines, got read=%d list=%d", readIdx, listIdx)
+	}
+	if assistantIdx != listIdx+2 {
+		t.Fatalf("expected one blank line between tool and assistant blocks, got list=%d assistant=%d", listIdx, assistantIdx)
+	}
+}
+
 func assertRenderedFrameFits(t *testing.T, frame string, width int, height int) {
 	t.Helper()
 
@@ -44,4 +85,13 @@ func assertRenderedFrameFits(t *testing.T, frame string, width int, height int) 
 			t.Fatalf("line %d exceeds width: got %d, max %d; line=%q", i, got, width, line)
 		}
 	}
+}
+
+func lineIndexContaining(lines []string, needle string) int {
+	for i, line := range lines {
+		if strings.Contains(line, needle) {
+			return i
+		}
+	}
+	return -1
 }
