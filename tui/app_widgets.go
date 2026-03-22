@@ -13,8 +13,6 @@ import (
 	"github.com/liznear/hh/tui/session"
 )
 
-const defaultStatusHint = "Enter to send, Shift+Enter newline, PgUp/PgDn scroll, q quit"
-
 type statusWidgetModel struct {
 	Busy          bool
 	ShowRunResult bool
@@ -41,7 +39,7 @@ func renderStatusWidget(vm statusWidgetModel, theme Theme) string {
 		return padding + checkView + durationView
 	}
 
-	return lipgloss.NewStyle().Foreground(theme.Muted()).Render(padding + defaultStatusHint)
+	return ""
 }
 
 func formatElapsedSeconds(d time.Duration) string {

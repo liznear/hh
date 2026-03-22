@@ -18,7 +18,7 @@ func newTextareaInput() textarea.Model {
 		}
 		return "  "
 	})
-	in.Placeholder = "Type a prompt (Enter to send, Shift+Enter for newline)"
+	in.Placeholder = ""
 	in.ShowLineNumbers = false
 	in.SetHeight(inputInnerLines)
 
@@ -61,10 +61,6 @@ func newSessionStorage(state *session.State) *session.Storage {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize session storage: %v\n", err)
 		return nil
-	}
-
-	if err := store.SaveMeta(state); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to save session metadata: %v\n", err)
 	}
 
 	return store

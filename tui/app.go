@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
 	"github.com/liznear/hh/agent"
+	"github.com/liznear/hh/tui/commands"
 	"github.com/liznear/hh/tui/session"
 )
 
@@ -19,6 +20,8 @@ type model struct {
 	modelName string
 	theme     Theme
 	storage   *session.Storage
+
+	slashCommands map[string]commands.Command
 
 	width  int
 	height int
@@ -121,6 +124,7 @@ func newModel(runner *agent.AgentRunner, modelName string) *model {
 		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
 		session:         state,
 		toolCalls:       map[string]*session.ToolCallItem{},
+		slashCommands:   commands.BuiltIn(),
 	}
 }
 
@@ -195,6 +199,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			prompt := strings.TrimSpace(m.input.Value())
 			if prompt == "" {
+				return m, statusCmd
+			}
+
+			if m.handleSlashCommand(prompt) {
+				m.input.SetValue("")
+				m.runtime.showRunResult = false
+				m.runtime.escPending = false
 				return m, statusCmd
 			}
 

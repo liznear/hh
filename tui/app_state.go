@@ -161,7 +161,22 @@ func (m *model) persistState() {
 	if m.storage == nil {
 		return
 	}
+	if !m.hasSubmittedUserPrompt() {
+		return
+	}
 	if err := m.storage.Save(m.session); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to persist session: %v\n", err)
 	}
+}
+
+func (m *model) hasSubmittedUserPrompt() bool {
+	if m.session == nil {
+		return false
+	}
+	for _, item := range m.session.AllItems() {
+		if _, ok := item.(*session.UserMessage); ok {
+			return true
+		}
+	}
+	return false
 }
