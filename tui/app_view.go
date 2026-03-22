@@ -151,7 +151,7 @@ func (m *model) renderSidebarPane(layout layoutState, sidebarLines []string) str
 		Width(layout.sidebarWidth).
 		Height(layout.innerHeight).
 		Padding(1).
-		Foreground(m.theme.Emphasis()).
+		Foreground(lipgloss.NoColor{}).
 		Render(strings.Join(sidebarLines, "\n"))
 }
 

@@ -1,7 +1,7 @@
 package tui
 
 const (
-	sidebarWidth      = 45
+	sidebarWidth      = 40
 	sidebarHideWidth  = 150
 	appPadding        = 1
 	mainSidebarGap    = 3
