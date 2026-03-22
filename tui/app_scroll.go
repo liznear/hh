@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
@@ -292,6 +293,12 @@ func (m *model) renderItemLinesAt(items []session.Item, idx int, width int, rend
 		return []string{""}
 	}
 
+	if _, ok := items[idx].(*session.End); ok {
+		modelName, duration := turnFooterMeta(items, idx, m.modelName)
+		footer := m.renderTurnFooterWidget(modelName, duration, width)
+		return append([]string{""}, footer...)
+	}
+
 	lines := m.renderItemLines(items[idx], width, renderer)
 	if idx <= 0 || !needsSpacerBetweenItems(items[idx-1], items[idx]) {
 		return lines
@@ -301,6 +308,41 @@ func (m *model) renderItemLinesAt(items []session.Item, idx int, width int, rend
 	out = append(out, "")
 	out = append(out, lines...)
 	return out
+}
+
+func turnFooterMeta(items []session.Item, endIdx int, fallbackModel string) (string, time.Duration) {
+	modelName := fallbackModel
+	if strings.TrimSpace(modelName) == "" {
+		modelName = "unknown"
+	}
+
+	if endIdx < 0 || endIdx >= len(items) {
+		return modelName, 0
+	}
+
+	end, ok := items[endIdx].(*session.End)
+	if !ok {
+		return modelName, 0
+	}
+
+	endTs := end.Timestamp()
+	for i := endIdx - 1; i >= 0; i-- {
+		switch item := items[i].(type) {
+		case *session.Start:
+			if strings.TrimSpace(item.Model) != "" {
+				modelName = item.Model
+			}
+			startTs := item.Timestamp()
+			if startTs.IsZero() || endTs.IsZero() || endTs.Before(startTs) {
+				return modelName, 0
+			}
+			return modelName, endTs.Sub(startTs)
+		case *session.End:
+			return modelName, 0
+		}
+	}
+
+	return modelName, 0
 }
 
 func needsSpacerBetweenItems(prev session.Item, curr session.Item) bool {

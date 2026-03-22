@@ -82,8 +82,9 @@ func (m *model) renderFrame(vm frameViewModel) string {
 
 	content := mainPane
 	if vm.layout.showSidebar {
+		separatorPane := m.renderSidebarSeparator(vm.layout)
 		sidebarPane := m.renderSidebarPane(vm.layout, vm.sidebarLines)
-		content = lipgloss.JoinHorizontal(lipgloss.Top, mainPane, sidebarPane)
+		content = lipgloss.JoinHorizontal(lipgloss.Top, mainPane, separatorPane, sidebarPane)
 	}
 
 	return m.renderRootFrame(vm.layout, content)
@@ -150,9 +151,20 @@ func (m *model) renderSidebarPane(layout layoutState, sidebarLines []string) str
 		Width(layout.sidebarWidth).
 		Height(layout.innerHeight).
 		Padding(1).
-		Background(m.theme.Surface()).
 		Foreground(m.theme.Emphasis()).
 		Render(strings.Join(sidebarLines, "\n"))
+}
+
+func (m *model) renderSidebarSeparator(layout layoutState) string {
+	line := " " + lipgloss.NewStyle().Foreground(m.theme.Muted()).Render("│") + " "
+	sepLines := make([]string, 0, layout.innerHeight)
+	for i := 0; i < layout.innerHeight; i++ {
+		sepLines = append(sepLines, line)
+	}
+	return lipgloss.NewStyle().
+		Width(mainSidebarGap).
+		Height(layout.innerHeight).
+		Render(strings.Join(sepLines, "\n"))
 }
 
 func (m *model) renderRootFrame(layout layoutState, content string) string {

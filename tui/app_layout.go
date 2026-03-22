@@ -36,7 +36,7 @@ func (m *model) computeLayout(width, height int) layoutState {
 
 	mainW := innerW
 	if showSidebar {
-		mainW = max(1, innerW-sidebarWidth)
+		mainW = max(1, innerW-sidebarWidth-mainSidebarGap)
 	}
 
 	messageH, inputH := computePaneHeights(innerH)

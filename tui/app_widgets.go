@@ -100,6 +100,46 @@ func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int, ren
 	return lines
 }
 
+func (m *model) renderTurnFooterWidget(modelName string, duration time.Duration, width int) []string {
+	bodyWidth := max(1, width-2)
+	muted := lipgloss.NewStyle().Foreground(m.theme.Muted())
+
+	meta := strings.TrimSpace(fmt.Sprintf("◆ %s %s", modelName, formatElapsedSeconds(duration)))
+	if ansi.StringWidth(meta) >= bodyWidth {
+		return []string{"  " + muted.Render(truncateToWidth(meta, bodyWidth))}
+	}
+
+	ruleWidth := bodyWidth - ansi.StringWidth(meta) - 1
+	rule := strings.Repeat("─", max(0, ruleWidth))
+	line := strings.TrimSpace(meta + " " + rule)
+	return []string{"  " + muted.Render(line)}
+}
+
+func truncateToWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if ansi.StringWidth(s) <= maxWidth {
+		return s
+	}
+	if maxWidth == 1 {
+		return "…"
+	}
+
+	target := maxWidth - 1
+	var b strings.Builder
+	width := 0
+	for _, r := range s {
+		rw := ansi.StringWidth(string(r))
+		if width+rw > target {
+			break
+		}
+		b.WriteRune(r)
+		width += rw
+	}
+	return b.String() + "…"
+}
+
 type styledToken struct {
 	raw   string
 	style lipgloss.Style

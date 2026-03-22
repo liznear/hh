@@ -72,6 +72,39 @@ func TestRenderMessageList_InsertsSingleBlankLineBetweenMessageBlocks(t *testing
 	}
 }
 
+func TestRenderMessageList_ShowsMutedTurnFooterAfterAssistantOnTurnEnd(t *testing.T) {
+	m := &model{
+		theme:           DefaultTheme(),
+		session:         session.NewState("test-model"),
+		markdownCache:   map[string]string{},
+		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
+		modelName:       "test-model",
+	}
+
+	turn := m.session.StartTurn()
+	turn.AddItem(&session.AssistantMessage{Content: "assistant message"})
+	turn.End()
+
+	frame := ansi.Strip(m.renderMessageList(120, 40))
+	lines := strings.Split(frame, "\n")
+
+	assistantIdx := lineIndexContaining(lines, "assistant message")
+	footerIdx := lineIndexContaining(lines, "◆ test-model 0s")
+
+	if assistantIdx < 0 || footerIdx < 0 {
+		t.Fatalf("missing assistant or footer in frame: %q", frame)
+	}
+	if footerIdx <= assistantIdx {
+		t.Fatalf("expected footer after assistant message, got assistant=%d footer=%d", assistantIdx, footerIdx)
+	}
+	if footerIdx != assistantIdx+2 {
+		t.Fatalf("expected exactly one blank line before footer, got assistant=%d footer=%d", assistantIdx, footerIdx)
+	}
+	if !strings.Contains(lines[footerIdx], "◆ test-model 0s") || !strings.Contains(lines[footerIdx], "─") {
+		t.Fatalf("expected footer metadata and separator on same line, got %q", lines[footerIdx])
+	}
+}
+
 func assertRenderedFrameFits(t *testing.T, frame string, width int, height int) {
 	t.Helper()
 
