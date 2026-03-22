@@ -259,6 +259,16 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 		}
 		return body, tokens
 
+	case "web_search":
+		query := toolArgString(args, "query", "")
+		body := fmt.Sprintf("WebSearch %q", query)
+		return body, []styledToken{{raw: query, style: pathStyle}}
+
+	case "web_fetch":
+		url := toolArgString(args, "url", "")
+		body := fmt.Sprintf("WebFetch %q", url)
+		return body, []styledToken{{raw: url, style: pathStyle}}
+
 	default:
 		return formatGenericToolCallWidgetBody(item)
 	}

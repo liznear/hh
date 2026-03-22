@@ -480,6 +480,10 @@ func decodeToolResult(name string, raw any) any {
 		return decodeMappedResult[tools.GrepResult](mapped, raw)
 	case "list", "ls":
 		return decodeMappedResult[tools.ListResult](mapped, raw)
+	case "web_fetch":
+		return decodeMappedResult[tools.WebFetchResult](mapped, raw)
+	case "web_search":
+		return decodeMappedResult[tools.WebSearchResult](mapped, raw)
 	default:
 		return raw
 	}
