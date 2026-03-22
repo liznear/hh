@@ -22,7 +22,7 @@ type statusWidgetModel struct {
 }
 
 func renderStatusWidget(vm statusWidgetModel, theme Theme) string {
-	padding := " "
+	padding := "  "
 	if vm.Busy {
 		spinnerView := lipgloss.NewStyle().Foreground(theme.Info()).Render(vm.SpinnerView)
 		durationView := lipgloss.NewStyle().Foreground(theme.Muted()).Render(" " + formatElapsedSeconds(vm.Elapsed))
@@ -269,6 +269,13 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 		body := fmt.Sprintf("WebFetch %q", url)
 		return body, []styledToken{{raw: url, style: pathStyle}}
 
+	case "todo_write":
+		done, total, ok := todoProgress(item, args)
+		if ok {
+			return fmt.Sprintf("TODO %d / %d", done, total), nil
+		}
+		return "TODO", nil
+
 	default:
 		return formatGenericToolCallWidgetBody(item)
 	}
@@ -343,6 +350,71 @@ func editCounts(item *session.ToolCallItem) (int, int, bool) {
 		return result.AddedLines, result.DeletedLines, true
 	}
 	return 0, 0, false
+}
+
+func todoProgress(item *session.ToolCallItem, args map[string]any) (int, int, bool) {
+	if done, total, ok := todoProgressFromResult(item); ok {
+		return done, total, true
+	}
+	return todoProgressFromArgs(args)
+}
+
+func todoProgressFromResult(item *session.ToolCallItem) (int, int, bool) {
+	if item == nil || item.Result == nil {
+		return 0, 0, false
+	}
+
+	var todoItems []tools.TodoItem
+	switch result := item.Result.Result.(type) {
+	case tools.TodoWriteResult:
+		todoItems = result.TodoItems
+	case *tools.TodoWriteResult:
+		if result == nil {
+			return 0, 0, false
+		}
+		todoItems = result.TodoItems
+	default:
+		return 0, 0, false
+	}
+
+	done := 0
+	for _, todo := range todoItems {
+		status := strings.ToLower(strings.TrimSpace(string(todo.Status)))
+		if status == string(session.TodoStatusCompleted) || status == string(session.TodoStatusCancelled) {
+			done++
+		}
+	}
+	return done, len(todoItems), true
+}
+
+func todoProgressFromArgs(args map[string]any) (int, int, bool) {
+	raw, ok := args["todo_items"]
+	if !ok || raw == nil {
+		return 0, 0, false
+	}
+
+	todoItems, ok := raw.([]any)
+	if !ok {
+		return 0, 0, false
+	}
+
+	done := 0
+	for _, rawItem := range todoItems {
+		itemMap, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		status, ok := itemMap["status"].(string)
+		if !ok {
+			continue
+		}
+		normalized := strings.ToLower(strings.TrimSpace(status))
+		if normalized == string(session.TodoStatusCompleted) || normalized == string(session.TodoStatusCancelled) {
+			done++
+		}
+	}
+
+	return done, len(todoItems), true
 }
 
 func formatGenericToolCallWidgetBody(item *session.ToolCallItem) (string, []styledToken) {

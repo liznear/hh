@@ -10,6 +10,7 @@ type State struct {
 	ID           string
 	CreatedAt    time.Time
 	CurrentModel string
+	TodoItems    []TodoItem
 	Turns        []*Turn
 }
 
@@ -18,8 +19,33 @@ func NewState(modelName string) *State {
 		ID:           generateID(),
 		CreatedAt:    time.Now(),
 		CurrentModel: modelName,
+		TodoItems:    nil,
 		Turns:        nil,
 	}
+}
+
+type TodoStatus string
+
+const (
+	TodoStatusPending   TodoStatus = "pending"
+	TodoStatusWIP       TodoStatus = "wip"
+	TodoStatusCompleted TodoStatus = "completed"
+	TodoStatusCancelled TodoStatus = "cancelled"
+)
+
+type TodoItem struct {
+	Content string     `json:"content"`
+	Status  TodoStatus `json:"status"`
+}
+
+func (s *State) SetTodoItems(items []TodoItem) {
+	if len(items) == 0 {
+		s.TodoItems = nil
+		return
+	}
+	cloned := make([]TodoItem, len(items))
+	copy(cloned, items)
+	s.TodoItems = cloned
 }
 
 func (s *State) SetModel(modelName string) {

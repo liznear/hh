@@ -52,6 +52,7 @@ func (s *Storage) SaveMeta(state *State) error {
 		ID:           state.ID,
 		CreatedAt:    state.CreatedAt,
 		CurrentModel: state.CurrentModel,
+		TodoItems:    append([]TodoItem(nil), state.TodoItems...),
 		TurnCount:    len(state.Turns),
 	}
 
@@ -156,7 +157,7 @@ func (s *Storage) Load(id string) (*State, error) {
 		return nil, err
 	}
 
-	state := &State{ID: meta.ID, CreatedAt: meta.CreatedAt, CurrentModel: meta.CurrentModel}
+	state := &State{ID: meta.ID, CreatedAt: meta.CreatedAt, CurrentModel: meta.CurrentModel, TodoItems: append([]TodoItem(nil), meta.TodoItems...)}
 
 	turnsByNum := map[int]*Turn{}
 	maxTurnNum := 0
@@ -289,10 +290,11 @@ func (s *Storage) Delete(id string) error {
 }
 
 type Meta struct {
-	ID           string    `json:"id"`
-	CreatedAt    time.Time `json:"created_at"`
-	CurrentModel string    `json:"current_model"`
-	TurnCount    int       `json:"turn_count"`
+	ID           string     `json:"id"`
+	CreatedAt    time.Time  `json:"created_at"`
+	CurrentModel string     `json:"current_model"`
+	TodoItems    []TodoItem `json:"todo_items,omitempty"`
+	TurnCount    int        `json:"turn_count"`
 }
 
 type ItemEntry struct {
@@ -480,6 +482,8 @@ func decodeToolResult(name string, raw any) any {
 		return decodeMappedResult[tools.GrepResult](mapped, raw)
 	case "list", "ls":
 		return decodeMappedResult[tools.ListResult](mapped, raw)
+	case "todo_write":
+		return decodeMappedResult[tools.TodoWriteResult](mapped, raw)
 	case "web_fetch":
 		return decodeMappedResult[tools.WebFetchResult](mapped, raw)
 	case "web_search":

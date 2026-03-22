@@ -2,11 +2,13 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 
 	"github.com/liznear/hh/agent"
+	"github.com/liznear/hh/tools"
 	"github.com/liznear/hh/tui/session"
 )
 
@@ -104,6 +106,7 @@ func (m *model) completeToolCall(call agent.ToolCall, result agent.ToolResult) {
 	key := toolCallKey(call)
 	if item, ok := m.toolCalls[key]; ok {
 		item.Complete(result)
+		m.applyToolState(call, result)
 		m.persistItem(m.turnNumber(m.session.CurrentTurn()), item)
 		m.persistMeta()
 		delete(m.toolCalls, key)
@@ -116,7 +119,53 @@ func (m *model) completeToolCall(call agent.ToolCall, result agent.ToolResult) {
 		Arguments: call.Arguments,
 	}
 	item.Complete(result)
+	m.applyToolState(call, result)
 	m.addItem(item)
+}
+
+func (m *model) applyToolState(call agent.ToolCall, result agent.ToolResult) {
+	if result.IsErr {
+		return
+	}
+	if call.Name != "todo_write" {
+		return
+	}
+	items, ok := toSessionTodoItems(result.Result)
+	if !ok {
+		return
+	}
+	m.session.SetTodoItems(items)
+}
+
+func toSessionTodoItems(raw any) ([]session.TodoItem, bool) {
+	if raw == nil {
+		return nil, true
+	}
+
+	decoded, ok := raw.(tools.TodoWriteResult)
+	if !ok {
+		ptr, ok := raw.(*tools.TodoWriteResult)
+		if ok && ptr != nil {
+			decoded = *ptr
+		} else {
+			buf, err := json.Marshal(raw)
+			if err != nil {
+				return nil, false
+			}
+			if err := json.Unmarshal(buf, &decoded); err != nil {
+				return nil, false
+			}
+		}
+	}
+
+	items := make([]session.TodoItem, 0, len(decoded.TodoItems))
+	for _, item := range decoded.TodoItems {
+		items = append(items, session.TodoItem{
+			Content: item.Content,
+			Status:  session.TodoStatus(item.Status),
+		})
+	}
+	return items, true
 }
 
 func (m *model) addItem(item session.Item) {

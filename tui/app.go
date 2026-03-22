@@ -217,6 +217,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			turn := m.session.StartTurn()
 			m.persistTurnStart(turn)
 			m.addItemToTurn(turn, &session.UserMessage{Content: prompt})
+			submittedPrompt := promptWithInternalState(prompt, m.session.TodoItems)
 			m.input.SetValue("")
 			m.runtime.busy = true
 			m.runtime.escPending = false
@@ -226,7 +227,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.runtime.runCancel = cancel
 			m.refreshViewport()
 
-			return m, tea.Batch(startAgentStreamCmdWithContext(runCtx, m.runner, prompt), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
+			return m, tea.Batch(startAgentStreamCmdWithContext(runCtx, m.runner, submittedPrompt), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
 				return m.spinner.Tick()
 			})
 		}
