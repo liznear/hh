@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/liznear/hh/tui/session"
 )
 
 const sidebarGitRefreshInterval = 2 * time.Second
@@ -19,45 +17,6 @@ type modifiedFileStat struct {
 	Path    string
 	Added   int
 	Deleted int
-}
-
-func estimateSessionTokenUsage(s *session.State) int {
-	if s == nil {
-		return 0
-	}
-	used := 0
-	for _, turn := range s.Turns {
-		if turn == nil {
-			continue
-		}
-		for _, item := range turn.Items {
-			switch typed := item.(type) {
-			case *session.UserMessage:
-				used += estimateTextTokens(typed.Content) + 4
-			case *session.AssistantMessage:
-				used += estimateTextTokens(typed.Content) + 4
-			case *session.ThinkingBlock:
-				used += estimateTextTokens(typed.Content) + 2
-			case *session.ToolCallItem:
-				used += estimateTextTokens(typed.Name) + estimateTextTokens(typed.Arguments) + 6
-				if typed.Result != nil {
-					used += estimateTextTokens(typed.Result.Data) + 2
-				}
-			case *session.ErrorItem:
-				used += estimateTextTokens(typed.Message) + 2
-			}
-		}
-	}
-	return max(0, used)
-}
-
-func estimateTextTokens(s string) int {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0
-	}
-	runes := len([]rune(s))
-	return max(1, (runes+3)/4)
 }
 
 func detectWorkingDirectory() string {

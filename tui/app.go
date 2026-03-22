@@ -82,6 +82,7 @@ type RuntimeState struct {
 	modifiedFiles      []modifiedFileStat
 	lastGitRefreshAt   time.Time
 	contextWindowTotal int
+	contextWindowUsed  int
 }
 
 type itemRenderCacheEntry struct {

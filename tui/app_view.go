@@ -154,7 +154,7 @@ func (m *model) buildSidebarLines(sidebarWidth int) []string {
 		wdLine = fmt.Sprintf("%s @ %s", wdLine, m.runtime.gitBranch)
 	}
 
-	usedTokens := estimateSessionTokenUsage(m.session)
+	usedTokens := maxInt(0, m.runtime.contextWindowUsed)
 	totalTokens := m.runtime.contextWindowTotal
 	if totalTokens <= 0 {
 		totalTokens = 1

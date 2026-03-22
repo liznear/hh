@@ -2,5 +2,10 @@
   "Message": {"Role": "assistant", "Content": "The weather in San Francisco is sunny.", "CallID": ""},
   "Thinking": "",
   "ToolCalls": null,
-  "FinishReason": "stop"
+  "FinishReason": "stop",
+  "Usage": {
+    "PromptTokens": 123,
+    "CompletionTokens": 18,
+    "TotalTokens": 141
+  }
 }

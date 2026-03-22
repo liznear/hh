@@ -55,6 +55,9 @@ AgentLoop:
 			})...)
 			shouldContinue = true
 		}
+		if res.Usage.TotalTokens > 0 {
+			onEvent(Event{Type: EventTypeTokenUsage, Data: EventDataTokenUsage{Usage: res.Usage}})
+		}
 		onEvent(Event{EventTypeTurnEnd, EventDataTurnEnd{}})
 	}
 	onEvent(Event{EventTypeAgentEnd, EventDataAgentEnd{req.Messages[1:]}})

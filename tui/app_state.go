@@ -56,6 +56,12 @@ func (m *model) handleAgentEvent(e agent.Event) {
 			m.session.SetTitle(data.Title)
 			m.persistMeta()
 		}
+	case agent.EventTypeTokenUsage:
+		if data, ok := e.Data.(agent.EventDataTokenUsage); ok {
+			if data.Usage.TotalTokens > 0 {
+				m.runtime.contextWindowUsed = data.Usage.TotalTokens
+			}
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/liznear/hh/agent"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/shared"
 	"github.com/samber/lo"
 )
@@ -63,14 +64,25 @@ func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req
 			tool, ok := toOpenAITool(&t)
 			return tool, ok
 		}),
+		StreamOptions: openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: param.NewOpt(true),
+		},
 	})
 	defer resp.Close()
 
 	acc := openai.ChatCompletionAccumulator{}
 	var reasoning string
+	usage := agent.TokenUsage{}
 
 	for resp.Next() {
 		chunk := resp.Current()
+		if chunk.Usage.TotalTokens > 0 {
+			usage = agent.TokenUsage{
+				PromptTokens:     clampToZero(chunk.Usage.PromptTokens),
+				CompletionTokens: clampToZero(chunk.Usage.CompletionTokens),
+				TotalTokens:      clampToZero(chunk.Usage.TotalTokens),
+			}
+		}
 		if !acc.AddChunk(chunk) {
 			return agent.ProviderResponse{}, fmt.Errorf("failed to accumulate streamed chat completion chunk")
 		}
@@ -121,6 +133,7 @@ func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req
 		Thinking:     reasoning,
 		ToolCalls:    toolCalls,
 		FinishReason: agent.FinishReason(choice.FinishReason),
+		Usage:        usage,
 	}, nil
 }
 
@@ -200,11 +213,11 @@ func openAIToAgentToolCall(calls []openai.ChatCompletionMessageToolCallUnion) []
 	return ret
 }
 
-func clampToZero(index int64) int {
-	if index < 0 {
+func clampToZero(value int64) int {
+	if value < 0 {
 		return 0
 	}
-	return int(index)
+	return int(value)
 }
 
 var _ agent.Provider = (*openAICompatibleProvider)(nil)

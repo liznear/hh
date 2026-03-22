@@ -20,6 +20,13 @@ type ProviderResponse struct {
 	Thinking     string
 	ToolCalls    []ToolCall
 	FinishReason FinishReason
+	Usage        TokenUsage
+}
+
+type TokenUsage struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
 }
 
 type FinishReason string
