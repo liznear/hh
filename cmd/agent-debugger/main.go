@@ -34,7 +34,7 @@ func main() {
 	runner := agent.NewAgentRunner(*model, p, agent.WithTools(tools.AllTools()))
 
 	var finalMessages []agent.Message
-	runner.Run(context.Background(), agent.Input{Content: *prompt, Type: "text"}, func(e agent.Event) {
+	if err := runner.Run(context.Background(), agent.Input{Content: *prompt, Type: "text"}, func(e agent.Event) {
 		printEvent(e)
 		if e.Type != agent.EventTypeAgentEnd {
 			return
@@ -42,7 +42,10 @@ func main() {
 		if data, ok := e.Data.(agent.EventDataAgentEnd); ok {
 			finalMessages = data.Messages
 		}
-	})
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to run agent: %v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Println("FINAL_MESSAGES")
 	printJSON(finalMessages)

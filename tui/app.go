@@ -94,9 +94,14 @@ type markdownPerfStats struct {
 	fallbackToWrap bool
 }
 
-func Run(runner *agent.AgentRunner, modelName string) error {
+func Run(provider agent.Provider, modelName, agentName string) error {
+	runner, err := newAgentRunner(modelName, provider, agentName)
+	if err != nil {
+		return err
+	}
+
 	p := tea.NewProgram(newModel(runner, modelName))
-	_, err := p.Run()
+	_, err = p.Run()
 	return err
 }
 

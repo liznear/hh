@@ -7,7 +7,6 @@ import (
 
 	"github.com/liznear/hh/agent"
 	"github.com/liznear/hh/provider"
-	"github.com/liznear/hh/tools"
 	"github.com/liznear/hh/tui"
 )
 
@@ -16,6 +15,7 @@ func main() {
 	baseURL := flag.String("base_url", os.Getenv("HH_BASE_URL"), "provider base URL")
 	apiKey := flag.String("api_key", os.Getenv("HH_API_KEY"), "provider API key")
 	model := flag.String("model", "glm-5", "model name")
+	agentName := flag.String("agent", "Build", "agent name")
 	flag.Parse()
 
 	p, err := buildProvider(*providerType, *baseURL, *apiKey)
@@ -24,8 +24,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	runner := agent.NewAgentRunner(*model, p, agent.WithTools(tools.AllTools()))
-	if err := tui.Run(runner, *model); err != nil {
+	if err := tui.Run(p, *model, *agentName); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to start tui: %v\n", err)
 		os.Exit(1)
 	}
