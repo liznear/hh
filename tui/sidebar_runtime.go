@@ -21,28 +21,6 @@ type modifiedFileStat struct {
 	Deleted int
 }
 
-func defaultContextWindowTokens(modelName string) int {
-	if v := strings.TrimSpace(os.Getenv("HH_CONTEXT_WINDOW")); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
-			return parsed
-		}
-	}
-
-	name := strings.ToLower(strings.TrimSpace(modelName))
-	switch {
-	case strings.Contains(name, "gpt-4.1"):
-		return 1048576
-	case strings.Contains(name, "claude"):
-		return 200000
-	case strings.Contains(name, "qwen"):
-		return 131072
-	case strings.Contains(name, "glm"):
-		return 128000
-	default:
-		return 128000
-	}
-}
-
 func estimateSessionTokenUsage(s *session.State) int {
 	if s == nil {
 		return 0

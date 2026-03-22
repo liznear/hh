@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/stopwatch"
 	tea "charm.land/bubbletea/v2"
+	"github.com/liznear/hh/config"
 	"github.com/liznear/hh/tui/commands"
 	"github.com/liznear/hh/tui/session"
 )
@@ -112,5 +113,55 @@ func TestUpdate_UnknownSlashCommandShowsErrorItem(t *testing.T) {
 	}
 	if after.runtime.busy {
 		t.Fatal("expected unknown slash command to not start busy run")
+	}
+}
+
+func TestUpdate_ModelSlashCommandOpensPickerAndSwitchesModel(t *testing.T) {
+	m := &model{
+		modelName:     "proxy/glm-5",
+		theme:         DefaultTheme(),
+		input:         newTextareaInput(),
+		spinner:       spinner.New(spinner.WithSpinner(spinner.Dot)),
+		stopwatch:     stopwatch.New(stopwatch.WithInterval(time.Second)),
+		session:       session.NewState("proxy/glm-5"),
+		toolCalls:     map[string]*session.ToolCallItem{},
+		slashCommands: commands.BuiltIn(),
+		config: config.Config{
+			Providers: map[string]config.ProviderConfig{
+				"proxy": {
+					Models: map[string]config.ModelConfig{
+						"glm-5":         {},
+						"gpt-5.3-codex": {},
+					},
+				},
+			},
+		},
+		markdownCache:   map[string]string{},
+		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
+	}
+	m.input.SetValue("/model")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	afterOpen := updated.(*model)
+	if afterOpen.modelPicker == nil {
+		t.Fatal("expected /model to open model picker")
+	}
+
+	updated, _ = afterOpen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	afterMove := updated.(*model)
+	if afterMove.modelPicker == nil || afterMove.modelPicker.index != 1 {
+		t.Fatalf("picker index = %v, want 1", afterMove.modelPicker)
+	}
+
+	updated, _ = afterMove.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	afterSelect := updated.(*model)
+	if afterSelect.modelPicker != nil {
+		t.Fatal("expected picker to close after selecting model")
+	}
+	if afterSelect.modelName != "proxy/gpt-5.3-codex" {
+		t.Fatalf("modelName = %q, want %q", afterSelect.modelName, "proxy/gpt-5.3-codex")
+	}
+	if afterSelect.session.CurrentModel != "proxy/gpt-5.3-codex" {
+		t.Fatalf("session current model = %q, want %q", afterSelect.session.CurrentModel, "proxy/gpt-5.3-codex")
 	}
 }

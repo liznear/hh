@@ -64,9 +64,14 @@ func (m *model) View() tea.View {
 }
 
 func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
+	messageList := m.renderMessageList(layout.mainWidth, layout.messageHeight)
+	if m.modelPicker != nil {
+		messageList = m.renderModelPickerDialog(layout.mainWidth, layout.messageHeight)
+	}
+
 	return frameViewModel{
 		layout:      layout,
-		messageList: m.renderMessageList(layout.mainWidth, layout.messageHeight),
+		messageList: messageList,
 		status: statusWidgetModel{
 			AgentName:     m.agentName,
 			ModelName:     m.modelName,

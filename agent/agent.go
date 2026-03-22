@@ -21,6 +21,13 @@ type AgentRunner struct {
 	state    *State
 }
 
+func (a *AgentRunner) SetModel(model string) {
+	if a == nil {
+		return
+	}
+	a.model = strings.TrimSpace(model)
+}
+
 func NewAgentRunner(model string, provider Provider, opts ...Opt) *AgentRunner {
 	state := &State{
 		Messages: nil,

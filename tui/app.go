@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
 	"github.com/liznear/hh/agent"
+	"github.com/liznear/hh/config"
 	"github.com/liznear/hh/tui/commands"
 	"github.com/liznear/hh/tui/session"
 )
@@ -21,6 +22,9 @@ type model struct {
 	modelName string
 	theme     Theme
 	storage   *session.Storage
+
+	config      config.Config
+	modelPicker *modelPickerState
 
 	slashCommands map[string]commands.Command
 
@@ -97,22 +101,34 @@ type scrollPerfStats struct {
 	timeSinceView    time.Duration
 }
 
+type modelPickerState struct {
+	index int
+}
+
 type markdownPerfStats struct {
 	fallbackToWrap bool
 }
 
-func Run(provider agent.Provider, modelName, agentName string) error {
+func Run(cfg config.Config) error {
+	modelName := cfg.DefaultModel()
+	agentName := "Build"
+
+	provider, err := cfg.ModelRouterProvider()
+	if err != nil {
+		return err
+	}
+
 	runner, err := newAgentRunner(modelName, provider, agentName)
 	if err != nil {
 		return err
 	}
 
-	p := tea.NewProgram(newModel(runner, modelName, agentName))
+	p := tea.NewProgram(newModel(runner, modelName, agentName, cfg))
 	_, err = p.Run()
 	return err
 }
 
-func newModel(runner *agent.AgentRunner, modelName, agentName string) *model {
+func newModel(runner *agent.AgentRunner, modelName, agentName string, cfg config.Config) *model {
 	in := newTextareaInput()
 	theme := DefaultTheme()
 	spin := spinner.New(spinner.WithSpinner(spinner.Dot))
@@ -129,14 +145,14 @@ func newModel(runner *agent.AgentRunner, modelName, agentName string) *model {
 		modelName: modelName,
 		theme:     theme,
 		storage:   store,
+		config:    cfg,
 		input:     in,
 		spinner:   spin,
 		stopwatch: sw,
 		runtime: RuntimeState{
-			autoScroll:         true,
-			debug:              isDebugEnabled(),
-			workingDir:         workingDir,
-			contextWindowTotal: defaultContextWindowTokens(modelName),
+			autoScroll: true,
+			debug:      isDebugEnabled(),
+			workingDir: workingDir,
 		},
 		markdownCache:   map[string]string{},
 		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
@@ -147,7 +163,15 @@ func newModel(runner *agent.AgentRunner, modelName, agentName string) *model {
 	m.runtime.gitBranch = detectGitBranch(m.runtime.workingDir)
 	m.runtime.modifiedFiles = collectModifiedFiles(m.runtime.workingDir)
 	m.runtime.lastGitRefreshAt = time.Now()
+	m.runtime.contextWindowTotal = m.contextWindowTotalFor(strings.TrimSpace(modelName))
 	return m
+}
+
+func (m *model) contextWindowTotalFor(modelName string) int {
+	if m == nil {
+		return 0
+	}
+	return m.config.ModelContextWindows()[strings.TrimSpace(modelName)]
 }
 
 func (m *model) Init() tea.Cmd {
@@ -185,6 +209,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, statusCmd
 
 	case tea.KeyPressMsg:
+		if m.modelPicker != nil {
+			if m.handleModelPickerKey(msg) {
+				m.runtime.showRunResult = false
+				m.runtime.escPending = false
+				return m, statusCmd
+			}
+		}
+
 		prevOffset := m.currentListOffset(m.messageWidth)
 		scrollUpdateStart := time.Now()
 		scrolled, deltaRows := m.handleScrollKey(msg)
