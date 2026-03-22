@@ -14,6 +14,7 @@ const (
 	EventTypeToolCalls     EventType = "tool_calls"
 	EventTypeToolCallStart EventType = "tool_call_start"
 	EventTypeToolCallEnd   EventType = "tool_call_end"
+	EventTypeSessionTitle  EventType = "session_title"
 	EventTypeDone          EventType = "done"
 )
 
@@ -59,6 +60,10 @@ type EventDataToolCallStart struct {
 type EventDataToolCallEnd struct {
 	Call   ToolCall
 	Result ToolResult
+}
+
+type EventDataSessionTitle struct {
+	Title string
 }
 
 type EventDataDone struct {

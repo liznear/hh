@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/liznear/hh/agent"
 	"github.com/liznear/hh/tools"
@@ -49,6 +50,11 @@ func (m *model) handleAgentEvent(e agent.Event) {
 			}
 		default:
 			m.addItem(&session.ErrorItem{Message: "unknown error"})
+		}
+	case agent.EventTypeSessionTitle:
+		if data, ok := e.Data.(agent.EventDataSessionTitle); ok {
+			m.session.SetTitle(data.Title)
+			m.persistMeta()
 		}
 	}
 }
@@ -107,6 +113,7 @@ func (m *model) completeToolCall(call agent.ToolCall, result agent.ToolResult) {
 	if item, ok := m.toolCalls[key]; ok {
 		item.Complete(result)
 		m.applyToolState(call, result)
+		m.runtime.lastGitRefreshAt = time.Time{}
 		m.persistItem(m.turnNumber(m.session.CurrentTurn()), item)
 		m.persistMeta()
 		delete(m.toolCalls, key)
@@ -120,6 +127,7 @@ func (m *model) completeToolCall(call agent.ToolCall, result agent.ToolResult) {
 	}
 	item.Complete(result)
 	m.applyToolState(call, result)
+	m.runtime.lastGitRefreshAt = time.Time{}
 	m.addItem(item)
 }
 

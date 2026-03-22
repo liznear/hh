@@ -72,6 +72,12 @@ type RuntimeState struct {
 	maxRenderLatency  time.Duration
 	lastScrollStats   scrollPerfStats
 	maxScrollStats    scrollPerfStats
+
+	workingDir         string
+	gitBranch          string
+	modifiedFiles      []modifiedFileStat
+	lastGitRefreshAt   time.Time
+	contextWindowTotal int
 }
 
 type itemRenderCacheEntry struct {
@@ -114,7 +120,10 @@ func newModel(runner *agent.AgentRunner, modelName, agentName string) *model {
 	state := session.NewState(modelName)
 	store := newSessionStorage(state)
 
-	return &model{
+	state.SetTitle("Untitled Session")
+	workingDir := detectWorkingDirectory()
+
+	m := &model{
 		runner:    runner,
 		agentName: agentName,
 		modelName: modelName,
@@ -124,8 +133,10 @@ func newModel(runner *agent.AgentRunner, modelName, agentName string) *model {
 		spinner:   spin,
 		stopwatch: sw,
 		runtime: RuntimeState{
-			autoScroll: true,
-			debug:      isDebugEnabled(),
+			autoScroll:         true,
+			debug:              isDebugEnabled(),
+			workingDir:         workingDir,
+			contextWindowTotal: defaultContextWindowTokens(modelName),
 		},
 		markdownCache:   map[string]string{},
 		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
@@ -133,6 +144,10 @@ func newModel(runner *agent.AgentRunner, modelName, agentName string) *model {
 		toolCalls:       map[string]*session.ToolCallItem{},
 		slashCommands:   commands.BuiltIn(),
 	}
+	m.runtime.gitBranch = detectGitBranch(m.runtime.workingDir)
+	m.runtime.modifiedFiles = collectModifiedFiles(m.runtime.workingDir)
+	m.runtime.lastGitRefreshAt = time.Now()
+	return m
 }
 
 func (m *model) Init() tea.Cmd {

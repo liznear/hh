@@ -50,6 +50,7 @@ func (s *Storage) SaveMeta(state *State) error {
 
 	meta := Meta{
 		ID:           state.ID,
+		Title:        state.Title,
 		CreatedAt:    state.CreatedAt,
 		CurrentModel: state.CurrentModel,
 		TodoItems:    append([]TodoItem(nil), state.TodoItems...),
@@ -157,7 +158,10 @@ func (s *Storage) Load(id string) (*State, error) {
 		return nil, err
 	}
 
-	state := &State{ID: meta.ID, CreatedAt: meta.CreatedAt, CurrentModel: meta.CurrentModel, TodoItems: append([]TodoItem(nil), meta.TodoItems...)}
+	state := &State{ID: meta.ID, Title: meta.Title, CreatedAt: meta.CreatedAt, CurrentModel: meta.CurrentModel, TodoItems: append([]TodoItem(nil), meta.TodoItems...)}
+	if strings.TrimSpace(state.Title) == "" {
+		state.Title = "Untitled Session"
+	}
 
 	turnsByNum := map[int]*Turn{}
 	maxTurnNum := 0
@@ -291,6 +295,7 @@ func (s *Storage) Delete(id string) error {
 
 type Meta struct {
 	ID           string     `json:"id"`
+	Title        string     `json:"title,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	CurrentModel string     `json:"current_model"`
 	TodoItems    []TodoItem `json:"todo_items,omitempty"`

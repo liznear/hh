@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/liznear/hh/tui/session"
 )
 
 type frameViewModel struct {
@@ -74,7 +75,7 @@ func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
 			Elapsed:       m.stopwatch.Elapsed(),
 			EscPending:    m.runtime.escPending,
 		},
-		sidebarLines: m.buildSidebarLines(),
+		sidebarLines: m.buildSidebarLines(layout.sidebarWidth),
 	}
 }
 
@@ -124,21 +125,92 @@ func (m *model) renderMainPane(layout layoutState, messagePane string, inputPane
 		Render(lipgloss.JoinVertical(lipgloss.Left, messagePane, inputPane))
 }
 
-func (m *model) buildSidebarLines() []string {
-	sidebarLines := []string{
-		"Session",
-		fmt.Sprintf("Model: %s", m.modelName),
-		fmt.Sprintf("Status: %s", ternary(m.runtime.busy, "running", "idle")),
-		fmt.Sprintf("Turns: %d", len(m.session.Turns)),
-		fmt.Sprintf("Items: %d", m.session.ItemCount()),
+func (m *model) buildSidebarLines(sidebarWidth int) []string {
+	m.refreshGitSnapshotMaybe()
+
+	bold := lipgloss.NewStyle().Bold(true)
+	warning := lipgloss.NewStyle().Foreground(m.theme.Warning())
+	errorStyle := lipgloss.NewStyle().Foreground(m.theme.Error())
+	success := lipgloss.NewStyle().Foreground(m.theme.Success())
+
+	title := strings.TrimSpace(m.session.Title)
+	if title == "" {
+		title = "Untitled Session"
 	}
+	title = bold.Render(title)
+
+	wdLine := m.runtime.workingDir
+	if wdLine == "" {
+		wdLine = "."
+	}
+	if strings.TrimSpace(m.runtime.gitBranch) != "" {
+		wdLine = fmt.Sprintf("%s @ %s", wdLine, m.runtime.gitBranch)
+	}
+
+	usedTokens := estimateSessionTokenUsage(m.session)
+	totalTokens := m.runtime.contextWindowTotal
+	if totalTokens <= 0 {
+		totalTokens = 1
+	}
+	percentage := float64(usedTokens) * 100 / float64(totalTokens)
+	numberStyle := lipgloss.NewStyle()
+	if percentage > 50 {
+		numberStyle = errorStyle
+	} else if percentage > 30 {
+		numberStyle = warning
+	}
+	contextLine := fmt.Sprintf(
+		"%s %s/%s %s%%",
+		bold.Render("Context Usage:"),
+		numberStyle.Render(fmt.Sprintf("%d", usedTokens)),
+		numberStyle.Render(fmt.Sprintf("%d", totalTokens)),
+		numberStyle.Render(fmt.Sprintf("%.1f", percentage)),
+	)
+
+	doneTodos := 0
+	for _, todo := range m.session.TodoItems {
+		if todo.Status == session.TodoStatusCompleted {
+			doneTodos++
+		}
+	}
+
+	sidebarLines := []string{
+		title,
+		"",
+		wdLine,
+		"",
+		contextLine,
+	}
+
+	contentWidth := max(1, sidebarWidth-2)
+	if len(m.runtime.modifiedFiles) > 0 {
+		sidebarLines = append(sidebarLines, "", bold.Render("Modified files"))
+		for _, file := range m.runtime.modifiedFiles {
+			sidebarLines = append(sidebarLines, renderModifiedFileLine(contentWidth, file, success, errorStyle))
+		}
+	}
+
+	if len(m.session.TodoItems) > 0 {
+		sidebarLines = append(sidebarLines, "", bold.Render(fmt.Sprintf("TODO (%d / %d)", doneTodos, len(m.session.TodoItems))))
+		for _, item := range m.session.TodoItems {
+			line := fmt.Sprintf("[ ] %s", item.Content)
+			switch item.Status {
+			case session.TodoStatusCompleted:
+				line = fmt.Sprintf("[%s] %s", success.Render("✓"), item.Content)
+			case session.TodoStatusWIP:
+				line = warning.Render(line)
+			}
+			sidebarLines = append(sidebarLines, line)
+		}
+	}
+
 	if !m.runtime.debug {
 		return sidebarLines
 	}
 
 	return append(sidebarLines,
 		"",
-		"Debug",
+		bold.Render("Debug"),
 		fmt.Sprintf("Render: %s (max %s)", formatDuration(m.runtime.lastRenderLatency), formatDuration(m.runtime.maxRenderLatency)),
 		fmt.Sprintf("Scroll[%s]: %s (max %s, dy=%d)", m.runtime.lastScrollStats.inputType, formatDuration(m.runtime.lastScrollStats.viewportUpdate), formatDuration(m.runtime.maxScrollStats.viewportUpdate), m.runtime.lastScrollStats.deltaRows),
 		fmt.Sprintf("Scroll gap/view: %s / %s", formatDuration(m.runtime.lastScrollStats.updateGap), formatDuration(m.runtime.lastScrollStats.timeSinceView)),
@@ -147,6 +219,46 @@ func (m *model) buildSidebarLines() []string {
 		fmt.Sprintf("Scroll->View max: %s / %s (events max %d)", formatDuration(m.runtime.maxScrollStats.inputToViewStart), formatDuration(m.runtime.maxScrollStats.inputToViewDone), m.runtime.maxScrollStats.coalescedEvents),
 		fmt.Sprintf("Frame bytes: %d (max %d)", m.runtime.lastFrameBytes, m.runtime.maxFrameBytes),
 	)
+}
+
+func renderModifiedFileLine(contentWidth int, file modifiedFileStat, addStyle lipgloss.Style, delStyle lipgloss.Style) string {
+	left := displayPath(file.Path)
+	parts := make([]string, 0, 2)
+	if file.Added > 0 {
+		parts = append(parts, addStyle.Render(fmt.Sprintf("+%d", file.Added)))
+	}
+	if file.Deleted > 0 {
+		parts = append(parts, delStyle.Render(fmt.Sprintf("-%d", file.Deleted)))
+	}
+	if len(parts) == 0 {
+		return left
+	}
+
+	right := strings.Join(parts, " ")
+	rightWidth := lipgloss.Width(right)
+	if contentWidth <= rightWidth+1 {
+		return right
+	}
+	leftWidth := contentWidth - rightWidth - 1
+	if lipgloss.Width(left) > leftWidth {
+		left = truncateToWidth(left, leftWidth)
+	}
+	padding := strings.Repeat(" ", max(1, contentWidth-lipgloss.Width(left)-rightWidth))
+	return left + padding + right
+}
+
+func (m *model) refreshGitSnapshotMaybe() {
+	if m == nil {
+		return
+	}
+	if m.runtime.workingDir == "" {
+		m.runtime.workingDir = detectWorkingDirectory()
+	}
+	if m.runtime.lastGitRefreshAt.IsZero() || time.Since(m.runtime.lastGitRefreshAt) >= sidebarGitRefreshInterval {
+		m.runtime.gitBranch = detectGitBranch(m.runtime.workingDir)
+		m.runtime.modifiedFiles = collectModifiedFiles(m.runtime.workingDir)
+		m.runtime.lastGitRefreshAt = time.Now()
+	}
 }
 
 func (m *model) renderSidebarPane(layout layoutState, sidebarLines []string) string {

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"time"
 
 	"github.com/liznear/hh/agent"
@@ -8,6 +9,7 @@ import (
 
 type State struct {
 	ID           string
+	Title        string
 	CreatedAt    time.Time
 	CurrentModel string
 	TodoItems    []TodoItem
@@ -17,11 +19,38 @@ type State struct {
 func NewState(modelName string) *State {
 	return &State{
 		ID:           generateID(),
+		Title:        "Untitled Session",
 		CreatedAt:    time.Now(),
 		CurrentModel: modelName,
 		TodoItems:    nil,
 		Turns:        nil,
 	}
+}
+
+func (s *State) SetTitle(title string) {
+	title = trimTitle(title)
+	if title == "" {
+		title = "Untitled Session"
+	}
+	s.Title = title
+}
+
+func trimTitle(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
+	lines := strings.Split(title, "\n")
+	title = strings.TrimSpace(lines[0])
+	title = strings.Trim(title, `"'`)
+	if title == "" {
+		return ""
+	}
+	runes := []rune(title)
+	if len(runes) > 80 {
+		title = string(runes[:80])
+	}
+	return strings.TrimSpace(title)
 }
 
 type TodoStatus string
