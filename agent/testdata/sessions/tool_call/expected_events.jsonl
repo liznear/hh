@@ -5,4 +5,4 @@
 {"Type":"turn_end","Data":{}}
 {"Type":"turn_start","Data":{}}
 {"Type":"turn_end","Data":{}}
-{"Type":"agent_end","Data":{"Messages":[{"Role":"user","Content":"Hello","CallID":""},{"Role":"tool","Content":"{\"arg\":\"val\"}","CallID":"call_1"},{"Role":"assistant","Content":"Final answer","CallID":""}]}}
+{"Type":"agent_end","Data":{"Messages":[{"Role":"user","Content":"Hello","CallID":""},{"Role":"assistant","Content":"","ToolCalls":[{"ID":"call_1","Name":"echo","Arguments":"{\"arg\":\"val\"}"}],"CallID":""},{"Role":"tool","Content":"{\"arg\":\"val\"}","CallID":"call_1"},{"Role":"assistant","Content":"Final answer","CallID":""}]}}

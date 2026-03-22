@@ -260,3 +260,67 @@ func TestRunAgentLoop_ContextCanceled(t *testing.T) {
 		t.Errorf("expected error %v, got %v", context.Canceled, errData)
 	}
 }
+
+func TestRunAgentLoop_PreservesAssistantToolCallsInHistory(t *testing.T) {
+	mockP := &mockProvider{
+		responses: []ProviderResponse{
+			{
+				Message:   Message{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call_1", Name: "echo", Arguments: `{"value":"ok"}`}}},
+				ToolCalls: []ToolCall{{ID: "call_1", Name: "echo", Arguments: `{"value":"ok"}`}},
+			},
+			{
+				Message: Message{Role: RoleAssistant, Content: "done"},
+			},
+		},
+	}
+
+	aCtx := Context{
+		Model:        "test-model",
+		Provider:     mockP,
+		SystemPrompt: "test system prompt",
+		Tools: map[string]Tool{
+			"echo": {
+				Name:        "echo",
+				Description: "Echo back the arguments",
+				Handler: FuncToolHandler(func(ctx context.Context, args map[string]any) ToolResult {
+					return ToolResult{Data: "ok"}
+				}),
+			},
+		},
+	}
+
+	var events []Event
+	RunAgentLoop(context.Background(), aCtx, func(e Event) {
+		events = append(events, e)
+	})
+
+	if len(events) == 0 {
+		t.Fatalf("expected events")
+	}
+	last := events[len(events)-1]
+	if last.Type != EventTypeAgentEnd {
+		t.Fatalf("expected last event %q, got %q", EventTypeAgentEnd, last.Type)
+	}
+
+	endData, ok := last.Data.(EventDataAgentEnd)
+	if !ok {
+		t.Fatalf("expected EventDataAgentEnd, got %T", last.Data)
+	}
+
+	if len(endData.Messages) < 3 {
+		t.Fatalf("expected at least 3 messages, got %d", len(endData.Messages))
+	}
+
+	assistantWithToolCall := endData.Messages[0]
+	if assistantWithToolCall.Role != RoleAssistant {
+		t.Fatalf("expected first message role assistant, got %q", assistantWithToolCall.Role)
+	}
+	if len(assistantWithToolCall.ToolCalls) != 1 || assistantWithToolCall.ToolCalls[0].ID != "call_1" {
+		t.Fatalf("expected assistant tool call to be preserved, got %+v", assistantWithToolCall.ToolCalls)
+	}
+
+	toolMessage := endData.Messages[1]
+	if toolMessage.Role != RoleTool || toolMessage.CallID != "call_1" {
+		t.Fatalf("expected tool message with call id call_1, got %+v", toolMessage)
+	}
+}

@@ -45,13 +45,26 @@ AgentLoop:
 			break AgentLoop
 		}
 
-		if res.Message.Content != "" {
+		if len(res.Message.ToolCalls) == 0 && len(res.ToolCalls) > 0 {
+			res.Message.ToolCalls = res.ToolCalls
+		}
+		if res.Message.Role == RoleUnknown || res.Message.Role == "" {
+			res.Message.Role = RoleAssistant
+		}
+
+		if res.Message.Content != "" || len(res.Message.ToolCalls) > 0 {
 			req.Messages = append(req.Messages, res.Message)
 		}
-		if len(res.ToolCalls) > 0 {
-			toolResults := executeTools(ctx, aCtx, res.ToolCalls, onEvent)
+
+		toolCalls := res.ToolCalls
+		if len(toolCalls) == 0 {
+			toolCalls = res.Message.ToolCalls
+		}
+
+		if len(toolCalls) > 0 {
+			toolResults := executeTools(ctx, aCtx, toolCalls, onEvent)
 			req.Messages = append(req.Messages, lo.Map(toolResults, func(r ToolResult, idx int) Message {
-				return Message{Role: RoleTool, Content: r.Data, CallID: res.ToolCalls[idx].ID}
+				return Message{Role: RoleTool, Content: r.Data, CallID: toolCalls[idx].ID}
 			})...)
 			shouldContinue = true
 		}

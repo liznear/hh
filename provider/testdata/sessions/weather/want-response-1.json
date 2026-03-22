@@ -2,6 +2,13 @@
   "Message": {
     "Role": "assistant",
     "Content": "Let me check the weather first...",
+    "ToolCalls": [
+      {
+        "ID": "call_abc123",
+        "Name": "get_weather",
+        "Arguments": "{\"location\": \"San Francisco\"}"
+      }
+    ],
     "CallID": ""
   },
   "Thinking": "Thinking about the weather...",

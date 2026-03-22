@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/liznear/hh/agent"
 	"github.com/openai/openai-go/v3"
@@ -120,13 +121,13 @@ func (p *openAICompatibleProvider) ChatCompletionStream(ctx context.Context, req
 	}
 
 	choice := acc.Choices[0]
+	toolCalls := openAIToAgentToolCall(choice.Message.ToolCalls)
 
 	msg := agent.Message{
-		Role:    agent.RoleAssistant,
-		Content: choice.Message.Content,
+		Role:      agent.RoleAssistant,
+		Content:   choice.Message.Content,
+		ToolCalls: toolCalls,
 	}
-
-	toolCalls := openAIToAgentToolCall(choice.Message.ToolCalls)
 
 	return agent.ProviderResponse{
 		Message:      msg,
@@ -169,12 +170,45 @@ func toOpenAIMessage(m *agent.Message) openai.ChatCompletionMessageParamUnion {
 	case agent.RoleUser:
 		return openai.UserMessage(m.Content)
 	case agent.RoleAssistant:
-		return openai.AssistantMessage(m.Content)
+		if len(m.ToolCalls) == 0 {
+			return openai.AssistantMessage(m.Content)
+		}
+
+		msg := openai.ChatCompletionAssistantMessageParam{
+			ToolCalls: toOpenAIMessageToolCalls(m.ToolCalls),
+		}
+		if m.Content != "" {
+			msg.Content = openai.ChatCompletionAssistantMessageParamContentUnion{OfString: param.NewOpt(m.Content)}
+		}
+		return openai.ChatCompletionMessageParamUnion{OfAssistant: &msg}
 	case agent.RoleTool:
 		return openai.ToolMessage(m.Content, m.CallID)
 	default:
 		return openai.UserMessage(m.Content)
 	}
+}
+
+func toOpenAIMessageToolCalls(calls []agent.ToolCall) []openai.ChatCompletionMessageToolCallUnionParam {
+	if len(calls) == 0 {
+		return nil
+	}
+
+	ret := make([]openai.ChatCompletionMessageToolCallUnionParam, 0, len(calls))
+	for _, call := range calls {
+		if strings.TrimSpace(call.ID) == "" || strings.TrimSpace(call.Name) == "" {
+			continue
+		}
+		ret = append(ret, openai.ChatCompletionMessageToolCallUnionParam{
+			OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+				ID: call.ID,
+				Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+					Name:      call.Name,
+					Arguments: call.Arguments,
+				},
+			},
+		})
+	}
+	return ret
 }
 
 func openAIToAgentToolCall(calls []openai.ChatCompletionMessageToolCallUnion) []agent.ToolCall {
