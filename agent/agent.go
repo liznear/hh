@@ -3,13 +3,16 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync"
 )
 
 type State struct {
 	SystemPrompt string
 	Messages     []Message
 	Tools        map[string]Tool
+	titleMu      sync.Mutex
 	titleReady   bool
+	titlePending bool
 }
 
 type AgentRunner struct {
@@ -38,7 +41,11 @@ type Input struct {
 }
 
 func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event)) error {
-	a.maybeGenerateSessionTitle(ctx, input, onEvent)
+	titleStarted := make(chan struct{})
+	titleDone := a.maybeGenerateSessionTitleAsync(ctx, input, onEvent, titleStarted)
+	if titleDone != nil {
+		<-titleStarted
+	}
 
 	aCtx := Context{
 		Model:        a.model,
@@ -57,26 +64,59 @@ func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event))
 			a.state.Messages = event.Data.(EventDataAgentEnd).Messages
 		}
 	})
+	if titleDone != nil {
+		<-titleDone
+	}
 	return nil
 }
 
-func (a *AgentRunner) maybeGenerateSessionTitle(ctx context.Context, input Input, onEvent func(Event)) {
+func (a *AgentRunner) maybeGenerateSessionTitleAsync(ctx context.Context, input Input, onEvent func(Event), started chan<- struct{}) <-chan struct{} {
 	if a == nil || a.state == nil || a.provider == nil {
-		return
+		return nil
 	}
-	if a.state.titleReady {
-		return
-	}
-	if strings.TrimSpace(input.Content) == "" {
-		return
+	if !a.tryStartTitleGeneration() {
+		return nil
 	}
 
-	title, ok := a.generateSessionTitle(ctx, input.Content)
-	if !ok {
-		return
+	prompt := strings.TrimSpace(input.Content)
+	if prompt == "" {
+		a.finishTitleGeneration(false)
+		return nil
 	}
-	a.state.titleReady = true
-	onEvent(Event{Type: EventTypeSessionTitle, Data: EventDataSessionTitle{Title: title}})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if started != nil {
+			close(started)
+		}
+		title, ok := a.generateSessionTitle(ctx, prompt)
+		a.finishTitleGeneration(ok)
+		if !ok {
+			return
+		}
+		onEvent(Event{Type: EventTypeSessionTitle, Data: EventDataSessionTitle{Title: title}})
+	}()
+	return done
+}
+
+func (a *AgentRunner) tryStartTitleGeneration() bool {
+	a.state.titleMu.Lock()
+	defer a.state.titleMu.Unlock()
+	if a.state.titleReady || a.state.titlePending {
+		return false
+	}
+	a.state.titlePending = true
+	return true
+}
+
+func (a *AgentRunner) finishTitleGeneration(success bool) {
+	a.state.titleMu.Lock()
+	defer a.state.titleMu.Unlock()
+	a.state.titlePending = false
+	if success {
+		a.state.titleReady = true
+	}
 }
 
 func (a *AgentRunner) generateSessionTitle(ctx context.Context, firstPrompt string) (string, bool) {
