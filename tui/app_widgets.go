@@ -278,6 +278,18 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 		body := fmt.Sprintf("WebFetch %q", url)
 		return body, []styledToken{{raw: url, style: pathStyle}}
 
+	case "glob":
+		pattern := toolArgString(args, "pattern", "*")
+		path := toolArgString(args, "path", ".")
+		body := fmt.Sprintf("Glob %q in %s", pattern, path)
+		tokens := []styledToken{{raw: pattern, style: pathStyle}, {raw: path, style: pathStyle}}
+		if item.Status == session.ToolCallStatusSuccess {
+			if matches, ok := globMatchCount(item); ok {
+				body = fmt.Sprintf("%s (%d matches)", body, matches)
+			}
+		}
+		return body, tokens
+
 	case "todo_write":
 		done, total, ok := todoProgress(item, args)
 		if ok {
@@ -346,6 +358,16 @@ func grepMatchCount(item *session.ToolCallItem) (int, bool) {
 		return 0, false
 	}
 	if result, ok := item.Result.Result.(tools.GrepResult); ok {
+		return result.MatchCount, true
+	}
+	return 0, false
+}
+
+func globMatchCount(item *session.ToolCallItem) (int, bool) {
+	if item == nil || item.Result == nil {
+		return 0, false
+	}
+	if result, ok := item.Result.Result.(tools.GlobResult); ok {
 		return result.MatchCount, true
 	}
 	return 0, false
