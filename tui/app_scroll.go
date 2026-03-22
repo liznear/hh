@@ -294,8 +294,8 @@ func (m *model) renderItemLinesAt(items []session.Item, idx int, width int, rend
 	}
 
 	if _, ok := items[idx].(*session.End); ok {
-		modelName, duration := turnFooterMeta(items, idx, m.modelName)
-		footer := m.renderTurnFooterWidget(modelName, duration, width)
+		modelName, duration, status := turnFooterMeta(items, idx, m.modelName)
+		footer := m.renderTurnFooterWidget(modelName, duration, status, width)
 		return append([]string{""}, footer...)
 	}
 
@@ -310,20 +310,22 @@ func (m *model) renderItemLinesAt(items []session.Item, idx int, width int, rend
 	return out
 }
 
-func turnFooterMeta(items []session.Item, endIdx int, fallbackModel string) (string, time.Duration) {
+func turnFooterMeta(items []session.Item, endIdx int, fallbackModel string) (string, time.Duration, string) {
 	modelName := fallbackModel
 	if strings.TrimSpace(modelName) == "" {
 		modelName = "unknown"
 	}
+	status := ""
 
 	if endIdx < 0 || endIdx >= len(items) {
-		return modelName, 0
+		return modelName, 0, status
 	}
 
 	end, ok := items[endIdx].(*session.End)
 	if !ok {
-		return modelName, 0
+		return modelName, 0, status
 	}
+	status = end.Status
 
 	endTs := end.Timestamp()
 	for i := endIdx - 1; i >= 0; i-- {
@@ -334,15 +336,15 @@ func turnFooterMeta(items []session.Item, endIdx int, fallbackModel string) (str
 			}
 			startTs := item.Timestamp()
 			if startTs.IsZero() || endTs.IsZero() || endTs.Before(startTs) {
-				return modelName, 0
+				return modelName, 0, status
 			}
-			return modelName, endTs.Sub(startTs)
+			return modelName, endTs.Sub(startTs), status
 		case *session.End:
-			return modelName, 0
+			return modelName, 0, status
 		}
 	}
 
-	return modelName, 0
+	return modelName, 0, status
 }
 
 func needsSpacerBetweenItems(prev session.Item, curr session.Item) bool {

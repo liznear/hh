@@ -134,12 +134,16 @@ func (t *Turn) LastItem() Item {
 }
 
 func (t *Turn) End() {
+	t.EndWithStatus("")
+}
+
+func (t *Turn) EndWithStatus(status string) {
 	if t.EndedAt != nil {
 		return
 	}
 	now := time.Now()
 	t.EndedAt = &now
-	t.AddItem(&End{})
+	t.AddItem(&End{Status: status})
 }
 
 func generateTurnID() string {
@@ -271,6 +275,7 @@ func (e *ErrorItem) Type() ItemType { return ItemTypeError }
 
 type End struct {
 	baseItem
+	Status string `json:"status,omitempty"`
 }
 
 func (e *End) Type() ItemType { return ItemTypeEnd }

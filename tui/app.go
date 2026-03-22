@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -28,10 +29,13 @@ type model struct {
 	listOffsetIdx  int
 	listOffsetLine int
 
-	stream     <-chan tea.Msg
-	busy       bool
-	autoScroll bool
-	debug      bool
+	stream       <-chan tea.Msg
+	busy         bool
+	autoScroll   bool
+	debug        bool
+	runCancel    context.CancelFunc
+	escPending   bool
+	cancelledRun bool
 
 	session   *session.State
 	toolCalls map[string]*session.ToolCallItem
@@ -158,6 +162,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		key := msg.Key()
+		if key.Code == tea.KeyEscape && m.busy {
+			if m.escPending {
+				if m.runCancel != nil {
+					m.runCancel()
+				}
+				m.cancelledRun = true
+				m.escPending = false
+			} else {
+				m.escPending = true
+			}
+			return m, statusCmd
+		}
+
 		if key.Code == tea.KeyEnter {
 			if key.Mod&tea.ModShift != 0 {
 				m.input.InsertRune('\n')
@@ -177,10 +194,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addItemToTurn(turn, &session.UserMessage{Content: prompt})
 			m.input.SetValue("")
 			m.busy = true
+			m.escPending = false
+			m.cancelledRun = false
 			m.showRunResult = false
+			runCtx, cancel := context.WithCancel(context.Background())
+			m.runCancel = cancel
 			m.refreshViewport()
 
-			return m, tea.Batch(startAgentStreamCmd(m.runner, prompt), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
+			return m, tea.Batch(startAgentStreamCmdWithContext(runCtx, m.runner, prompt), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
 				return m.spinner.Tick()
 			})
 		}
@@ -189,6 +210,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		}
+		m.escPending = false
 
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)

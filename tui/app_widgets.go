@@ -20,6 +20,7 @@ type statusWidgetModel struct {
 	ShowRunResult bool
 	SpinnerView   string
 	Elapsed       time.Duration
+	EscPending    bool
 }
 
 func renderStatusWidget(vm statusWidgetModel, theme Theme) string {
@@ -27,7 +28,11 @@ func renderStatusWidget(vm statusWidgetModel, theme Theme) string {
 	if vm.Busy {
 		spinnerView := lipgloss.NewStyle().Foreground(theme.Info()).Render(vm.SpinnerView)
 		durationView := lipgloss.NewStyle().Foreground(theme.Muted()).Render(" " + formatElapsedSeconds(vm.Elapsed))
-		return padding + spinnerView + durationView
+		hint := ""
+		if vm.EscPending {
+			hint = lipgloss.NewStyle().Foreground(theme.Muted()).Render(" esc again to interrupt")
+		}
+		return padding + spinnerView + durationView + hint
 	}
 
 	if vm.ShowRunResult {
@@ -101,11 +106,15 @@ func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int, ren
 	return lines
 }
 
-func (m *model) renderTurnFooterWidget(modelName string, duration time.Duration, width int) []string {
+func (m *model) renderTurnFooterWidget(modelName string, duration time.Duration, status string, width int) []string {
 	bodyWidth := max(1, width-2)
 	muted := lipgloss.NewStyle().Foreground(m.theme.Muted())
 
-	meta := strings.TrimSpace(fmt.Sprintf("◆ %s %s", modelName, formatElapsedSeconds(duration)))
+	statusLabel := ""
+	if strings.EqualFold(status, "cancelled") {
+		statusLabel = " Cancelled"
+	}
+	meta := strings.TrimSpace(fmt.Sprintf("◆ %s %s%s", modelName, formatElapsedSeconds(duration), statusLabel))
 	if ansi.StringWidth(meta) >= bodyWidth {
 		return []string{"  " + muted.Render(truncateToWidth(meta, bodyWidth))}
 	}

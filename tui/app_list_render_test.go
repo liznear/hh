@@ -105,6 +105,31 @@ func TestRenderMessageList_ShowsMutedTurnFooterAfterAssistantOnTurnEnd(t *testin
 	}
 }
 
+func TestRenderMessageList_ShowsCancelledTurnFooter(t *testing.T) {
+	m := &model{
+		theme:           DefaultTheme(),
+		session:         session.NewState("test-model"),
+		markdownCache:   map[string]string{},
+		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
+		modelName:       "test-model",
+	}
+
+	turn := m.session.StartTurn()
+	turn.AddItem(&session.AssistantMessage{Content: "assistant message"})
+	turn.EndWithStatus("cancelled")
+
+	frame := ansi.Strip(m.renderMessageList(120, 40))
+	lines := strings.Split(frame, "\n")
+
+	footerIdx := lineIndexContaining(lines, "◆ test-model 0s Cancelled")
+	if footerIdx < 0 {
+		t.Fatalf("missing cancelled footer in frame: %q", frame)
+	}
+	if !strings.Contains(lines[footerIdx], "◆ test-model 0s Cancelled") || !strings.Contains(lines[footerIdx], "─") {
+		t.Fatalf("expected cancelled footer metadata and separator on same line, got %q", lines[footerIdx])
+	}
+}
+
 func assertRenderedFrameFits(t *testing.T, frame string, width int, height int) {
 	t.Helper()
 

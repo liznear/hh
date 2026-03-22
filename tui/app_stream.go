@@ -26,10 +26,14 @@ type streamBatchMsg struct {
 }
 
 func startAgentStreamCmd(runner *agent.AgentRunner, prompt string) tea.Cmd {
+	return startAgentStreamCmdWithContext(context.Background(), runner, prompt)
+}
+
+func startAgentStreamCmdWithContext(ctx context.Context, runner *agent.AgentRunner, prompt string) tea.Cmd {
 	return func() tea.Msg {
 		ch := make(chan tea.Msg)
 		go func() {
-			err := runner.Run(context.Background(), agent.Input{Content: prompt, Type: "text"}, func(e agent.Event) {
+			err := runner.Run(ctx, agent.Input{Content: prompt, Type: "text"}, func(e agent.Event) {
 				ch <- agentEventMsg{event: e}
 			})
 			ch <- agentRunDoneMsg{err: err}

@@ -48,15 +48,22 @@ func (m *model) refreshAfterStreamEvent() {
 
 func (m *model) finalizeRun(runErr error) {
 	m.busy = false
+	m.escPending = false
+	m.runCancel = nil
 	m.stopwatch, _ = m.stopwatch.Update(stopwatch.StartStopMsg{ID: m.stopwatch.ID()})
 	m.showRunResult = true
 	if runErr != nil {
 		m.addItem(&session.ErrorItem{Message: runErr.Error()})
 	}
 	if turn := m.session.CurrentTurn(); turn != nil {
-		turn.End()
+		if m.cancelledRun {
+			turn.EndWithStatus("cancelled")
+		} else {
+			turn.End()
+		}
 		m.persistTurnEnd(turn)
 	}
+	m.cancelledRun = false
 	m.stream = nil
 	m.refreshViewport()
 	m.lastRefreshAt = time.Now()
