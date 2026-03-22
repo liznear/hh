@@ -21,7 +21,13 @@ func newTextareaInput() textarea.Model {
 	in.Placeholder = ""
 	in.ShowLineNumbers = false
 	in.SetHeight(inputInnerLines)
+	applyTextareaPromptColor(&in, lipgloss.Color("2"))
+	in.Focus()
 
+	return in
+}
+
+func applyTextareaPromptColor(in *textarea.Model, promptColor lipgloss.Color) {
 	styles := textarea.DefaultStyles(false)
 	styles.Focused.Base = styles.Focused.Base.UnsetBackground()
 	styles.Focused.Text = styles.Focused.Text.UnsetBackground()
@@ -29,7 +35,7 @@ func newTextareaInput() textarea.Model {
 	styles.Focused.Placeholder = styles.Focused.Placeholder.UnsetBackground()
 	styles.Focused.Prompt = styles.Focused.Prompt.
 		UnsetBackground().
-		Foreground(lipgloss.Color("2")).
+		Foreground(promptColor).
 		Bold(true)
 	styles.Focused.EndOfBuffer = styles.Focused.EndOfBuffer.UnsetBackground()
 	styles.Blurred.Base = styles.Blurred.Base.UnsetBackground()
@@ -38,13 +44,10 @@ func newTextareaInput() textarea.Model {
 	styles.Blurred.Placeholder = styles.Blurred.Placeholder.UnsetBackground()
 	styles.Blurred.Prompt = styles.Blurred.Prompt.
 		UnsetBackground().
-		Foreground(lipgloss.Color("2")).
+		Foreground(promptColor).
 		Bold(true)
 	styles.Blurred.EndOfBuffer = styles.Blurred.EndOfBuffer.UnsetBackground()
 	in.SetStyles(styles)
-	in.Focus()
-
-	return in
 }
 
 func newSessionStorage(state *session.State) *session.Storage {

@@ -80,6 +80,7 @@ func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
 			SpinnerView:   m.spinner.View(),
 			Elapsed:       m.stopwatch.Elapsed(),
 			EscPending:    m.runtime.escPending,
+			ShellMode:     m.shellModeActive(),
 		},
 		sidebarLines: m.buildSidebarLines(layout.sidebarWidth),
 	}

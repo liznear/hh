@@ -57,6 +57,7 @@ type RuntimeState struct {
 	busy         bool
 	autoScroll   bool
 	debug        bool
+	shellMode    bool
 	runCancel    context.CancelFunc
 	escPending   bool
 	cancelledRun bool
@@ -243,6 +244,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, statusCmd
 		}
 
+		if !m.runtime.busy {
+			if !m.runtime.shellMode && msg.String() == "!" && strings.TrimSpace(m.input.Value()) == "" {
+				m.setShellMode(true)
+				return m, statusCmd
+			}
+
+			if m.runtime.shellMode && key.Code == tea.KeyBackspace && m.input.Value() == "" {
+				m.setShellMode(false)
+				return m, statusCmd
+			}
+		}
+
 		if key.Code == tea.KeyEnter {
 			if key.Mod&tea.ModShift != 0 {
 				m.input.InsertRune('\n')
@@ -252,9 +265,56 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.runtime.busy {
 				return m, statusCmd
 			}
-			prompt := strings.TrimSpace(m.input.Value())
+
+			inputValue := m.input.Value()
+			prompt := strings.TrimSpace(inputValue)
 			if prompt == "" {
 				return m, statusCmd
+			}
+
+			if m.runtime.shellMode {
+				command := strings.TrimSpace(inputValue)
+				if command == "" {
+					return m, statusCmd
+				}
+
+				turn := m.session.StartTurn()
+				m.persistTurnStart(turn)
+				m.input.SetValue("")
+				m.setShellMode(false)
+				m.runtime.busy = true
+				m.runtime.escPending = false
+				m.runtime.cancelledRun = false
+				m.runtime.showRunResult = false
+				runCtx, cancel := context.WithCancel(context.Background())
+				m.runtime.runCancel = cancel
+				m.refreshViewport()
+
+				return m, tea.Batch(runShellCommandCmdWithContext(runCtx, command), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
+					return m.spinner.Tick()
+				})
+			}
+
+			if isShellModeInput(inputValue) {
+				command := parseShellCommand(inputValue)
+				if strings.TrimSpace(command) == "" {
+					return m, statusCmd
+				}
+
+				turn := m.session.StartTurn()
+				m.persistTurnStart(turn)
+				m.input.SetValue("")
+				m.runtime.busy = true
+				m.runtime.escPending = false
+				m.runtime.cancelledRun = false
+				m.runtime.showRunResult = false
+				runCtx, cancel := context.WithCancel(context.Background())
+				m.runtime.runCancel = cancel
+				m.refreshViewport()
+
+				return m, tea.Batch(runShellCommandCmdWithContext(runCtx, command), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
+					return m.spinner.Tick()
+				})
 			}
 
 			if m.handleSlashCommand(prompt) {
@@ -299,6 +359,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.recordScrollInteraction("mouse", scrollUpdateStart, deltaRows, updateGap, timeSinceView)
 			return m, statusCmd
 		}
+		return m, statusCmd
+
+	case shellCommandDoneMsg:
+		if turn := m.session.CurrentTurn(); turn != nil {
+			m.addItemToTurn(turn, &session.ShellMessage{Command: msg.command, Output: msg.output})
+		}
+		m.finalizeRun(msg.err)
 		return m, statusCmd
 
 	case spinner.TickMsg:

@@ -24,6 +24,16 @@ func TestRenderStatusWidget_ShowsEscInterruptHintWhileBusy(t *testing.T) {
 	}
 }
 
+func TestRenderStatusWidget_ShellModeShowsShell(t *testing.T) {
+	view := renderStatusWidget(statusWidgetModel{ShellMode: true}, DefaultTheme())
+	if !strings.Contains(view, "Shell") {
+		t.Fatalf("expected shell status label, got %q", view)
+	}
+	if strings.Contains(view, "Build") {
+		t.Fatalf("expected shell status to replace normal status, got %q", view)
+	}
+}
+
 func TestUpdate_EscTwiceCancelsBusyRun(t *testing.T) {
 	m := &model{
 		theme:           DefaultTheme(),

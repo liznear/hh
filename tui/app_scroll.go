@@ -364,6 +364,7 @@ func isMessageBlock(item session.Item) bool {
 
 	switch item.Type() {
 	case session.ItemTypeUserMessage,
+		session.ItemTypeShellMessage,
 		session.ItemTypeAssistantMessage,
 		session.ItemTypeThinkingBlock,
 		session.ItemTypeToolCall,
@@ -384,6 +385,9 @@ func (m *model) renderItemLines(item session.Item, width int, renderer *glamour.
 	switch v := item.(type) {
 	case *session.UserMessage:
 		lines = m.renderUserMessageWidget(v, width)
+
+	case *session.ShellMessage:
+		lines = m.renderShellMessageWidget(v, width)
 
 	case *session.AssistantMessage:
 		lines = m.renderAssistantMessageWidget(v, width, renderer)

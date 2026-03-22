@@ -365,6 +365,9 @@ func marshalItemToRaw(item Item) json.RawMessage {
 	case *UserMessage:
 		typeStr = "user_message"
 		data = v
+	case *ShellMessage:
+		typeStr = "shell_message"
+		data = v
 	case *AssistantMessage:
 		typeStr = "assistant_message"
 		data = v
@@ -413,6 +416,14 @@ func unmarshalItemFromRaw(raw json.RawMessage) (Item, error) {
 		var msg UserMessage
 		if err := json.Unmarshal(raw, &struct {
 			Data *UserMessage `json:"data"`
+		}{Data: &msg}); err != nil {
+			return nil, err
+		}
+		return &msg, nil
+	case "shell_message":
+		var msg ShellMessage
+		if err := json.Unmarshal(raw, &struct {
+			Data *ShellMessage `json:"data"`
 		}{Data: &msg}); err != nil {
 			return nil, err
 		}

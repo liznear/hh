@@ -71,6 +71,8 @@ func itemCacheSignature(item session.Item) (string, bool) {
 	switch v := item.(type) {
 	case *session.UserMessage:
 		return "user:" + v.Content, true
+	case *session.ShellMessage:
+		return "shell:" + v.Command + "\n" + v.Output, true
 	case *session.AssistantMessage:
 		return "assistant:" + v.Content, true
 	case *session.ThinkingBlock:

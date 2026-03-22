@@ -21,10 +21,14 @@ type statusWidgetModel struct {
 	SpinnerView   string
 	Elapsed       time.Duration
 	EscPending    bool
+	ShellMode     bool
 }
 
 func renderStatusWidget(vm statusWidgetModel, theme Theme) string {
 	padding := "  "
+	if vm.ShellMode && !vm.Busy {
+		return padding + "Shell"
+	}
 	base := strings.TrimSpace(vm.AgentName)
 	if base == "" {
 		base = "Build"
@@ -74,6 +78,39 @@ func (m *model) renderUserMessageWidget(item *session.UserMessage, width int) []
 		lines = append(lines, prefix.Render(line))
 	}
 	return lines
+}
+
+func (m *model) renderShellMessageWidget(item *session.ShellMessage, width int) []string {
+	if item == nil {
+		return []string{""}
+	}
+
+	const shellBoxLeftMargin = 2
+	boxWidth := max(1, width-2-shellBoxLeftMargin)
+	innerWidth := max(1, boxWidth-2)
+
+	contentLines := []string{"$ " + item.Command, ""}
+	output := item.Output
+	if output == "" {
+		output = "(no output)"
+	}
+	for _, line := range strings.Split(output, "\n") {
+		wrapped := wrapLine(line, innerWidth)
+		if len(wrapped) == 0 {
+			contentLines = append(contentLines, "")
+			continue
+		}
+		contentLines = append(contentLines, wrapped...)
+	}
+
+	box := lipgloss.NewStyle().
+		Background(m.theme.Color(ShellMessageBackground)).
+		Padding(1).
+		MarginLeft(shellBoxLeftMargin).
+		Width(boxWidth).
+		Render(strings.Join(contentLines, "\n"))
+
+	return strings.Split(box, "\n")
 }
 
 func (m *model) renderAssistantMessageWidget(item *session.AssistantMessage, width int, renderer *glamour.TermRenderer) []string {

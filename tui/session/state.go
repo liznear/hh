@@ -210,6 +210,7 @@ type ItemType int
 const (
 	ItemTypeStart ItemType = iota
 	ItemTypeUserMessage
+	ItemTypeShellMessage
 	ItemTypeAssistantMessage
 	ItemTypeThinkingBlock
 	ItemTypeToolCall
@@ -248,6 +249,14 @@ type UserMessage struct {
 }
 
 func (m *UserMessage) Type() ItemType { return ItemTypeUserMessage }
+
+type ShellMessage struct {
+	baseItem
+	Command string
+	Output  string
+}
+
+func (m *ShellMessage) Type() ItemType { return ItemTypeShellMessage }
 
 type AssistantMessage struct {
 	baseItem
