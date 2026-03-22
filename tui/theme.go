@@ -89,3 +89,7 @@ func (t Theme) Success() lipgloss.Color {
 func (t Theme) Info() lipgloss.Color {
 	return t.palette.Base0D
 }
+
+func (t Theme) Accent() lipgloss.Color {
+	return t.palette.Base0E
+}

@@ -749,7 +749,7 @@ func (m *model) renderMessageList(width, height int) string {
 	}
 	items := m.session.AllItems()
 	if len(items) == 0 {
-		return "hh-cli ready"
+		return ""
 	}
 
 	m.clampListOffset(width, height)
@@ -993,23 +993,63 @@ func (m *model) renderItemLines(item session.Item, width int, renderer *glamour.
 	}
 
 	var lines []string
+	needsNormalize := true
 	switch v := item.(type) {
 	case *session.UserMessage:
-		lines = components.WrapLine("user: "+v.Content, width)
+		userLines := components.WrapLine(v.Content, max(1, width-3))
+		if len(userLines) == 0 {
+			userLines = []string{""}
+		}
+		prefix := lipgloss.
+			NewStyle().
+			Border(lipgloss.NormalBorder(), false).
+			BorderLeft(true).
+			PaddingLeft(1).
+			BorderLeftForeground(m.theme.Accent())
+		lines = make([]string, 0, len(userLines))
+		for _, line := range userLines {
+			lines = append(lines, prefix.Render(line))
+		}
 
 	case *session.AssistantMessage:
-		renderedMarkdown, _ := m.renderMarkdown(v.Content, width, renderer)
-		lines = []string{"assistant:"}
-		lines = append(lines, strings.Split(renderedMarkdown, "\n")...)
+		renderedMarkdown, _ := m.renderMarkdown(v.Content, max(1, width-2), renderer)
+		assistantLines := strings.Split(renderedMarkdown, "\n")
+		lines = make([]string, 0, len(assistantLines))
+		for _, line := range assistantLines {
+			lines = append(lines, trimOneLeadingSpace(line))
+		}
 
 	case *session.ThinkingBlock:
-		lines = components.WrapLine("thinking: "+v.Content, width)
+		renderedMarkdown, _ := m.renderMarkdown(v.Content, max(1, width-2-len("Thinking: ")), renderer)
+		plainMarkdown := ansi.Strip(renderedMarkdown)
+		plainMarkdown = strings.Trim(plainMarkdown, "\r\n")
+		thinkingLines := strings.Split(plainMarkdown, "\n")
+		for len(thinkingLines) > 0 && strings.TrimSpace(thinkingLines[0]) == "" {
+			thinkingLines = thinkingLines[1:]
+		}
+		if len(thinkingLines) == 0 {
+			thinkingLines = []string{""}
+		}
+		muted := lipgloss.NewStyle().Foreground(m.theme.Muted())
+		thinkingPrefix := lipgloss.NewStyle().Foreground(m.theme.Warning()).Render("Thinking: ")
+		lines = make([]string, 0, len(thinkingLines))
+		for i, line := range thinkingLines {
+			line = strings.TrimRight(line, "\r")
+			line = strings.TrimLeft(line, " ")
+			if i == 0 {
+				lines = append(lines, "  "+thinkingPrefix+muted.Render(line))
+				continue
+			}
+			lines = append(lines, "  "+muted.Render(line))
+		}
+		needsNormalize = false
 
 	case *session.ToolCallItem:
-		lines = components.RenderToolCall(v, width, m.theme.Success(), m.theme.Error(), m.theme.Info(), m.theme.Success(), m.theme.Error())
+		toolLines := components.RenderToolCall(v, max(1, width-2), m.theme.Success(), m.theme.Error(), m.theme.Info(), m.theme.Success(), m.theme.Error())
+		lines = prefixedLines(toolLines, "  ")
 
 	case *session.ErrorItem:
-		lines = components.WrapLine("error: "+v.Message, width)
+		lines = prefixedLines(components.WrapLine("error: "+v.Message, max(1, width-2)), "  ")
 
 	default:
 		lines = []string{""}
@@ -1018,7 +1058,9 @@ func (m *model) renderItemLines(item session.Item, width int, renderer *glamour.
 	if len(lines) == 0 {
 		lines = []string{""}
 	}
-	lines = normalizeLinesForWidth(lines, width)
+	if needsNormalize {
+		lines = normalizeLinesForWidth(lines, width)
+	}
 	m.setCachedRenderedItem(item, width, lines)
 	return lines
 }
@@ -1040,11 +1082,29 @@ func normalizeLinesForWidth(lines []string, width int) []string {
 	return out
 }
 
+func prefixedLines(lines []string, prefix string) []string {
+	if len(lines) == 0 {
+		return []string{prefix}
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, prefix+line)
+	}
+	return out
+}
+
+func trimOneLeadingSpace(line string) string {
+	if strings.HasPrefix(line, " ") {
+		return line[1:]
+	}
+	return line
+}
+
 func (m *model) formatSessionForViewport(width int, _ bool) (string, formatPerfStats) {
 	stats := formatPerfStats{}
 	items := m.session.AllItems()
 	if len(items) == 0 {
-		return "hh-cli ready", stats
+		return "", stats
 	}
 	if width <= 0 {
 		return m.formatSessionRaw(), stats
