@@ -2,8 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/liznear/hh/agent"
+	"github.com/liznear/hh/skills"
 	"github.com/liznear/hh/tools"
 )
 
@@ -27,12 +29,37 @@ func newAgentRunner(modelName string, provider agent.Provider, agentName string)
 		return nil, err
 	}
 
+	skillCatalog, err := skills.LoadDefaultCatalog()
+	if err != nil {
+		return nil, err
+	}
+	tools.SetSkillCatalog(skillCatalog)
+	systemPrompt := buildSystemPrompt(agentConfig.SystemPrompt, skillCatalog)
+
 	return agent.NewAgentRunner(
 		modelName,
 		provider,
-		agent.WithSystemPrompt(agentConfig.SystemPrompt),
+		agent.WithSystemPrompt(systemPrompt),
 		agent.WithTools(resolveTools(agentConfig)),
 	), nil
+}
+
+func buildSystemPrompt(base string, skillCatalog skills.Catalog) string {
+	base = strings.TrimSpace(base)
+	if skillCatalog.IsEmpty() {
+		return base
+	}
+
+	skillBlock := strings.TrimSpace(skillCatalog.PromptFrontmatterBlock())
+	if skillBlock == "" {
+		return base
+	}
+
+	if base == "" {
+		return skillBlock
+	}
+
+	return base + "\n\n" + skillBlock
 }
 
 func getAgent(name string) (Agent, error) {

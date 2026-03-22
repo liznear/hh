@@ -310,6 +310,18 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 		}
 		return "TODO", nil
 
+	case "skill":
+		skillName := toolArgString(args, "name", "")
+		if skillName == "" && item.Result != nil {
+			if result, ok := item.Result.Result.(tools.SkillResult); ok {
+				skillName = result.Name
+			}
+		}
+		if skillName == "" {
+			return "Skill", nil
+		}
+		return fmt.Sprintf("Skill %q", skillName), []styledToken{{raw: skillName, style: pathStyle}}
+
 	default:
 		return formatGenericToolCallWidgetBody(item)
 	}

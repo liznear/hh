@@ -54,3 +54,16 @@ func TestFormatToolCallWidgetBody_Write(t *testing.T) {
 		t.Fatalf("body = %q, want %q", body, "Write tmp/file.txt +3")
 	}
 }
+
+func TestFormatToolCallWidgetBody_Skill(t *testing.T) {
+	item := &session.ToolCallItem{
+		Name:      "skill",
+		Status:    session.ToolCallStatusPending,
+		Arguments: `{"name":"cleanup"}`,
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80}, DefaultTheme())
+	if body != `Skill "cleanup"` {
+		t.Fatalf("body = %q, want %q", body, `Skill "cleanup"`)
+	}
+}

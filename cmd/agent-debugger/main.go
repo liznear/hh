@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/liznear/hh/agent"
 	"github.com/liznear/hh/provider"
+	"github.com/liznear/hh/skills"
 	"github.com/liznear/hh/tools"
 )
 
@@ -31,7 +33,15 @@ func main() {
 		os.Exit(2)
 	}
 
-	runner := agent.NewAgentRunner(*model, p, agent.WithTools(tools.AllTools()))
+	skillCatalog, err := skills.LoadDefaultCatalog()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load skills: %v\n", err)
+		os.Exit(1)
+	}
+	tools.SetSkillCatalog(skillCatalog)
+	systemPrompt := strings.TrimSpace(skillCatalog.PromptFrontmatterBlock())
+
+	runner := agent.NewAgentRunner(*model, p, agent.WithTools(tools.AllTools()), agent.WithSystemPrompt(systemPrompt))
 
 	var finalMessages []agent.Message
 	if err := runner.Run(context.Background(), agent.Input{Content: *prompt, Type: "text"}, func(e agent.Event) {
