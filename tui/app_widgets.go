@@ -74,7 +74,7 @@ func (m *model) renderAssistantMessageWidget(item *session.AssistantMessage, wid
 }
 
 func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int, renderer *glamour.TermRenderer) []string {
-	renderedMarkdown, _ := m.renderMarkdown(item.Content, max(1, width-2-len("Thinking: ")), renderer)
+	renderedMarkdown, _ := m.renderMarkdown(item.Content, max(1, width-2), renderer)
 	plainMarkdown := ansi.Strip(renderedMarkdown)
 	plainMarkdown = strings.Trim(plainMarkdown, "\r\n")
 	thinkingLines := strings.Split(plainMarkdown, "\n")
@@ -85,15 +85,10 @@ func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int, ren
 		thinkingLines = []string{""}
 	}
 	muted := lipgloss.NewStyle().Foreground(m.theme.Muted())
-	thinkingPrefix := lipgloss.NewStyle().Foreground(m.theme.Warning()).Render("Thinking: ")
 	lines := make([]string, 0, len(thinkingLines))
-	for i, line := range thinkingLines {
+	for _, line := range thinkingLines {
 		line = strings.TrimRight(line, "\r")
 		line = strings.TrimLeft(line, " ")
-		if i == 0 {
-			lines = append(lines, "  "+thinkingPrefix+muted.Render(line))
-			continue
-		}
 		lines = append(lines, "  "+muted.Render(line))
 	}
 	return lines
