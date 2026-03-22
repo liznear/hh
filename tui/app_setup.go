@@ -14,9 +14,9 @@ func newTextareaInput() textarea.Model {
 	in.Prompt = ""
 	in.SetPromptFunc(2, func(info textarea.PromptInfo) string {
 		if info.LineNumber == 0 {
-			return "> "
+			return " > "
 		}
-		return "  "
+		return ":: "
 	})
 	in.Placeholder = ""
 	in.ShowLineNumbers = false
