@@ -1,0 +1,159 @@
+package tui
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/liznear/hh/agent"
+	"github.com/liznear/hh/tui/session"
+)
+
+func (m *model) handleAgentEvent(e agent.Event) {
+	switch e.Type {
+	case agent.EventTypeThinkingDelta:
+		if data, ok := e.Data.(agent.EventDataThinkingDelta); ok {
+			m.appendThinkingDelta(data.Delta)
+		}
+	case agent.EventTypeMessageDelta:
+		data, ok := e.Data.(agent.EventDataMessageDelta)
+		if !ok {
+			return
+		}
+		m.appendMessageDelta(data.Delta)
+
+	case agent.EventTypeToolCallStart:
+		if data, ok := e.Data.(agent.EventDataToolCallStart); ok {
+			m.addToolCall(data.Call)
+		}
+	case agent.EventTypeToolCallEnd:
+		if data, ok := e.Data.(agent.EventDataToolCallEnd); ok {
+			m.completeToolCall(data.Call, data.Result)
+		}
+	case agent.EventTypeError:
+		switch data := e.Data.(type) {
+		case error:
+			m.addItem(&session.ErrorItem{Message: data.Error()})
+		case agent.EventDataError:
+			if data.Err != nil {
+				m.addItem(&session.ErrorItem{Message: data.Err.Error()})
+			}
+		default:
+			m.addItem(&session.ErrorItem{Message: "unknown error"})
+		}
+	}
+}
+
+func (m *model) appendThinkingDelta(delta string) {
+	if delta == "" {
+		return
+	}
+	last := m.session.LastItem()
+	if thinking, ok := last.(*session.ThinkingBlock); ok {
+		thinking.Append(delta)
+		m.persistMeta()
+		return
+	}
+	m.addItem(&session.ThinkingBlock{Content: delta})
+}
+
+func (m *model) appendMessageDelta(delta string) {
+	if delta == "" {
+		return
+	}
+	last := m.session.LastItem()
+	if _, ok := last.(*session.ThinkingBlock); ok {
+		items := m.session.CurrentTurnItems()
+		for i := len(items) - 2; i >= 0; i-- {
+			if msg, ok := items[i].(*session.AssistantMessage); ok {
+				msg.Append(delta)
+				m.persistMeta()
+				return
+			}
+			break
+		}
+	}
+	if msg, ok := last.(*session.AssistantMessage); ok {
+		msg.Append(delta)
+		m.persistMeta()
+		return
+	}
+	m.addItem(&session.AssistantMessage{Content: delta})
+}
+
+func (m *model) addToolCall(call agent.ToolCall) {
+	key := toolCallKey(call)
+	item := &session.ToolCallItem{
+		ID:        call.ID,
+		Name:      call.Name,
+		Arguments: call.Arguments,
+		Status:    session.ToolCallStatusPending,
+	}
+	m.toolCalls[key] = item
+	m.addItem(item)
+}
+
+func (m *model) completeToolCall(call agent.ToolCall, result agent.ToolResult) {
+	key := toolCallKey(call)
+	if item, ok := m.toolCalls[key]; ok {
+		item.Complete(result)
+		m.persistItem(m.turnNumber(m.session.CurrentTurn()), item)
+		m.persistMeta()
+		delete(m.toolCalls, key)
+		return
+	}
+
+	item := &session.ToolCallItem{
+		ID:        call.ID,
+		Name:      call.Name,
+		Arguments: call.Arguments,
+	}
+	item.Complete(result)
+	m.addItem(item)
+}
+
+func (m *model) addItem(item session.Item) {
+	m.session.AddItem(item)
+	m.persistState()
+}
+
+func (m *model) addItemToTurn(turn *session.Turn, item session.Item) {
+	if turn == nil {
+		return
+	}
+	turn.AddItem(item)
+	m.persistState()
+}
+
+func (m *model) persistTurnStart(_ *session.Turn) {
+	m.persistState()
+}
+
+func (m *model) persistTurnEnd(_ *session.Turn) {
+	m.persistState()
+}
+
+func (m *model) persistMeta() {
+	m.persistState()
+}
+
+func (m *model) persistItem(_ int, _ session.Item) {
+	m.persistState()
+}
+
+func (m *model) turnNumber(turn *session.Turn) int {
+	for i, t := range m.session.Turns {
+		if t == turn {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func (m *model) persistState() {
+	if m.storage == nil {
+		return
+	}
+	if err := m.storage.Save(m.session); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to persist session: %v\n", err)
+	}
+}

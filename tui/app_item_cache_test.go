@@ -17,7 +17,7 @@ func TestFormatSessionForViewport_ReusesAndUpdatesItemRenderCache(t *testing.T) 
 	msg := &session.UserMessage{Content: "hello"}
 	m.session.AddItem(msg)
 
-	first, _ := m.formatSessionForViewport(30, false)
+	first := m.renderMessageList(30, 5)
 	if !strings.Contains(first, "hello") {
 		t.Fatalf("expected first render to include initial message, got %q", first)
 	}
@@ -25,7 +25,7 @@ func TestFormatSessionForViewport_ReusesAndUpdatesItemRenderCache(t *testing.T) 
 		t.Fatalf("expected 1 cached item after first render, got %d", got)
 	}
 
-	second, _ := m.formatSessionForViewport(30, false)
+	second := m.renderMessageList(30, 5)
 	if second != first {
 		t.Fatalf("expected second render to match first render, got %q vs %q", second, first)
 	}
@@ -34,7 +34,7 @@ func TestFormatSessionForViewport_ReusesAndUpdatesItemRenderCache(t *testing.T) 
 	}
 
 	msg.Content = "updated"
-	third, _ := m.formatSessionForViewport(30, false)
+	third := m.renderMessageList(30, 5)
 	if !strings.Contains(third, "updated") {
 		t.Fatalf("expected updated render content, got %q", third)
 	}

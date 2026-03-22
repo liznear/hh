@@ -1,0 +1,361 @@
+package tui
+
+import (
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/liznear/hh/tui/session"
+)
+
+func (m *model) syncLayout() {
+	layout := m.computeLayout(m.width, m.height)
+	m.syncLayoutWith(layout)
+}
+
+func (m *model) syncLayoutWith(layout layoutState) {
+	if !layout.valid {
+		return
+	}
+
+	wasAtBottom := m.isListAtBottom(m.messageWidth, m.messageHeight)
+	m.messageWidth = layout.mainWidth
+	m.messageHeight = layout.messageHeight
+	if m.autoScroll || wasAtBottom {
+		m.scrollListToBottom(m.messageWidth, m.messageHeight)
+	} else {
+		m.clampListOffset(m.messageWidth, m.messageHeight)
+	}
+	m.input.SetWidth(layout.inputTextWidth)
+	m.input.SetHeight(inputInnerLines)
+}
+
+func (m *model) refreshViewport() {
+	if m.messageWidth <= 0 || m.messageHeight <= 0 {
+		return
+	}
+	if m.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight) {
+		m.scrollListToBottom(m.messageWidth, m.messageHeight)
+		m.autoScroll = true
+		return
+	}
+	m.clampListOffset(m.messageWidth, m.messageHeight)
+}
+
+func (m *model) renderMessageList(width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	items := m.session.AllItems()
+	if len(items) == 0 {
+		return ""
+	}
+
+	m.clampListOffset(width, height)
+	renderer := m.getMarkdownRenderer(width)
+
+	visible := make([]string, 0, height)
+	idx := m.listOffsetIdx
+	offset := m.listOffsetLine
+
+	for len(visible) < height && idx < len(items) {
+		lines := m.renderItemLines(items[idx], width, renderer)
+		if len(lines) == 0 {
+			lines = []string{""}
+		}
+		if offset < len(lines) {
+			visible = append(visible, lines[offset:]...)
+		}
+		idx++
+		offset = 0
+	}
+
+	if len(visible) > height {
+		visible = visible[:height]
+	}
+
+	for len(visible) < height {
+		visible = append(visible, "")
+	}
+
+	return strings.Join(visible, "\n")
+}
+
+func (m *model) handleScrollKey(msg tea.KeyPressMsg) (bool, int) {
+	if m.messageWidth <= 0 || m.messageHeight <= 0 {
+		return false, 0
+	}
+
+	lines := 0
+	moveToTop := false
+	moveToBottom := false
+
+	switch msg.String() {
+	case "up":
+		lines = -1
+	case "down":
+		lines = 1
+	case "pgup":
+		lines = -max(1, m.messageHeight-1)
+	case "pgdown":
+		lines = max(1, m.messageHeight-1)
+	case "ctrl+u":
+		lines = -max(1, m.messageHeight/2)
+	case "ctrl+d":
+		lines = max(1, m.messageHeight/2)
+	case "home":
+		moveToTop = true
+	case "end":
+		moveToBottom = true
+	default:
+		return false, 0
+	}
+
+	before := m.currentListOffset(m.messageWidth)
+	if moveToTop {
+		m.listOffsetIdx = 0
+		m.listOffsetLine = 0
+	} else if moveToBottom {
+		m.scrollListToBottom(m.messageWidth, m.messageHeight)
+	} else {
+		m.scrollListBy(lines, m.messageWidth, m.messageHeight)
+	}
+	after := m.currentListOffset(m.messageWidth)
+
+	if before == after {
+		return false, 0
+	}
+	return true, after - before
+}
+
+func (m *model) handleMouseWheelScroll(msg tea.MouseWheelMsg) int {
+	if m.messageWidth <= 0 || m.messageHeight <= 0 {
+		return 0
+	}
+
+	const wheelStep = 3
+	before := m.currentListOffset(m.messageWidth)
+
+	switch msg.Mouse().Button {
+	case tea.MouseWheelUp:
+		m.scrollListBy(-wheelStep, m.messageWidth, m.messageHeight)
+	case tea.MouseWheelDown:
+		m.scrollListBy(wheelStep, m.messageWidth, m.messageHeight)
+	default:
+		s := msg.String()
+		if strings.Contains(s, "wheelup") {
+			m.scrollListBy(-wheelStep, m.messageWidth, m.messageHeight)
+		} else if strings.Contains(s, "wheeldown") {
+			m.scrollListBy(wheelStep, m.messageWidth, m.messageHeight)
+		}
+	}
+
+	after := m.currentListOffset(m.messageWidth)
+	return after - before
+}
+
+func (m *model) isListAtBottom(width, height int) bool {
+	items := m.session.AllItems()
+	if len(items) == 0 || width <= 0 || height <= 0 {
+		return true
+	}
+	renderer := m.getMarkdownRenderer(width)
+	total := 0
+	for i := m.listOffsetIdx; i < len(items); i++ {
+		total += len(m.renderItemLines(items[i], width, renderer))
+		if total > height+m.listOffsetLine {
+			return false
+		}
+	}
+	return total-m.listOffsetLine <= height
+}
+
+func (m *model) clampListOffset(width, height int) {
+	items := m.session.AllItems()
+	if len(items) == 0 {
+		m.listOffsetIdx = 0
+		m.listOffsetLine = 0
+		return
+	}
+	if m.listOffsetIdx < 0 {
+		m.listOffsetIdx = 0
+	}
+	if m.listOffsetIdx >= len(items) {
+		m.listOffsetIdx = len(items) - 1
+		m.listOffsetLine = 0
+	}
+	lastIdx, lastLine := m.lastListOffset(width, height)
+	if m.listOffsetIdx > lastIdx || (m.listOffsetIdx == lastIdx && m.listOffsetLine > lastLine) {
+		m.listOffsetIdx = lastIdx
+		m.listOffsetLine = lastLine
+	}
+	if m.listOffsetLine < 0 {
+		m.listOffsetLine = 0
+	}
+}
+
+func (m *model) scrollListToBottom(width, height int) {
+	idx, line := m.lastListOffset(width, height)
+	m.listOffsetIdx = idx
+	m.listOffsetLine = line
+}
+
+func (m *model) lastListOffset(width, height int) (int, int) {
+	items := m.session.AllItems()
+	if len(items) == 0 {
+		return 0, 0
+	}
+	renderer := m.getMarkdownRenderer(width)
+	total := 0
+	idx := len(items) - 1
+	for ; idx >= 0; idx-- {
+		total += len(m.renderItemLines(items[idx], width, renderer))
+		if total > height {
+			break
+		}
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	lineOffset := max(total-height, 0)
+	return idx, lineOffset
+}
+
+func (m *model) scrollListBy(lines, width, height int) {
+	if lines == 0 {
+		return
+	}
+	items := m.session.AllItems()
+	if len(items) == 0 {
+		return
+	}
+	renderer := m.getMarkdownRenderer(width)
+	if lines > 0 {
+		m.listOffsetLine += lines
+		for m.listOffsetIdx < len(items) {
+			itemHeight := len(m.renderItemLines(items[m.listOffsetIdx], width, renderer))
+			if itemHeight <= 0 {
+				itemHeight = 1
+			}
+			if m.listOffsetLine < itemHeight {
+				break
+			}
+			m.listOffsetLine -= itemHeight
+			m.listOffsetIdx++
+			if m.listOffsetIdx >= len(items) {
+				m.scrollListToBottom(width, height)
+				return
+			}
+		}
+		lastIdx, lastLine := m.lastListOffset(width, height)
+		if m.listOffsetIdx > lastIdx || (m.listOffsetIdx == lastIdx && m.listOffsetLine > lastLine) {
+			m.listOffsetIdx = lastIdx
+			m.listOffsetLine = lastLine
+		}
+		return
+	}
+
+	m.listOffsetLine += lines
+	for m.listOffsetLine < 0 {
+		m.listOffsetIdx--
+		if m.listOffsetIdx < 0 {
+			m.listOffsetIdx = 0
+			m.listOffsetLine = 0
+			return
+		}
+		itemHeight := len(m.renderItemLines(items[m.listOffsetIdx], width, renderer))
+		if itemHeight <= 0 {
+			itemHeight = 1
+		}
+		m.listOffsetLine += itemHeight
+	}
+}
+
+func (m *model) currentListOffset(width int) int {
+	items := m.session.AllItems()
+	if len(items) == 0 || width <= 0 {
+		return 0
+	}
+	renderer := m.getMarkdownRenderer(width)
+	offset := 0
+	maxIdx := min(m.listOffsetIdx, len(items))
+	for i := 0; i < maxIdx; i++ {
+		offset += len(m.renderItemLines(items[i], width, renderer))
+	}
+	offset += m.listOffsetLine
+	return offset
+}
+
+func (m *model) renderItemLines(item session.Item, width int, renderer *glamour.TermRenderer) []string {
+	if cached, ok := m.getCachedRenderedItem(item, width); ok {
+		return cached
+	}
+
+	var lines []string
+	needsNormalize := true
+	switch v := item.(type) {
+	case *session.UserMessage:
+		lines = m.renderUserMessageWidget(v, width)
+
+	case *session.AssistantMessage:
+		lines = m.renderAssistantMessageWidget(v, width, renderer)
+
+	case *session.ThinkingBlock:
+		lines = m.renderThinkingWidget(v, width, renderer)
+		needsNormalize = false
+
+	case *session.ToolCallItem:
+		lines = m.renderToolCallWidget(v, width)
+
+	case *session.ErrorItem:
+		lines = m.renderErrorWidget(v, width)
+
+	default:
+		lines = []string{""}
+	}
+
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	if needsNormalize {
+		lines = normalizeLinesForWidth(lines, width)
+	}
+	m.setCachedRenderedItem(item, width, lines)
+	return lines
+}
+
+func normalizeLinesForWidth(lines []string, width int) []string {
+	if width <= 0 || len(lines) == 0 {
+		return lines
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		wrapped := ansi.Hardwrap(line, width, true)
+		parts := strings.Split(wrapped, "\n")
+		if len(parts) == 0 {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, parts...)
+	}
+	return out
+}
+
+func prefixedLines(lines []string, prefix string) []string {
+	if len(lines) == 0 {
+		return []string{prefix}
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, prefix+line)
+	}
+	return out
+}
+
+func trimOneLeadingSpace(line string) string {
+	if strings.HasPrefix(line, " ") {
+		return line[1:]
+	}
+	return line
+}

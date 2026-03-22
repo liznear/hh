@@ -1,0 +1,58 @@
+package tui
+
+import (
+	"fmt"
+	"os"
+
+	"charm.land/bubbles/v2/textarea"
+	"github.com/liznear/hh/tui/session"
+)
+
+func newTextareaInput() textarea.Model {
+	in := textarea.New()
+	in.Prompt = ""
+	in.Placeholder = "Type a prompt (Enter to send, Shift+Enter for newline)"
+	in.ShowLineNumbers = false
+	in.SetHeight(inputInnerLines)
+
+	styles := textarea.DefaultStyles(false)
+	styles.Focused.Base = styles.Focused.Base.UnsetBackground()
+	styles.Focused.Text = styles.Focused.Text.UnsetBackground()
+	styles.Focused.CursorLine = styles.Focused.CursorLine.UnsetBackground()
+	styles.Focused.Placeholder = styles.Focused.Placeholder.UnsetBackground()
+	styles.Focused.Prompt = styles.Focused.Prompt.UnsetBackground()
+	styles.Focused.EndOfBuffer = styles.Focused.EndOfBuffer.UnsetBackground()
+	styles.Blurred.Base = styles.Blurred.Base.UnsetBackground()
+	styles.Blurred.Text = styles.Blurred.Text.UnsetBackground()
+	styles.Blurred.CursorLine = styles.Blurred.CursorLine.UnsetBackground()
+	styles.Blurred.Placeholder = styles.Blurred.Placeholder.UnsetBackground()
+	styles.Blurred.Prompt = styles.Blurred.Prompt.UnsetBackground()
+	styles.Blurred.EndOfBuffer = styles.Blurred.EndOfBuffer.UnsetBackground()
+	in.SetStyles(styles)
+	in.Focus()
+
+	return in
+}
+
+func newSessionStorage(state *session.State) *session.Storage {
+	if state == nil {
+		return nil
+	}
+	dir, err := session.DefaultStorageDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve session storage directory: %v\n", err)
+		return nil
+	}
+
+	store, err := session.NewStorage(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize session storage: %v\n", err)
+		return nil
+	}
+
+	if err := store.SaveMeta(state); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to save session metadata: %v\n", err)
+	}
+
+	return store
+}
