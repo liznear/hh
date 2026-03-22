@@ -304,6 +304,16 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 		}
 		return body, tokens
 
+	case "bash":
+		command := toolArgString(args, "command", "")
+		if command == "" {
+			return "Bash", nil
+		}
+		commandMaxLen := min(50, vm.Width-20)
+		displayCommand := truncateToolCommand(command, commandMaxLen)
+		body := fmt.Sprintf("Bash %q", displayCommand)
+		return body, []styledToken{{raw: displayCommand, style: pathStyle}}
+
 	case "todo_write":
 		done, total, ok := todoProgress(item, args)
 		if ok {
@@ -497,6 +507,23 @@ func formatGenericToolCallWidgetBody(item *session.ToolCallItem) (string, []styl
 	}
 
 	return fmt.Sprintf("%s %s", item.Name, args), nil
+}
+
+func truncateToolCommand(command string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+
+	runes := []rune(command)
+	if len(runes) <= maxLen {
+		return command
+	}
+
+	if maxLen <= 3 {
+		return strings.Repeat(".", maxLen)
+	}
+
+	return string(runes[:maxLen-3]) + "..."
 }
 
 func (m *model) renderErrorWidget(item *session.ErrorItem, width int) []string {

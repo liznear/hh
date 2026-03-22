@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/liznear/hh/tools"
@@ -78,5 +80,50 @@ func TestFormatToolCallWidgetBody_Skill(t *testing.T) {
 	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80}, DefaultTheme())
 	if body != `Skill "cleanup"` {
 		t.Fatalf("body = %q, want %q", body, `Skill "cleanup"`)
+	}
+}
+
+func TestFormatToolCallWidgetBody_Bash(t *testing.T) {
+	item := &session.ToolCallItem{
+		Name:      "bash",
+		Status:    session.ToolCallStatusPending,
+		Arguments: `{"command":"ls -la"}`,
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80}, DefaultTheme())
+	if body != `Bash "ls -la"` {
+		t.Fatalf("body = %q, want %q", body, `Bash "ls -la"`)
+	}
+}
+
+func TestFormatToolCallWidgetBody_BashTruncatesLongCommand(t *testing.T) {
+	command := strings.Repeat("x", 81)
+	item := &session.ToolCallItem{
+		Name:      "bash",
+		Status:    session.ToolCallStatusPending,
+		Arguments: fmt.Sprintf(`{"command":%q}`, command),
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80}, DefaultTheme())
+	wantCommand := strings.Repeat("x", 47) + "..."
+	want := fmt.Sprintf(`Bash %q`, wantCommand)
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
+func TestFormatToolCallWidgetBody_BashTruncatesByWidth(t *testing.T) {
+	command := strings.Repeat("x", 30)
+	item := &session.ToolCallItem{
+		Name:      "bash",
+		Status:    session.ToolCallStatusPending,
+		Arguments: fmt.Sprintf(`{"command":%q}`, command),
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 30}, DefaultTheme())
+	wantCommand := strings.Repeat("x", 7) + "..."
+	want := fmt.Sprintf(`Bash %q`, wantCommand)
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
 	}
 }
