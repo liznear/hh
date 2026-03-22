@@ -23,7 +23,7 @@ func (m *model) syncLayoutWith(layout layoutState) {
 	wasAtBottom := m.isListAtBottom(m.messageWidth, m.messageHeight)
 	m.messageWidth = layout.mainWidth
 	m.messageHeight = layout.messageHeight
-	if m.autoScroll || wasAtBottom {
+	if m.runtime.autoScroll || wasAtBottom {
 		m.scrollListToBottom(m.messageWidth, m.messageHeight)
 	} else {
 		m.clampListOffset(m.messageWidth, m.messageHeight)
@@ -36,9 +36,9 @@ func (m *model) refreshViewport() {
 	if m.messageWidth <= 0 || m.messageHeight <= 0 {
 		return
 	}
-	if m.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight) {
+	if m.runtime.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight) {
 		m.scrollListToBottom(m.messageWidth, m.messageHeight)
-		m.autoScroll = true
+		m.runtime.autoScroll = true
 		return
 	}
 	m.clampListOffset(m.messageWidth, m.messageHeight)

@@ -18,21 +18,21 @@ type frameViewModel struct {
 
 func (m *model) View() tea.View {
 	start := time.Now()
-	scrollPaintPending := !m.pendingScrollAt.IsZero()
-	pendingScrollAt := m.pendingScrollAt
-	pendingScrollEvents := m.pendingScrollEvents
+	scrollPaintPending := !m.runtime.pendingScrollAt.IsZero()
+	pendingScrollAt := m.runtime.pendingScrollAt
+	pendingScrollEvents := m.runtime.pendingScrollEvents
 	defer func() {
-		m.lastRenderLatency = time.Since(start)
-		if m.debug {
-			m.maxRenderLatency = maxDuration(m.maxRenderLatency, m.lastRenderLatency)
+		m.runtime.lastRenderLatency = time.Since(start)
+		if m.runtime.debug {
+			m.runtime.maxRenderLatency = maxDuration(m.runtime.maxRenderLatency, m.runtime.lastRenderLatency)
 		}
 	}()
 
-	if m.debug && scrollPaintPending {
-		m.lastScrollStats.inputToViewStart = time.Since(pendingScrollAt)
-		m.lastScrollStats.coalescedEvents = pendingScrollEvents
-		m.maxScrollStats.inputToViewStart = maxDuration(m.maxScrollStats.inputToViewStart, m.lastScrollStats.inputToViewStart)
-		m.maxScrollStats.coalescedEvents = maxInt(m.maxScrollStats.coalescedEvents, pendingScrollEvents)
+	if m.runtime.debug && scrollPaintPending {
+		m.runtime.lastScrollStats.inputToViewStart = time.Since(pendingScrollAt)
+		m.runtime.lastScrollStats.coalescedEvents = pendingScrollEvents
+		m.runtime.maxScrollStats.inputToViewStart = maxDuration(m.runtime.maxScrollStats.inputToViewStart, m.runtime.lastScrollStats.inputToViewStart)
+		m.runtime.maxScrollStats.coalescedEvents = maxInt(m.runtime.maxScrollStats.coalescedEvents, pendingScrollEvents)
 	}
 
 	layout := m.computeLayout(m.width, m.height)
@@ -43,21 +43,21 @@ func (m *model) View() tea.View {
 
 	vm := m.buildFrameViewModel(layout)
 	content := m.renderFrame(vm)
-	if m.debug {
-		m.lastFrameBytes = len(content)
-		m.maxFrameBytes = maxInt(m.maxFrameBytes, m.lastFrameBytes)
+	if m.runtime.debug {
+		m.runtime.lastFrameBytes = len(content)
+		m.runtime.maxFrameBytes = maxInt(m.runtime.maxFrameBytes, m.runtime.lastFrameBytes)
 	}
 
 	v := m.newAppView(content)
-	if m.debug && scrollPaintPending {
-		m.lastScrollStats.inputToViewDone = time.Since(pendingScrollAt)
-		m.maxScrollStats.inputToViewDone = maxDuration(m.maxScrollStats.inputToViewDone, m.lastScrollStats.inputToViewDone)
+	if m.runtime.debug && scrollPaintPending {
+		m.runtime.lastScrollStats.inputToViewDone = time.Since(pendingScrollAt)
+		m.runtime.maxScrollStats.inputToViewDone = maxDuration(m.runtime.maxScrollStats.inputToViewDone, m.runtime.lastScrollStats.inputToViewDone)
 	}
 	if scrollPaintPending {
-		m.pendingScrollAt = time.Time{}
-		m.pendingScrollEvents = 0
+		m.runtime.pendingScrollAt = time.Time{}
+		m.runtime.pendingScrollEvents = 0
 	}
-	m.lastViewDoneAt = time.Now()
+	m.runtime.lastViewDoneAt = time.Now()
 	return v
 }
 
@@ -66,11 +66,11 @@ func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
 		layout:      layout,
 		messageList: m.renderMessageList(layout.mainWidth, layout.messageHeight),
 		status: statusWidgetModel{
-			Busy:          m.busy,
-			ShowRunResult: m.showRunResult,
+			Busy:          m.runtime.busy,
+			ShowRunResult: m.runtime.showRunResult,
 			SpinnerView:   m.spinner.View(),
 			Elapsed:       m.stopwatch.Elapsed(),
-			EscPending:    m.escPending,
+			EscPending:    m.runtime.escPending,
 		},
 		sidebarLines: m.buildSidebarLines(),
 	}
@@ -130,24 +130,24 @@ func (m *model) buildSidebarLines() []string {
 	sidebarLines := []string{
 		"Session",
 		fmt.Sprintf("Model: %s", m.modelName),
-		fmt.Sprintf("Status: %s", ternary(m.busy, "running", "idle")),
+		fmt.Sprintf("Status: %s", ternary(m.runtime.busy, "running", "idle")),
 		fmt.Sprintf("Turns: %d", len(m.session.Turns)),
 		fmt.Sprintf("Items: %d", m.session.ItemCount()),
 	}
-	if !m.debug {
+	if !m.runtime.debug {
 		return sidebarLines
 	}
 
 	return append(sidebarLines,
 		"",
 		"Debug",
-		fmt.Sprintf("Render: %s (max %s)", formatDuration(m.lastRenderLatency), formatDuration(m.maxRenderLatency)),
-		fmt.Sprintf("Scroll[%s]: %s (max %s, dy=%d)", m.lastScrollStats.inputType, formatDuration(m.lastScrollStats.viewportUpdate), formatDuration(m.maxScrollStats.viewportUpdate), m.lastScrollStats.deltaRows),
-		fmt.Sprintf("Scroll gap/view: %s / %s", formatDuration(m.lastScrollStats.updateGap), formatDuration(m.lastScrollStats.timeSinceView)),
-		fmt.Sprintf("Scroll gap/view max: %s / %s", formatDuration(m.maxScrollStats.updateGap), formatDuration(m.maxScrollStats.timeSinceView)),
-		fmt.Sprintf("Scroll->View: %s / %s", formatDuration(m.lastScrollStats.inputToViewStart), formatDuration(m.lastScrollStats.inputToViewDone)),
-		fmt.Sprintf("Scroll->View max: %s / %s (events max %d)", formatDuration(m.maxScrollStats.inputToViewStart), formatDuration(m.maxScrollStats.inputToViewDone), m.maxScrollStats.coalescedEvents),
-		fmt.Sprintf("Frame bytes: %d (max %d)", m.lastFrameBytes, m.maxFrameBytes),
+		fmt.Sprintf("Render: %s (max %s)", formatDuration(m.runtime.lastRenderLatency), formatDuration(m.runtime.maxRenderLatency)),
+		fmt.Sprintf("Scroll[%s]: %s (max %s, dy=%d)", m.runtime.lastScrollStats.inputType, formatDuration(m.runtime.lastScrollStats.viewportUpdate), formatDuration(m.runtime.maxScrollStats.viewportUpdate), m.runtime.lastScrollStats.deltaRows),
+		fmt.Sprintf("Scroll gap/view: %s / %s", formatDuration(m.runtime.lastScrollStats.updateGap), formatDuration(m.runtime.lastScrollStats.timeSinceView)),
+		fmt.Sprintf("Scroll gap/view max: %s / %s", formatDuration(m.runtime.maxScrollStats.updateGap), formatDuration(m.runtime.maxScrollStats.timeSinceView)),
+		fmt.Sprintf("Scroll->View: %s / %s", formatDuration(m.runtime.lastScrollStats.inputToViewStart), formatDuration(m.runtime.lastScrollStats.inputToViewDone)),
+		fmt.Sprintf("Scroll->View max: %s / %s (events max %d)", formatDuration(m.runtime.maxScrollStats.inputToViewStart), formatDuration(m.runtime.maxScrollStats.inputToViewDone), m.runtime.maxScrollStats.coalescedEvents),
+		fmt.Sprintf("Frame bytes: %d (max %d)", m.runtime.lastFrameBytes, m.runtime.maxFrameBytes),
 	)
 }
 

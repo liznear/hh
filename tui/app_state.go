@@ -34,13 +34,13 @@ func (m *model) handleAgentEvent(e agent.Event) {
 	case agent.EventTypeError:
 		switch data := e.Data.(type) {
 		case error:
-			if errors.Is(data, context.Canceled) && m.cancelledRun {
+			if errors.Is(data, context.Canceled) && m.runtime.cancelledRun {
 				return
 			}
 			m.addItem(&session.ErrorItem{Message: data.Error()})
 		case agent.EventDataError:
 			if data.Err != nil {
-				if errors.Is(data.Err, context.Canceled) && m.cancelledRun {
+				if errors.Is(data.Err, context.Canceled) && m.runtime.cancelledRun {
 					return
 				}
 				m.addItem(&session.ErrorItem{Message: data.Err.Error()})

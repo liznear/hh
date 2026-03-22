@@ -34,11 +34,13 @@ func TestUpdate_EscTwiceCancelsBusyRun(t *testing.T) {
 		toolCalls:       map[string]*session.ToolCallItem{},
 		markdownCache:   map[string]string{},
 		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-		busy:            true,
+		runtime: RuntimeState{
+			busy: true,
+		},
 	}
 
 	cancelCalled := false
-	m.runCancel = func() {
+	m.runtime.runCancel = func() {
 		cancelCalled = true
 	}
 
@@ -46,10 +48,10 @@ func TestUpdate_EscTwiceCancelsBusyRun(t *testing.T) {
 
 	updated, _ := m.Update(esc)
 	m1 := updated.(*model)
-	if !m1.escPending {
+	if !m1.runtime.escPending {
 		t.Fatal("expected first Esc to set escPending")
 	}
-	if m1.cancelledRun {
+	if m1.runtime.cancelledRun {
 		t.Fatal("expected first Esc to not mark run as cancelled")
 	}
 	if cancelCalled {
@@ -58,10 +60,10 @@ func TestUpdate_EscTwiceCancelsBusyRun(t *testing.T) {
 
 	updated, _ = m1.Update(esc)
 	m2 := updated.(*model)
-	if m2.escPending {
+	if m2.runtime.escPending {
 		t.Fatal("expected second Esc to clear escPending")
 	}
-	if !m2.cancelledRun {
+	if !m2.runtime.cancelledRun {
 		t.Fatal("expected second Esc to mark run as cancelled")
 	}
 	if !cancelCalled {

@@ -29,7 +29,23 @@ type model struct {
 	listOffsetIdx  int
 	listOffsetLine int
 
-	stream       <-chan tea.Msg
+	stream  <-chan tea.Msg
+	runtime RuntimeState
+
+	session   *session.State
+	toolCalls map[string]*session.ToolCallItem
+
+	spinner               spinner.Model
+	stopwatch             stopwatch.Model
+	markdownRenderer      *glamour.TermRenderer
+	markdownRendererWidth int
+	markdownCache         map[string]string
+	itemRenderCache       map[uintptr]itemRenderCacheEntry
+}
+
+// RuntimeState holds ephemeral TUI runtime fields that should not be persisted
+// as part of session state.
+type RuntimeState struct {
 	busy         bool
 	autoScroll   bool
 	debug        bool
@@ -37,11 +53,6 @@ type model struct {
 	escPending   bool
 	cancelledRun bool
 
-	session   *session.State
-	toolCalls map[string]*session.ToolCallItem
-
-	spinner              spinner.Model
-	stopwatch            stopwatch.Model
 	showRunResult        bool
 	viewportDirty        bool
 	pendingScrollAt      time.Time
@@ -53,14 +64,10 @@ type model struct {
 	lastRefreshAt        time.Time
 	suppressRefreshUntil time.Time
 
-	lastRenderLatency     time.Duration
-	maxRenderLatency      time.Duration
-	lastScrollStats       scrollPerfStats
-	maxScrollStats        scrollPerfStats
-	markdownRenderer      *glamour.TermRenderer
-	markdownRendererWidth int
-	markdownCache         map[string]string
-	itemRenderCache       map[uintptr]itemRenderCacheEntry
+	lastRenderLatency time.Duration
+	maxRenderLatency  time.Duration
+	lastScrollStats   scrollPerfStats
+	maxScrollStats    scrollPerfStats
 }
 
 type itemRenderCacheEntry struct {
@@ -99,15 +106,17 @@ func newModel(runner *agent.AgentRunner, modelName string) *model {
 	store := newSessionStorage(state)
 
 	return &model{
-		runner:          runner,
-		modelName:       modelName,
-		theme:           theme,
-		storage:         store,
-		input:           in,
-		spinner:         spin,
-		stopwatch:       sw,
-		autoScroll:      true,
-		debug:           isDebugEnabled(),
+		runner:    runner,
+		modelName: modelName,
+		theme:     theme,
+		storage:   store,
+		input:     in,
+		spinner:   spin,
+		stopwatch: sw,
+		runtime: RuntimeState{
+			autoScroll: true,
+			debug:      isDebugEnabled(),
+		},
 		markdownCache:   map[string]string{},
 		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
 		session:         state,
@@ -123,18 +132,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updateStart := time.Now()
 	updateGap := time.Duration(0)
 	timeSinceView := time.Duration(0)
-	if !m.lastUpdateAt.IsZero() {
-		updateGap = updateStart.Sub(m.lastUpdateAt)
+	if !m.runtime.lastUpdateAt.IsZero() {
+		updateGap = updateStart.Sub(m.runtime.lastUpdateAt)
 	}
-	if !m.lastViewDoneAt.IsZero() {
-		timeSinceView = updateStart.Sub(m.lastViewDoneAt)
+	if !m.runtime.lastViewDoneAt.IsZero() {
+		timeSinceView = updateStart.Sub(m.runtime.lastViewDoneAt)
 	}
 	defer func() {
-		m.lastUpdateAt = updateStart
+		m.runtime.lastUpdateAt = updateStart
 	}()
 
 	var spinnerCmd tea.Cmd
-	if m.busy {
+	if m.runtime.busy {
 		m.spinner, spinnerCmd = m.spinner.Update(msg)
 	}
 	var stopwatchCmd tea.Cmd
@@ -162,15 +171,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		key := msg.Key()
-		if key.Code == tea.KeyEscape && m.busy {
-			if m.escPending {
-				if m.runCancel != nil {
-					m.runCancel()
+		if key.Code == tea.KeyEscape && m.runtime.busy {
+			if m.runtime.escPending {
+				if m.runtime.runCancel != nil {
+					m.runtime.runCancel()
 				}
-				m.cancelledRun = true
-				m.escPending = false
+				m.runtime.cancelledRun = true
+				m.runtime.escPending = false
 			} else {
-				m.escPending = true
+				m.runtime.escPending = true
 			}
 			return m, statusCmd
 		}
@@ -181,7 +190,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, statusCmd
 			}
 
-			if m.busy {
+			if m.runtime.busy {
 				return m, statusCmd
 			}
 			prompt := strings.TrimSpace(m.input.Value())
@@ -193,12 +202,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.persistTurnStart(turn)
 			m.addItemToTurn(turn, &session.UserMessage{Content: prompt})
 			m.input.SetValue("")
-			m.busy = true
-			m.escPending = false
-			m.cancelledRun = false
-			m.showRunResult = false
+			m.runtime.busy = true
+			m.runtime.escPending = false
+			m.runtime.cancelledRun = false
+			m.runtime.showRunResult = false
 			runCtx, cancel := context.WithCancel(context.Background())
-			m.runCancel = cancel
+			m.runtime.runCancel = cancel
 			m.refreshViewport()
 
 			return m, tea.Batch(startAgentStreamCmdWithContext(runCtx, m.runner, prompt), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
@@ -210,7 +219,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		}
-		m.escPending = false
+		m.runtime.escPending = false
 
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
@@ -226,11 +235,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, statusCmd
 
 	case spinner.TickMsg:
-		if m.busy && m.hasPendingToolCalls() && (m.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight)) && m.shouldRefreshNow() {
+		if m.runtime.busy && m.hasPendingToolCalls() && (m.runtime.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight)) && m.shouldRefreshNow() {
 			m.refreshViewport()
-			m.lastRefreshAt = time.Now()
-		} else if m.busy && m.hasPendingToolCalls() {
-			m.viewportDirty = true
+			m.runtime.lastRefreshAt = time.Now()
+		} else if m.runtime.busy && m.hasPendingToolCalls() {
+			m.runtime.viewportDirty = true
 		}
 		return m, statusCmd
 
