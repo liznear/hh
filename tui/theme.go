@@ -2,7 +2,30 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-const ShellMessageBackground = "shell_message_background"
+const (
+	ThemeColorShellMessageBackground        = "shell_message_background"
+	ThemeColorStatusSpinnerForeground       = "status_spinner_foreground"
+	ThemeColorStatusDurationForeground      = "status_duration_foreground"
+	ThemeColorStatusInterruptHintForeground = "status_interrupt_hint_foreground"
+	ThemeColorUserMessageBorderForeground   = "user_message_border_foreground"
+	ThemeColorThinkingForeground            = "thinking_foreground"
+	ThemeColorTurnFooterForeground          = "turn_footer_foreground"
+	ThemeColorToolCallIconSuccessForeground = "tool_call_icon_success_foreground"
+	ThemeColorToolCallIconErrorForeground   = "tool_call_icon_error_foreground"
+	ThemeColorToolCallPathForeground        = "tool_call_path_foreground"
+	ThemeColorToolCallAddForeground         = "tool_call_add_foreground"
+	ThemeColorToolCallDeleteForeground      = "tool_call_delete_foreground"
+	ThemeColorInputBorder                   = "input_border"
+	ThemeColorInputPromptDefault            = "input_prompt_default"
+	ThemeColorInputPromptShell              = "input_prompt_shell"
+	ThemeColorSidebarWarningForeground      = "sidebar_warning_foreground"
+	ThemeColorSidebarErrorForeground        = "sidebar_error_foreground"
+	ThemeColorSidebarSuccessForeground      = "sidebar_success_foreground"
+	ThemeColorSidebarSeparatorForeground    = "sidebar_separator_foreground"
+	ThemeColorModelPickerSelectedForeground = "model_picker_selected_foreground"
+	ThemeColorModelPickerMutedForeground    = "model_picker_muted_foreground"
+	ThemeColorModelPickerBorderForeground   = "model_picker_border_foreground"
+)
 
 type Base16Palette struct {
 	Base00 lipgloss.Color
@@ -53,7 +76,28 @@ func NewTheme(palette Base16Palette) Theme {
 	return Theme{
 		palette: palette,
 		usageToBase: map[string]string{
-			ShellMessageBackground: "Base0F",
+			ThemeColorShellMessageBackground:        "Base0F",
+			ThemeColorStatusSpinnerForeground:       "Base0C",
+			ThemeColorStatusDurationForeground:      "Base0C",
+			ThemeColorStatusInterruptHintForeground: "Base08",
+			ThemeColorUserMessageBorderForeground:   "Base0C",
+			ThemeColorThinkingForeground:            "Base08",
+			ThemeColorTurnFooterForeground:          "Base07",
+			ThemeColorToolCallIconSuccessForeground: "Base02",
+			ThemeColorToolCallIconErrorForeground:   "Base01",
+			ThemeColorToolCallPathForeground:        "Base0C",
+			ThemeColorToolCallAddForeground:         "Base02",
+			ThemeColorToolCallDeleteForeground:      "Base01",
+			ThemeColorInputBorder:                   "Base08",
+			ThemeColorInputPromptDefault:            "Base02",
+			ThemeColorInputPromptShell:              "Base0D",
+			ThemeColorSidebarWarningForeground:      "Base09",
+			ThemeColorSidebarErrorForeground:        "Base01",
+			ThemeColorSidebarSuccessForeground:      "Base02",
+			ThemeColorSidebarSeparatorForeground:    "Base07",
+			ThemeColorModelPickerSelectedForeground: "Base00",
+			ThemeColorModelPickerMutedForeground:    "Base08",
+			ThemeColorModelPickerBorderForeground:   "Base0E",
 		},
 	}
 }

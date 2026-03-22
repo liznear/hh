@@ -114,7 +114,7 @@ func (m *model) renderInputPane(layout layoutState, status statusWidgetModel) st
 	inputBox := lipgloss.NewStyle().
 		Width(layout.inputBoxWidth).
 		Border(lipgloss.NormalBorder(), true, false, false, false).
-		BorderForeground(m.theme.Success()).
+		BorderForeground(m.theme.Color(ThemeColorInputBorder)).
 		Height(inputInnerLines).
 		Render(m.input.View())
 
@@ -136,9 +136,9 @@ func (m *model) buildSidebarLines(sidebarWidth int) []string {
 	m.refreshGitSnapshotMaybe()
 
 	bold := lipgloss.NewStyle().Bold(true)
-	warning := lipgloss.NewStyle().Foreground(m.theme.Warning())
-	errorStyle := lipgloss.NewStyle().Foreground(m.theme.Error())
-	success := lipgloss.NewStyle().Foreground(m.theme.Success())
+	warning := lipgloss.NewStyle().Foreground(m.theme.Color(ThemeColorSidebarWarningForeground))
+	errorStyle := lipgloss.NewStyle().Foreground(m.theme.Color(ThemeColorSidebarErrorForeground))
+	success := lipgloss.NewStyle().Foreground(m.theme.Color(ThemeColorSidebarSuccessForeground))
 
 	title := strings.TrimSpace(m.session.Title)
 	if title == "" {
@@ -279,7 +279,7 @@ func (m *model) renderSidebarPane(layout layoutState, sidebarLines []string) str
 }
 
 func (m *model) renderSidebarSeparator(layout layoutState) string {
-	line := " " + lipgloss.NewStyle().Foreground(m.theme.Muted()).Render("│") + " "
+	line := " " + lipgloss.NewStyle().Foreground(m.theme.Color(ThemeColorSidebarSeparatorForeground)).Render("│") + " "
 	sepLines := make([]string, 0, layout.innerHeight)
 	for i := 0; i < layout.innerHeight; i++ {
 		sepLines = append(sepLines, line)

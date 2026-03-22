@@ -118,8 +118,8 @@ func (m *model) renderModelPickerDialog(width, height int) string {
 		selection = len(availableModels) - 1
 	}
 
-	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Info())
-	mutedStyle := lipgloss.NewStyle().Foreground(m.theme.Muted())
+	selectedStyle := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Color(ThemeColorModelPickerSelectedForeground))
+	mutedStyle := lipgloss.NewStyle().Foreground(m.theme.Color(ThemeColorModelPickerMutedForeground))
 	lines := []string{"Pick a model", mutedStyle.Render("Enter to apply  Esc to cancel")}
 
 	maxRows := max(1, height-8)
@@ -152,7 +152,7 @@ func (m *model) renderModelPickerDialog(width, height int) string {
 		Width(boxWidth).
 		Padding(1).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.theme.Info()).
+		BorderForeground(m.theme.Color(ThemeColorModelPickerBorderForeground)).
 		Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, dialog)

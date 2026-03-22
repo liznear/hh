@@ -32,10 +32,10 @@ func parseShellCommand(input string) string {
 func (m *model) setShellMode(enabled bool) {
 	m.runtime.shellMode = enabled
 	if enabled {
-		applyTextareaPromptColor(&m.input, m.theme.Error())
+		applyTextareaPromptColor(&m.input, m.theme.Color(ThemeColorInputPromptShell))
 		return
 	}
-	applyTextareaPromptColor(&m.input, m.theme.Success())
+	applyTextareaPromptColor(&m.input, m.theme.Color(ThemeColorInputPromptDefault))
 }
 
 func (m *model) shellModeActive() bool {

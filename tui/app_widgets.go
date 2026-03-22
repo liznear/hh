@@ -38,17 +38,17 @@ func renderStatusWidget(vm statusWidgetModel, theme Theme) string {
 	}
 
 	if vm.Busy {
-		spinnerView := lipgloss.NewStyle().Foreground(theme.Info()).Render(vm.SpinnerView)
-		durationView := lipgloss.NewStyle().Foreground(theme.Muted()).Render(formatElapsedSeconds(vm.Elapsed))
+		spinnerView := lipgloss.NewStyle().Foreground(theme.Color(ThemeColorStatusSpinnerForeground)).Render(vm.SpinnerView)
+		durationView := lipgloss.NewStyle().Foreground(theme.Color(ThemeColorStatusDurationForeground)).Render(formatElapsedSeconds(vm.Elapsed))
 		hint := ""
 		if vm.EscPending {
-			hint = lipgloss.NewStyle().Foreground(theme.Muted()).Render(" esc again to interrupt")
+			hint = lipgloss.NewStyle().Foreground(theme.Color(ThemeColorStatusInterruptHintForeground)).Render(" esc again to interrupt")
 		}
 		return fmt.Sprintf("%s%s · %s %s%s", padding, base, durationView, spinnerView, hint)
 	}
 
 	if vm.ShowRunResult {
-		durationView := lipgloss.NewStyle().Foreground(theme.Muted()).Render(formatElapsedSeconds(vm.Elapsed))
+		durationView := lipgloss.NewStyle().Foreground(theme.Color(ThemeColorStatusDurationForeground)).Render(formatElapsedSeconds(vm.Elapsed))
 		return fmt.Sprintf("%s%s · %s", padding, base, durationView)
 	}
 
@@ -72,7 +72,7 @@ func (m *model) renderUserMessageWidget(item *session.UserMessage, width int) []
 		Border(lipgloss.NormalBorder(), false).
 		BorderLeft(true).
 		PaddingLeft(1).
-		BorderLeftForeground(m.theme.Accent())
+		BorderLeftForeground(m.theme.Color(ThemeColorUserMessageBorderForeground))
 	lines := make([]string, 0, len(userLines))
 	for _, line := range userLines {
 		lines = append(lines, prefix.Render(line))
@@ -104,7 +104,7 @@ func (m *model) renderShellMessageWidget(item *session.ShellMessage, width int) 
 	}
 
 	box := lipgloss.NewStyle().
-		Background(m.theme.Color(ShellMessageBackground)).
+		Background(m.theme.Color(ThemeColorShellMessageBackground)).
 		Padding(1).
 		MarginLeft(shellBoxLeftMargin).
 		Width(boxWidth).
@@ -140,7 +140,7 @@ func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int, ren
 	if len(thinkingLines) == 0 {
 		thinkingLines = []string{""}
 	}
-	muted := lipgloss.NewStyle().Foreground(m.theme.Muted())
+	muted := lipgloss.NewStyle().Foreground(m.theme.Color(ThemeColorThinkingForeground))
 	lines := make([]string, 0, len(thinkingLines))
 	for _, line := range thinkingLines {
 		line = strings.TrimRight(line, "\r")
@@ -152,7 +152,7 @@ func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int, ren
 
 func (m *model) renderTurnFooterWidget(modelName string, duration time.Duration, status string, width int) []string {
 	bodyWidth := max(1, width-2)
-	muted := lipgloss.NewStyle().Foreground(m.theme.Muted())
+	muted := lipgloss.NewStyle().Foreground(m.theme.Color(ThemeColorTurnFooterForeground))
 
 	statusLabel := ""
 	if strings.EqualFold(status, "cancelled") {
@@ -245,9 +245,9 @@ func renderToolCallIcon(vm toolCallWidgetModel, theme Theme) string {
 	case session.ToolCallStatusPending:
 		return "→"
 	case session.ToolCallStatusSuccess:
-		return lipgloss.NewStyle().Foreground(theme.Success()).Render("✓")
+		return lipgloss.NewStyle().Foreground(theme.Color(ThemeColorToolCallIconSuccessForeground)).Render("✓")
 	default:
-		return lipgloss.NewStyle().Foreground(theme.Error()).Render("⨯")
+		return lipgloss.NewStyle().Foreground(theme.Color(ThemeColorToolCallIconErrorForeground)).Render("⨯")
 	}
 }
 
@@ -259,9 +259,9 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 
 	args := parseToolCallArgs(item.Arguments)
 
-	pathStyle := lipgloss.NewStyle().Foreground(theme.Info())
-	addStyle := lipgloss.NewStyle().Foreground(theme.Success())
-	delStyle := lipgloss.NewStyle().Foreground(theme.Error())
+	pathStyle := lipgloss.NewStyle().Foreground(theme.Color(ThemeColorToolCallPathForeground))
+	addStyle := lipgloss.NewStyle().Foreground(theme.Color(ThemeColorToolCallAddForeground))
+	delStyle := lipgloss.NewStyle().Foreground(theme.Color(ThemeColorToolCallDeleteForeground))
 
 	switch strings.ToLower(item.Name) {
 	case "list", "ls":

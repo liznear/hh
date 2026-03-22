@@ -21,7 +21,7 @@ func newTextareaInput() textarea.Model {
 	in.Placeholder = ""
 	in.ShowLineNumbers = false
 	in.SetHeight(inputInnerLines)
-	applyTextareaPromptColor(&in, lipgloss.Color("2"))
+	applyTextareaPromptColor(&in, DefaultTheme().Color(ThemeColorInputPromptDefault))
 	in.Focus()
 
 	return in
