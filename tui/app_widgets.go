@@ -163,12 +163,13 @@ type styledToken struct {
 }
 
 type toolCallWidgetModel struct {
-	Item  *session.ToolCallItem
-	Width int
+	Item       *session.ToolCallItem
+	Width      int
+	WorkingDir string
 }
 
 func (m *model) renderToolCallWidget(item *session.ToolCallItem, width int) []string {
-	vm := toolCallWidgetModel{Item: item, Width: max(1, width-2)}
+	vm := toolCallWidgetModel{Item: item, Width: max(1, width-2), WorkingDir: m.runtime.workingDir}
 	toolLines := renderToolCallWidget(vm, m.theme)
 	return prefixedLines(toolLines, "  ")
 }
@@ -227,7 +228,7 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 
 	switch strings.ToLower(item.Name) {
 	case "list", "ls":
-		path := toolArgString(args, "path", ".")
+		path := beautifyToolPath(toolArgString(args, "path", "."), vm.WorkingDir)
 		body := fmt.Sprintf("List %s", path)
 		if item.Status == session.ToolCallStatusSuccess {
 			if files, ok := listFileCount(item); ok {
@@ -237,12 +238,12 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 		return body, []styledToken{{raw: path, style: pathStyle}}
 
 	case "read":
-		path := toolArgString(args, "path", ".")
+		path := beautifyToolPath(toolArgString(args, "path", "."), vm.WorkingDir)
 		body := fmt.Sprintf("Read %s", path)
 		return body, []styledToken{{raw: path, style: pathStyle}}
 
 	case "grep":
-		path := toolArgString(args, "path", ".")
+		path := beautifyToolPath(toolArgString(args, "path", "."), vm.WorkingDir)
 		body := fmt.Sprintf("Grep %s", path)
 		if item.Status == session.ToolCallStatusSuccess {
 			if matches, ok := grepMatchCount(item); ok {
@@ -252,7 +253,7 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 		return body, []styledToken{{raw: path, style: pathStyle}}
 
 	case "edit":
-		path := toolArgString(args, "path", ".")
+		path := beautifyToolPath(toolArgString(args, "path", "."), vm.WorkingDir)
 		body := fmt.Sprintf("Edit %s", path)
 		tokens := []styledToken{{raw: path, style: pathStyle}}
 		if item.Status == session.ToolCallStatusSuccess {
@@ -269,7 +270,7 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 		return body, tokens
 
 	case "write":
-		path := toolArgString(args, "path", ".")
+		path := beautifyToolPath(toolArgString(args, "path", "."), vm.WorkingDir)
 		body := fmt.Sprintf("Write %s", path)
 		tokens := []styledToken{{raw: path, style: pathStyle}}
 		if item.Status == session.ToolCallStatusSuccess {
@@ -293,7 +294,7 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 
 	case "glob":
 		pattern := toolArgString(args, "pattern", "*")
-		path := toolArgString(args, "path", ".")
+		path := beautifyToolPath(toolArgString(args, "path", "."), vm.WorkingDir)
 		body := fmt.Sprintf("Glob %q in %s", pattern, path)
 		tokens := []styledToken{{raw: pattern, style: pathStyle}, {raw: path, style: pathStyle}}
 		if item.Status == session.ToolCallStatusSuccess {

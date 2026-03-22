@@ -166,11 +166,7 @@ func collectModifiedFiles(workingDir string) []modifiedFileStat {
 }
 
 func displayPath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return path
-	}
-	return filepath.Clean(path)
+	return beautifySidebarPath(path, os.Getenv("HOME"))
 }
 
 func lineCount(path string) int {

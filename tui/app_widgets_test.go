@@ -55,6 +55,19 @@ func TestFormatToolCallWidgetBody_Write(t *testing.T) {
 	}
 }
 
+func TestFormatToolCallWidgetBody_Read_UsesBeautifiedPath(t *testing.T) {
+	item := &session.ToolCallItem{
+		Name:      "read",
+		Status:    session.ToolCallStatusPending,
+		Arguments: `{"path":"/work/repo/a_folder/b_folder/c_folder/d_folder/file.txt"}`,
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80, WorkingDir: "/work/repo"}, DefaultTheme())
+	if body != "Read a/b/c/d/file.txt" {
+		t.Fatalf("body = %q, want %q", body, "Read a/b/c/d/file.txt")
+	}
+}
+
 func TestFormatToolCallWidgetBody_Skill(t *testing.T) {
 	item := &session.ToolCallItem{
 		Name:      "skill",

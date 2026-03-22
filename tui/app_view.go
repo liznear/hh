@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -143,6 +144,7 @@ func (m *model) buildSidebarLines(sidebarWidth int) []string {
 	if wdLine == "" {
 		wdLine = "."
 	}
+	wdLine = beautifySidebarPath(wdLine, os.Getenv("HOME"))
 	if strings.TrimSpace(m.runtime.gitBranch) != "" {
 		wdLine = fmt.Sprintf("%s @ %s", wdLine, m.runtime.gitBranch)
 	}
@@ -184,7 +186,7 @@ func (m *model) buildSidebarLines(sidebarWidth int) []string {
 
 	contentWidth := max(1, sidebarWidth-2)
 	if len(m.runtime.modifiedFiles) > 0 {
-		sidebarLines = append(sidebarLines, "", bold.Render("Modified files"))
+		sidebarLines = append(sidebarLines, "", bold.Render("Modified Files"))
 		for _, file := range m.runtime.modifiedFiles {
 			sidebarLines = append(sidebarLines, renderModifiedFileLine(contentWidth, file, success, errorStyle))
 		}
