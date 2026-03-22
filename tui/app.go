@@ -17,6 +17,7 @@ import (
 
 type model struct {
 	runner    *agent.AgentRunner
+	agentName string
 	modelName string
 	theme     Theme
 	storage   *session.Storage
@@ -100,12 +101,12 @@ func Run(provider agent.Provider, modelName, agentName string) error {
 		return err
 	}
 
-	p := tea.NewProgram(newModel(runner, modelName))
+	p := tea.NewProgram(newModel(runner, modelName, agentName))
 	_, err = p.Run()
 	return err
 }
 
-func newModel(runner *agent.AgentRunner, modelName string) *model {
+func newModel(runner *agent.AgentRunner, modelName, agentName string) *model {
 	in := newTextareaInput()
 	theme := DefaultTheme()
 	spin := spinner.New(spinner.WithSpinner(spinner.Dot))
@@ -115,6 +116,7 @@ func newModel(runner *agent.AgentRunner, modelName string) *model {
 
 	return &model{
 		runner:    runner,
+		agentName: agentName,
 		modelName: modelName,
 		theme:     theme,
 		storage:   store,

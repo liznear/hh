@@ -66,6 +66,8 @@ func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
 		layout:      layout,
 		messageList: m.renderMessageList(layout.mainWidth, layout.messageHeight),
 		status: statusWidgetModel{
+			AgentName:     m.agentName,
+			ModelName:     m.modelName,
 			Busy:          m.runtime.busy,
 			ShowRunResult: m.runtime.showRunResult,
 			SpinnerView:   m.spinner.View(),
@@ -100,15 +102,15 @@ func (m *model) renderMessagePane(layout layoutState, messageList string) string
 
 func (m *model) renderInputPane(layout layoutState, status statusWidgetModel) string {
 	statusLine := renderStatusWidget(status, m.theme)
+	statusBlock := lipgloss.JoinVertical(lipgloss.Left, "", "", statusLine)
 	inputBox := lipgloss.NewStyle().
 		Width(layout.inputBoxWidth).
-		Height(inputInnerLines).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderTop(true).
+		Border(lipgloss.NormalBorder(), true, false, false, false).
 		BorderForeground(m.theme.Success()).
+		Height(inputInnerLines).
 		Render(m.input.View())
 
-	inputBlock := lipgloss.JoinVertical(lipgloss.Left, statusLine, inputBox)
+	inputBlock := lipgloss.JoinVertical(lipgloss.Left, statusBlock, inputBox)
 	return lipgloss.NewStyle().
 		Width(layout.mainWidth).
 		Height(layout.inputHeight).

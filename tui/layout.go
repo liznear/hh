@@ -5,7 +5,7 @@ const (
 	sidebarHideWidth  = 150
 	appPadding        = 1
 	mainSidebarGap    = 3
-	inputStatusLines  = 1
+	inputStatusLines  = 2
 	inputInnerLines   = 3
 	inputBorderLines  = 2
 	defaultInputLines = inputStatusLines + inputInnerLines + inputBorderLines

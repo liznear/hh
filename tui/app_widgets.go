@@ -14,6 +14,8 @@ import (
 )
 
 type statusWidgetModel struct {
+	AgentName     string
+	ModelName     string
 	Busy          bool
 	ShowRunResult bool
 	SpinnerView   string
@@ -23,23 +25,30 @@ type statusWidgetModel struct {
 
 func renderStatusWidget(vm statusWidgetModel, theme Theme) string {
 	padding := "  "
+	base := strings.TrimSpace(vm.AgentName)
+	if base == "" {
+		base = "Build"
+	}
+	if strings.TrimSpace(vm.ModelName) != "" {
+		base = fmt.Sprintf("%s · %s", base, vm.ModelName)
+	}
+
 	if vm.Busy {
 		spinnerView := lipgloss.NewStyle().Foreground(theme.Info()).Render(vm.SpinnerView)
-		durationView := lipgloss.NewStyle().Foreground(theme.Muted()).Render(" " + formatElapsedSeconds(vm.Elapsed))
+		durationView := lipgloss.NewStyle().Foreground(theme.Muted()).Render(formatElapsedSeconds(vm.Elapsed))
 		hint := ""
 		if vm.EscPending {
 			hint = lipgloss.NewStyle().Foreground(theme.Muted()).Render(" esc again to interrupt")
 		}
-		return padding + spinnerView + durationView + hint
+		return fmt.Sprintf("%s%s · %s %s%s", padding, base, durationView, spinnerView, hint)
 	}
 
 	if vm.ShowRunResult {
-		checkView := lipgloss.NewStyle().Foreground(theme.Success()).Render("✓")
-		durationView := lipgloss.NewStyle().Foreground(theme.Muted()).Render(" " + formatElapsedSeconds(vm.Elapsed))
-		return padding + checkView + durationView
+		durationView := lipgloss.NewStyle().Foreground(theme.Muted()).Render(formatElapsedSeconds(vm.Elapsed))
+		return fmt.Sprintf("%s%s · %s", padding, base, durationView)
 	}
 
-	return ""
+	return padding + base
 }
 
 func formatElapsedSeconds(d time.Duration) string {
