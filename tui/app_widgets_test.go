@@ -38,3 +38,19 @@ func TestFormatToolCallWidgetBody_TodoWriteFromArgs(t *testing.T) {
 		t.Fatalf("body = %q, want %q", body, "TODO 1 / 2")
 	}
 }
+
+func TestFormatToolCallWidgetBody_Write(t *testing.T) {
+	item := &session.ToolCallItem{
+		Name:      "write",
+		Status:    session.ToolCallStatusSuccess,
+		Arguments: `{"path":"tmp/file.txt"}`,
+		Result: &session.ToolCallResult{
+			Result: tools.WriteResult{AddedLines: 3},
+		},
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80}, DefaultTheme())
+	if body != "Write tmp/file.txt +3" {
+		t.Fatalf("body = %q, want %q", body, "Write tmp/file.txt +3")
+	}
+}

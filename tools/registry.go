@@ -8,6 +8,7 @@ import (
 var toolsCreator = map[string]func() agent.Tool{
 	"read":       NewReadTool,
 	"edit":       NewEditTool,
+	"write":      NewWriteTool,
 	"grep":       NewGrepTool,
 	"list":       NewListTool,
 	"glob":       NewGlobTool,

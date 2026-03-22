@@ -478,6 +478,8 @@ func decodeToolResult(name string, raw any) any {
 		return decodeMappedResult[tools.ReadResult](mapped, raw)
 	case "edit":
 		return decodeMappedResult[tools.EditResult](mapped, raw)
+	case "write":
+		return decodeMappedResult[tools.WriteResult](mapped, raw)
 	case "grep":
 		return decodeMappedResult[tools.GrepResult](mapped, raw)
 	case "list", "ls":

@@ -268,6 +268,19 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 		}
 		return body, tokens
 
+	case "write":
+		path := toolArgString(args, "path", ".")
+		body := fmt.Sprintf("Write %s", path)
+		tokens := []styledToken{{raw: path, style: pathStyle}}
+		if item.Status == session.ToolCallStatusSuccess {
+			if added, ok := writeAddedLines(item); ok {
+				addToken := fmt.Sprintf("+%d", added)
+				body = fmt.Sprintf("%s %s", body, addToken)
+				tokens = append(tokens, styledToken{raw: addToken, style: addStyle})
+			}
+		}
+		return body, tokens
+
 	case "web_search":
 		query := toolArgString(args, "query", "")
 		body := fmt.Sprintf("WebSearch %q", query)
@@ -381,6 +394,16 @@ func editCounts(item *session.ToolCallItem) (int, int, bool) {
 		return result.AddedLines, result.DeletedLines, true
 	}
 	return 0, 0, false
+}
+
+func writeAddedLines(item *session.ToolCallItem) (int, bool) {
+	if item == nil || item.Result == nil {
+		return 0, false
+	}
+	if result, ok := item.Result.Result.(tools.WriteResult); ok {
+		return result.AddedLines, true
+	}
+	return 0, false
 }
 
 func todoProgress(item *session.ToolCallItem, args map[string]any) (int, int, bool) {
