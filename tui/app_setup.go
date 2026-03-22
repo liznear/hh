@@ -5,12 +5,19 @@ import (
 	"os"
 
 	"charm.land/bubbles/v2/textarea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/liznear/hh/tui/session"
 )
 
 func newTextareaInput() textarea.Model {
 	in := textarea.New()
 	in.Prompt = ""
+	in.SetPromptFunc(2, func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			return "> "
+		}
+		return "  "
+	})
 	in.Placeholder = "Type a prompt (Enter to send, Shift+Enter for newline)"
 	in.ShowLineNumbers = false
 	in.SetHeight(inputInnerLines)
@@ -20,13 +27,19 @@ func newTextareaInput() textarea.Model {
 	styles.Focused.Text = styles.Focused.Text.UnsetBackground()
 	styles.Focused.CursorLine = styles.Focused.CursorLine.UnsetBackground()
 	styles.Focused.Placeholder = styles.Focused.Placeholder.UnsetBackground()
-	styles.Focused.Prompt = styles.Focused.Prompt.UnsetBackground()
+	styles.Focused.Prompt = styles.Focused.Prompt.
+		UnsetBackground().
+		Foreground(lipgloss.Color("2")).
+		Bold(true)
 	styles.Focused.EndOfBuffer = styles.Focused.EndOfBuffer.UnsetBackground()
 	styles.Blurred.Base = styles.Blurred.Base.UnsetBackground()
 	styles.Blurred.Text = styles.Blurred.Text.UnsetBackground()
 	styles.Blurred.CursorLine = styles.Blurred.CursorLine.UnsetBackground()
 	styles.Blurred.Placeholder = styles.Blurred.Placeholder.UnsetBackground()
-	styles.Blurred.Prompt = styles.Blurred.Prompt.UnsetBackground()
+	styles.Blurred.Prompt = styles.Blurred.Prompt.
+		UnsetBackground().
+		Foreground(lipgloss.Color("2")).
+		Bold(true)
 	styles.Blurred.EndOfBuffer = styles.Blurred.EndOfBuffer.UnsetBackground()
 	in.SetStyles(styles)
 	in.Focus()

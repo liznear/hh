@@ -1,8 +1,8 @@
 package tui
 
 const (
-	inputBoxWidthOffset  = 2
-	inputTextWidthOffset = 4
+	inputBoxWidthOffset  = 0
+	inputTextWidthOffset = 0
 )
 
 type layoutState struct {

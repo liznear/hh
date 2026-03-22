@@ -102,9 +102,13 @@ func (m *model) renderInputPane(layout layoutState, status statusWidgetModel) st
 	inputBox := lipgloss.NewStyle().
 		Width(layout.inputBoxWidth).
 		Height(inputInnerLines).
-		Padding(0, 1).
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(m.theme.Muted()).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderTop(true).
+		BorderBottom(true).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderForeground(m.theme.Success()).
+		Padding(0, 0, 0, 1).
 		Render(m.input.View())
 
 	inputBlock := lipgloss.JoinVertical(lipgloss.Left, statusLine, inputBox)

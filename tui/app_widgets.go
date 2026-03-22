@@ -23,19 +23,20 @@ type statusWidgetModel struct {
 }
 
 func renderStatusWidget(vm statusWidgetModel, theme Theme) string {
+	padding := " "
 	if vm.Busy {
 		spinnerView := lipgloss.NewStyle().Foreground(theme.Info()).Render(vm.SpinnerView)
 		durationView := lipgloss.NewStyle().Foreground(theme.Muted()).Render(" " + formatElapsedSeconds(vm.Elapsed))
-		return spinnerView + durationView
+		return padding + spinnerView + durationView
 	}
 
 	if vm.ShowRunResult {
 		checkView := lipgloss.NewStyle().Foreground(theme.Success()).Render("✓")
 		durationView := lipgloss.NewStyle().Foreground(theme.Muted()).Render(" " + formatElapsedSeconds(vm.Elapsed))
-		return checkView + durationView
+		return padding + checkView + durationView
 	}
 
-	return lipgloss.NewStyle().Foreground(theme.Muted()).Render(defaultStatusHint)
+	return lipgloss.NewStyle().Foreground(theme.Muted()).Render(padding + defaultStatusHint)
 }
 
 func formatElapsedSeconds(d time.Duration) string {
