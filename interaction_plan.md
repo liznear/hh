@@ -150,12 +150,11 @@ Only complete shared runtime primitives and the current feature wave before star
 
 Scope rule: implement only the minimum shared runtime needed for question interactions. Do not add steering or approval logic in this wave.
 
-1. Define state machine types and transitions for `idle`, `running`, `waiting_for_interaction`, terminal states.
-2. Add event envelopes with correlation IDs (`run_id`, `tool_call_id`, `interaction_id`, timestamps).
-3. Implement `InteractionRequest`/`InteractionResponse` schemas and validators.
-4. Implement `InteractionManager` (register, wait, resolve once, timeout, cleanup).
-5. Add external event ingress for interaction responses only.
-6. Add logs and tests for interaction lifecycle and state transitions.
+1. Add event envelopes with correlation IDs (`run_id`, `tool_call_id`, `interaction_id`, timestamps).
+2. Implement `InteractionRequest`/`InteractionResponse` schemas and validators.
+3. Implement `InteractionManager` (register, wait, resolve once, timeout, cleanup).
+4. Add external event ingress for interaction responses only.
+5. Add tests for interaction lifecycle edge cases (duplicate, unknown, expired responses).
 
 Exit criteria:
 
@@ -184,13 +183,15 @@ Exit criteria:
 
 Scope rule: only steering behavior. Reuse existing interaction plumbing; do not add approval policy logic in this wave.
 
-1. Add run inbox for `user_message_received` events with ordered sequence numbers.
-2. Add checkpoint processing hooks for safe steering application.
-3. Implement steering policy (`queue_until_checkpoint` default, optional `cancel_and_replan`).
-4. Add explicit conversation append path for steering messages.
-5. Add concurrency safeguards (ordering, idempotency, cancel race handling).
-6. Add tests for streaming/tool/waiting states with steering events.
-7. Emit `user_message_applied` and steering latency metrics.
+1. Define state machine types and transitions for `idle`, `running`, `waiting_for_interaction`, terminal states, including pause/resume checkpoints.
+2. Add run inbox for `user_message_received` events with ordered sequence numbers.
+3. Add checkpoint processing hooks for safe steering application.
+4. Implement steering policy (`queue_until_checkpoint` default, optional `cancel_and_replan`).
+5. Add explicit conversation append path for steering messages.
+6. Add concurrency safeguards (ordering, idempotency, cancel race handling).
+7. Add logs for interaction lifecycle and state transitions during steering operations.
+8. Add tests for streaming/tool/waiting states with steering events.
+9. Emit `user_message_applied` and steering latency metrics.
 
 Exit criteria:
 
@@ -230,13 +231,11 @@ Mark items as done by changing `- [ ]` to `- [x]`.
 
 ### Wave 0 - Shared primitives (Question only)
 
-- [ ] Define runner state machine transitions for interaction pause/resume.
 - [x] Add event envelope fields (`run_id`, `tool_call_id`, `interaction_id`, timestamps).
 - [x] Implement `InteractionRequest`/`InteractionResponse` schemas and validation.
 - [x] Implement `InteractionManager` register/wait/resolve/timeout lifecycle.
 - [x] Add external ingress for interaction responses.
 - [x] Add tests for duplicate/unknown/expired responses.
-- [ ] Add logs for interaction lifecycle and state transitions.
 - [x] Confirm Wave 0 exit criteria.
 
 ### Wave 1 - Question tool
@@ -253,12 +252,14 @@ Mark items as done by changing `- [ ]` to `- [x]`.
 
 ### Wave 2 - Mid-run steering
 
+- [ ] Define runner state machine transitions for interaction pause/resume.
 - [ ] Add run inbox for `user_message_received` with ordered sequence IDs.
 - [ ] Add checkpoint hooks for control-plane event processing.
 - [ ] Implement default steering policy `queue_until_checkpoint`.
 - [ ] Optionally implement `cancel_and_replan` policy mode.
 - [ ] Add explicit conversation append path with `source=user_steer` tags.
 - [ ] Add ordering/idempotency/cancel-race safeguards.
+- [ ] Add logs for interaction lifecycle and state transitions.
 - [ ] Add streaming/tool/wait-state steering tests.
 - [ ] Emit `user_message_applied` and steering latency metrics.
 - [ ] Confirm Wave 2 exit criteria.
