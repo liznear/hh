@@ -127,3 +127,16 @@ func TestFormatToolCallWidgetBody_BashTruncatesByWidth(t *testing.T) {
 		t.Fatalf("body = %q, want %q", body, want)
 	}
 }
+
+func TestFormatToolCallWidgetBody_Question(t *testing.T) {
+	item := &session.ToolCallItem{
+		Name:      "question",
+		Status:    session.ToolCallStatusPending,
+		Arguments: `{"question":{"title":"Choose deployment mode"},"options":[{"title":"safe","description":"use safe mode"}],"allow_custom_option":false}`,
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80}, DefaultTheme())
+	if body != `Question: "Choose deployment mode"` {
+		t.Fatalf("body = %q, want %q", body, `Question: "Choose deployment mode"`)
+	}
+}

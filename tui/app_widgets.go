@@ -358,6 +358,13 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 		}
 		return "TODO", nil
 
+	case "question":
+		title := questionTitleArg(args)
+		if title == "" {
+			return `Question: ""`, nil
+		}
+		return fmt.Sprintf("Question: %q", title), []styledToken{{raw: title, style: pathStyle}}
+
 	case "skill":
 		skillName := toolArgString(args, "name", "")
 		if skillName == "" && item.Result != nil {
@@ -373,6 +380,22 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 	default:
 		return formatGenericToolCallWidgetBody(item)
 	}
+}
+
+func questionTitleArg(args map[string]any) string {
+	rawQuestion, ok := args["question"]
+	if !ok || rawQuestion == nil {
+		return ""
+	}
+	question, ok := rawQuestion.(map[string]any)
+	if !ok {
+		return ""
+	}
+	title, ok := question["title"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(title)
 }
 
 func styleToolCallLine(line string, tokens []styledToken) string {

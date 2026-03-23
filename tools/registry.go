@@ -14,6 +14,7 @@ var toolsCreator = map[string]func() agent.Tool{
 	"glob":       NewGlobTool,
 	"bash":       NewBashTool,
 	"skill":      NewSkillTool,
+	"question":   NewQuestionTool,
 	"todo_write": NewTodoWriteTool,
 	"web_fetch":  NewWebFetchTool,
 	"web_search": NewWebSearchTool,

@@ -73,6 +73,8 @@ type RuntimeState struct {
 	lastRefreshAt        time.Time
 	suppressRefreshUntil time.Time
 
+	questionDialog *questionDialogState
+
 	lastRenderLatency time.Duration
 	maxRenderLatency  time.Duration
 	lastScrollStats   scrollPerfStats
@@ -84,6 +86,11 @@ type RuntimeState struct {
 	lastGitRefreshAt   time.Time
 	contextWindowTotal int
 	contextWindowUsed  int
+
+	questionPromptedAt       time.Time
+	questionLastLatency      time.Duration
+	questionSubmittedCount   int
+	questionValidationErrors int
 }
 
 type itemRenderCacheEntry struct {
@@ -211,6 +218,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, statusCmd
 
 	case tea.KeyPressMsg:
+		if m.runtime.questionDialog != nil {
+			if m.handleQuestionDialogKey(msg) {
+				m.refreshViewport()
+				return m, statusCmd
+			}
+		}
+
 		if m.modelPicker != nil {
 			if m.handleModelPickerKey(msg) {
 				m.runtime.showRunResult = false

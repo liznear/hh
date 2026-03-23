@@ -114,6 +114,22 @@ func (a *AgentRunner) SubmitInteractionResponse(resp InteractionResponse) error 
 	return active.interactions.Submit(resp)
 }
 
+func (a *AgentRunner) DismissInteraction(interactionID, runID string) error {
+	if a == nil || a.state == nil {
+		return ErrNoActiveRun
+	}
+	a.state.runMu.Lock()
+	active := a.state.activeRun
+	a.state.runMu.Unlock()
+	if active == nil || active.interactions == nil {
+		return ErrNoActiveRun
+	}
+	if runID != "" && runID != active.runID {
+		return ErrNoActiveRun
+	}
+	return active.interactions.Dismiss(interactionID)
+}
+
 func (a *AgentRunner) maybeGenerateSessionTitleAsync(ctx context.Context, input Input, onEvent func(Event), started chan<- struct{}) <-chan struct{} {
 	if a == nil || a.state == nil || a.provider == nil {
 		return nil

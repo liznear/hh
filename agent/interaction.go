@@ -19,6 +19,7 @@ const (
 var (
 	ErrUnknownInteraction            = errors.New("unknown interaction")
 	ErrDuplicateInteractionReply     = errors.New("duplicate interaction response")
+	ErrInteractionDismissed          = errors.New("interaction dismissed")
 	ErrInteractionExpired            = errors.New("interaction expired")
 	ErrInvalidInteractionRequest     = errors.New("invalid interaction request")
 	ErrInvalidInteractionResponse    = errors.New("invalid interaction response")
@@ -58,8 +59,13 @@ type InteractionResponse struct {
 
 type pendingInteraction struct {
 	req      InteractionRequest
-	respCh   chan InteractionResponse
+	resultCh chan interactionResult
 	resolved bool
+}
+
+type interactionResult struct {
+	response InteractionResponse
+	err      error
 }
 
 type InteractionManager struct {
@@ -92,8 +98,8 @@ func (m *InteractionManager) Request(ctx context.Context, req InteractionRequest
 	}
 
 	pending := &pendingInteraction{
-		req:    req,
-		respCh: make(chan InteractionResponse, 1),
+		req:      req,
+		resultCh: make(chan interactionResult, 1),
 	}
 
 	m.mu.Lock()
@@ -142,7 +148,21 @@ func (m *InteractionManager) Request(ctx context.Context, req InteractionRequest
 	}
 
 	select {
-	case resp := <-pending.respCh:
+	case result := <-pending.resultCh:
+		if result.err != nil {
+			if onEvent != nil && errors.Is(result.err, ErrInteractionDismissed) {
+				onEvent(Event{
+					Type:          EventTypeInteractionDismissed,
+					Data:          EventDataInteractionDismissed{InteractionID: req.InteractionID},
+					RunID:         req.RunID,
+					ToolCallID:    req.ToolCallID,
+					InteractionID: req.InteractionID,
+					Timestamp:     m.now(),
+				})
+			}
+			return InteractionResponse{}, result.err
+		}
+		resp := result.response
 		if onEvent != nil {
 			onEvent(Event{
 				Type:          EventTypeInteractionResponded,
@@ -210,8 +230,41 @@ func (m *InteractionManager) Submit(resp InteractionResponse) error {
 	m.closed[resp.InteractionID] = struct{}{}
 	m.mu.Unlock()
 
-	pending.respCh <- resp
-	close(pending.respCh)
+	pending.resultCh <- interactionResult{response: resp}
+	close(pending.resultCh)
+	return nil
+}
+
+func (m *InteractionManager) Dismiss(interactionID string) error {
+	if m == nil {
+		return ErrInteractionManagerUnavailable
+	}
+	if interactionID == "" {
+		return fmt.Errorf("%w: interaction_id is required", ErrInvalidInteractionResponse)
+	}
+
+	m.mu.Lock()
+	if _, closed := m.closed[interactionID]; closed {
+		m.mu.Unlock()
+		return ErrDuplicateInteractionReply
+	}
+	pending, ok := m.pending[interactionID]
+	if !ok {
+		m.mu.Unlock()
+		return ErrUnknownInteraction
+	}
+	if pending.resolved {
+		m.mu.Unlock()
+		return ErrDuplicateInteractionReply
+	}
+
+	pending.resolved = true
+	delete(m.pending, interactionID)
+	m.closed[interactionID] = struct{}{}
+	m.mu.Unlock()
+
+	pending.resultCh <- interactionResult{err: ErrInteractionDismissed}
+	close(pending.resultCh)
 	return nil
 }
 

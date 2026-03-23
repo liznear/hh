@@ -18,6 +18,7 @@ const (
 	EventTypeToolCallEnd          EventType = "tool_call_end"
 	EventTypeInteractionRequested EventType = "interaction_requested"
 	EventTypeInteractionResponded EventType = "interaction_responded"
+	EventTypeInteractionDismissed EventType = "interaction_dismissed"
 	EventTypeInteractionExpired   EventType = "interaction_expired"
 	EventTypeTokenUsage           EventType = "token_usage"
 	EventTypeSessionTitle         EventType = "session_title"
@@ -79,6 +80,10 @@ type EventDataInteractionRequested struct {
 
 type EventDataInteractionResponded struct {
 	Response InteractionResponse
+}
+
+type EventDataInteractionDismissed struct {
+	InteractionID string
 }
 
 type EventDataInteractionExpired struct {

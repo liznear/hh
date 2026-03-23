@@ -62,6 +62,31 @@ func (m *model) handleAgentEvent(e agent.Event) {
 				m.runtime.contextWindowUsed = data.Usage.TotalTokens
 			}
 		}
+	case agent.EventTypeInteractionRequested:
+		if data, ok := e.Data.(agent.EventDataInteractionRequested); ok {
+			if data.Request.Kind == agent.InteractionKindQuestion {
+				m.openQuestionDialog(data.Request)
+			}
+		}
+	case agent.EventTypeInteractionResponded:
+		if data, ok := e.Data.(agent.EventDataInteractionResponded); ok {
+			if dlg := m.runtime.questionDialog; dlg != nil && dlg.request.InteractionID == data.Response.InteractionID {
+				m.closeQuestionDialog()
+			}
+		}
+	case agent.EventTypeInteractionDismissed:
+		if data, ok := e.Data.(agent.EventDataInteractionDismissed); ok {
+			if dlg := m.runtime.questionDialog; dlg != nil && dlg.request.InteractionID == data.InteractionID {
+				m.closeQuestionDialog()
+			}
+		}
+	case agent.EventTypeInteractionExpired:
+		if data, ok := e.Data.(agent.EventDataInteractionExpired); ok {
+			if dlg := m.runtime.questionDialog; dlg != nil && dlg.request.InteractionID == data.InteractionID {
+				m.closeQuestionDialog()
+				m.addItem(&session.ErrorItem{Message: "question timed out"})
+			}
+		}
 	}
 }
 

@@ -65,7 +65,9 @@ func (m *model) View() tea.View {
 
 func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
 	messageList := m.renderMessageList(layout.mainWidth, layout.messageHeight)
-	if m.modelPicker != nil {
+	if m.runtime.questionDialog != nil {
+		messageList = m.renderQuestionDialog(layout.mainWidth, layout.messageHeight)
+	} else if m.modelPicker != nil {
 		messageList = m.renderModelPickerDialog(layout.mainWidth, layout.messageHeight)
 	}
 
@@ -188,6 +190,17 @@ func (m *model) buildSidebarLines(sidebarWidth int) []string {
 		wdLine,
 		"",
 		contextLine,
+	}
+
+	if m.runtime.questionSubmittedCount > 0 || m.runtime.questionValidationErrors > 0 {
+		questionLine := fmt.Sprintf("%s %d", bold.Render("Questions answered:"), m.runtime.questionSubmittedCount)
+		if m.runtime.questionValidationErrors > 0 {
+			questionLine += fmt.Sprintf(" (%d errors)", m.runtime.questionValidationErrors)
+		}
+		sidebarLines = append(sidebarLines, "", questionLine)
+		if m.runtime.questionLastLatency > 0 {
+			sidebarLines = append(sidebarLines, fmt.Sprintf("%s %s", bold.Render("Last answer latency:"), formatDuration(m.runtime.questionLastLatency)))
+		}
 	}
 
 	contentWidth := max(1, sidebarWidth-2)

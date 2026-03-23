@@ -106,6 +106,37 @@ func TestInteractionManager_Expiration(t *testing.T) {
 	}
 }
 
+func TestInteractionManager_Dismiss(t *testing.T) {
+	mgr := NewInteractionManager()
+	req := InteractionRequest{
+		InteractionID: "interaction_dismiss",
+		RunID:         "run_dismiss",
+		Kind:          InteractionKindQuestion,
+		Title:         "Dismiss me",
+		Options:       []InteractionOption{{ID: "a", Title: "A", Description: "A"}},
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := mgr.Request(context.Background(), req, nil)
+		errCh <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	if err := mgr.Dismiss("interaction_dismiss"); err != nil {
+		t.Fatalf("dismiss failed: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, ErrInteractionDismissed) {
+			t.Fatalf("expected ErrInteractionDismissed, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for dismissed interaction")
+	}
+}
+
 func TestRunAgentLoop_SyntheticInteractionPauseResume(t *testing.T) {
 	provider := &mockProvider{
 		responses: []ProviderResponse{

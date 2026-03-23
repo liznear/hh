@@ -241,14 +241,14 @@ Mark items as done by changing `- [ ]` to `- [x]`.
 
 ### Wave 1 - Question tool
 
-- [ ] Implement question tool input schema and mapping.
-- [ ] Emit `tool_call_started` and `interaction_requested` events.
-- [ ] Render question tool line as `Question: "<question title>"`.
-- [ ] Render dialog options + optional custom answer path.
-- [ ] Implement enter-to-select and enter-to-submit behavior.
-- [ ] Normalize answer payload to deterministic tool result shape.
-- [ ] Add unit/integration/TUI behavior tests.
-- [ ] Add question-specific metrics and diagnostics.
+- [x] Implement question tool input schema and mapping.
+- [x] Emit `tool_call_started` and `interaction_requested` events.
+- [x] Render question tool line as `Question: "<question title>"`.
+- [x] Render dialog options + optional custom answer path.
+- [x] Implement enter-to-select and enter-to-submit behavior.
+- [x] Normalize answer payload to deterministic tool result shape.
+- [x] Add unit/integration/TUI behavior tests.
+- [x] Add question-specific metrics and diagnostics.
 - [ ] Confirm Wave 1 exit criteria.
 
 ### Wave 2 - Mid-run steering
