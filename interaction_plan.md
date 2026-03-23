@@ -10,6 +10,10 @@ Design and implement an interaction-capable agent runtime that can:
 
 The design should preserve correctness, explicit control flow, and debuggability.
 
+Reference docs:
+
+- `docs/run_id.md` defines run identity semantics, lifecycle, and correlation rules.
+
 Implementation constraint: deliver features strictly in sequence with no interleaving feature work:
 
 1. Question tool,
@@ -227,13 +231,13 @@ Mark items as done by changing `- [ ]` to `- [x]`.
 ### Wave 0 - Shared primitives (Question only)
 
 - [ ] Define runner state machine transitions for interaction pause/resume.
-- [ ] Add event envelope fields (`run_id`, `tool_call_id`, `interaction_id`, timestamps).
-- [ ] Implement `InteractionRequest`/`InteractionResponse` schemas and validation.
-- [ ] Implement `InteractionManager` register/wait/resolve/timeout lifecycle.
-- [ ] Add external ingress for interaction responses.
-- [ ] Add tests for duplicate/unknown/expired responses.
+- [x] Add event envelope fields (`run_id`, `tool_call_id`, `interaction_id`, timestamps).
+- [x] Implement `InteractionRequest`/`InteractionResponse` schemas and validation.
+- [x] Implement `InteractionManager` register/wait/resolve/timeout lifecycle.
+- [x] Add external ingress for interaction responses.
+- [x] Add tests for duplicate/unknown/expired responses.
 - [ ] Add logs for interaction lifecycle and state transitions.
-- [ ] Confirm Wave 0 exit criteria.
+- [x] Confirm Wave 0 exit criteria.
 
 ### Wave 1 - Question tool
 

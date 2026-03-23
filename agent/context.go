@@ -7,4 +7,6 @@ type Context struct {
 	History      []Message
 	Prompts      []Message
 	Tools        map[string]Tool
+	RunID        string
+	Interactions *InteractionManager
 }

@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/samber/lo"
 	"golang.org/x/exp/maps"
 )
 
 func RunAgentLoop(ctx context.Context, aCtx Context, onEvent func(Event)) {
+	emit := newEventEmitter(aCtx.RunID, onEvent)
 	req := ProviderRequest{
 		Model:    aCtx.Model,
 		Messages: []Message{{Role: RoleSystem, Content: aCtx.SystemPrompt}},
@@ -19,8 +21,9 @@ func RunAgentLoop(ctx context.Context, aCtx Context, onEvent func(Event)) {
 	req.Messages = append(req.Messages, aCtx.Prompts...)
 
 	shouldContinue := true
+	turnID := 0
 
-	onEvent(Event{EventTypeAgentStart, EventDataAgentStart{}})
+	emit(Event{Type: EventTypeAgentStart, Data: EventDataAgentStart{}})
 AgentLoop:
 	for shouldContinue {
 		shouldContinue = false
@@ -28,20 +31,21 @@ AgentLoop:
 		select {
 		case <-ctx.Done():
 			if err := ctx.Err(); err != nil {
-				onEvent(Event{Type: EventTypeError, Data: err})
+				emit(Event{Type: EventTypeError, Data: err})
 			}
 			break AgentLoop
 		default:
 		}
 
-		onEvent(Event{EventTypeTurnStart, EventDataTurnStart{}})
+		turnID++
+		emit(Event{Type: EventTypeTurnStart, Data: EventDataTurnStart{}, TurnID: turnID})
 		res, err := aCtx.Provider.ChatCompletionStream(ctx, req, func(se ProviderStreamEvent) error {
-			onEvent(toEvent(se))
+			emit(withTurnID(toEvent(se), turnID))
 			return nil
 		})
 		if err != nil {
-			onEvent(Event{Type: EventTypeError, Data: err})
-			onEvent(Event{EventTypeTurnEnd, EventDataTurnEnd{}})
+			emit(Event{Type: EventTypeError, Data: err, TurnID: turnID})
+			emit(Event{Type: EventTypeTurnEnd, Data: EventDataTurnEnd{}, TurnID: turnID})
 			break AgentLoop
 		}
 
@@ -62,24 +66,24 @@ AgentLoop:
 		}
 
 		if len(toolCalls) > 0 {
-			toolResults := executeTools(ctx, aCtx, toolCalls, onEvent)
+			toolResults := executeTools(ctx, aCtx, turnID, toolCalls, emit)
 			req.Messages = append(req.Messages, lo.Map(toolResults, func(r ToolResult, idx int) Message {
 				return Message{Role: RoleTool, Content: r.Data, CallID: toolCalls[idx].ID}
 			})...)
 			shouldContinue = true
 		}
 		if res.Usage.TotalTokens > 0 {
-			onEvent(Event{Type: EventTypeTokenUsage, Data: EventDataTokenUsage{Usage: res.Usage}})
+			emit(Event{Type: EventTypeTokenUsage, Data: EventDataTokenUsage{Usage: res.Usage}, TurnID: turnID})
 		}
-		onEvent(Event{EventTypeTurnEnd, EventDataTurnEnd{}})
+		emit(Event{Type: EventTypeTurnEnd, Data: EventDataTurnEnd{}, TurnID: turnID})
 	}
-	onEvent(Event{EventTypeAgentEnd, EventDataAgentEnd{req.Messages[1:]}})
+	emit(Event{Type: EventTypeAgentEnd, Data: EventDataAgentEnd{Messages: req.Messages[1:]}})
 }
 
-func executeTools(ctx context.Context, aContext Context, toolCalls []ToolCall, onEvent func(Event)) []ToolResult {
+func executeTools(ctx context.Context, aContext Context, turnID int, toolCalls []ToolCall, onEvent func(Event)) []ToolResult {
 	ret := make([]ToolResult, 0, len(toolCalls))
 	for _, toolCall := range toolCalls {
-		onEvent(Event{EventTypeToolCallStart, EventDataToolCallStart{toolCall}})
+		onEvent(Event{Type: EventTypeToolCallStart, Data: EventDataToolCallStart{Call: toolCall}, TurnID: turnID, ToolCallID: toolCall.ID})
 		toolName := toolCall.Name
 		var (
 			result ToolResult
@@ -90,12 +94,37 @@ func executeTools(ctx context.Context, aContext Context, toolCalls []ToolCall, o
 		} else if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
 			result = ToolResult{IsErr: true, Data: fmt.Sprintf("Invalid arguments: %q", toolCall.Arguments)}
 		} else {
-			result = tool.Handler.Handle(ctx, args)
+			toolCtx := withInteractionRuntime(ctx, interactionRuntime{
+				RunID:           aContext.RunID,
+				InteractionMgr:  aContext.Interactions,
+				EventEmitter:    onEvent,
+				CurrentToolCall: toolCall.ID,
+			})
+			result = tool.Handler.Handle(toolCtx, args)
 		}
-		onEvent(Event{EventTypeToolCallEnd, EventDataToolCallEnd{toolCall, result}})
+		onEvent(Event{Type: EventTypeToolCallEnd, Data: EventDataToolCallEnd{Call: toolCall, Result: result}, TurnID: turnID, ToolCallID: toolCall.ID})
 		ret = append(ret, result)
 	}
 	return ret
+}
+
+func newEventEmitter(runID string, onEvent func(Event)) func(Event) {
+	return func(e Event) {
+		if e.RunID == "" {
+			e.RunID = runID
+		}
+		if e.Timestamp.IsZero() {
+			e.Timestamp = time.Now().UTC()
+		}
+		onEvent(e)
+	}
+}
+
+func withTurnID(event Event, turnID int) Event {
+	if event.TurnID == 0 {
+		event.TurnID = turnID
+	}
+	return event
 }
 
 func toEvent(se ProviderStreamEvent) Event {

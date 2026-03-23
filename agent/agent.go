@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 type State struct {
@@ -13,6 +15,13 @@ type State struct {
 	titleMu      sync.Mutex
 	titleReady   bool
 	titlePending bool
+	runMu        sync.Mutex
+	activeRun    *activeRun
+}
+
+type activeRun struct {
+	runID        string
+	interactions *InteractionManager
 }
 
 type AgentRunner struct {
@@ -48,6 +57,13 @@ type Input struct {
 }
 
 func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event)) error {
+	runID := newRunID()
+	interactions := NewInteractionManager()
+	if err := a.setActiveRun(runID, interactions); err != nil {
+		return err
+	}
+	defer a.clearActiveRun(runID)
+
 	titleStarted := make(chan struct{})
 	titleDone := a.maybeGenerateSessionTitleAsync(ctx, input, onEvent, titleStarted)
 	if titleDone != nil {
@@ -62,7 +78,9 @@ func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event))
 		Prompts: []Message{
 			{Role: RoleUser, Content: input.Content},
 		},
-		Tools: a.state.Tools,
+		Tools:        a.state.Tools,
+		RunID:        runID,
+		Interactions: interactions,
 	}
 	RunAgentLoop(ctx, aCtx, func(event Event) {
 		onEvent(event)
@@ -75,6 +93,25 @@ func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event))
 		<-titleDone
 	}
 	return nil
+}
+
+func (a *AgentRunner) SubmitInteractionResponse(resp InteractionResponse) error {
+	if a == nil || a.state == nil {
+		return ErrNoActiveRun
+	}
+	a.state.runMu.Lock()
+	active := a.state.activeRun
+	a.state.runMu.Unlock()
+	if active == nil || active.interactions == nil {
+		return ErrNoActiveRun
+	}
+	if resp.RunID != "" && resp.RunID != active.runID {
+		return ErrNoActiveRun
+	}
+	if resp.RunID == "" {
+		resp.RunID = active.runID
+	}
+	return active.interactions.Submit(resp)
 }
 
 func (a *AgentRunner) maybeGenerateSessionTitleAsync(ctx context.Context, input Input, onEvent func(Event), started chan<- struct{}) <-chan struct{} {
@@ -171,6 +208,41 @@ func normalizeSessionTitle(raw string) string {
 		line = string(runes[:80])
 	}
 	return strings.TrimSpace(line)
+}
+
+var runIDCounter atomic.Uint64
+
+func newRunID() string {
+	id := runIDCounter.Add(1)
+	return fmt.Sprintf("run_%d", id)
+}
+
+func (a *AgentRunner) setActiveRun(runID string, interactions *InteractionManager) error {
+	if a == nil || a.state == nil {
+		return ErrNoActiveRun
+	}
+	a.state.runMu.Lock()
+	defer a.state.runMu.Unlock()
+	if a.state.activeRun != nil {
+		return fmt.Errorf("run %s is already active", a.state.activeRun.runID)
+	}
+	a.state.activeRun = &activeRun{runID: runID, interactions: interactions}
+	return nil
+}
+
+func (a *AgentRunner) clearActiveRun(runID string) {
+	if a == nil || a.state == nil {
+		return
+	}
+	a.state.runMu.Lock()
+	defer a.state.runMu.Unlock()
+	if a.state.activeRun == nil {
+		return
+	}
+	if runID != "" && a.state.activeRun.runID != runID {
+		return
+	}
+	a.state.activeRun = nil
 }
 
 type Opt func(*State)
