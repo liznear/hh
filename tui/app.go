@@ -256,11 +256,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		if isInsertNewlineKey(msg) {
+			m.input.InsertRune('\n')
+			return m, statusCmd
+		}
+
 		if key.Code == tea.KeyEnter {
-			if key.Mod&tea.ModShift != 0 {
-				m.input.InsertRune('\n')
-				return m, statusCmd
-			}
 
 			if m.runtime.busy {
 				return m, statusCmd
@@ -409,4 +410,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, tea.Batch(statusCmd, cmd)
+}
+
+func isInsertNewlineKey(msg tea.KeyPressMsg) bool {
+	key := msg.Key()
+	if key.Code == tea.KeyEnter && key.Mod&tea.ModShift != 0 {
+		return true
+	}
+
+	switch msg.String() {
+	case "shift+enter", "ctrl+j":
+		return true
+	default:
+		return false
+	}
 }
