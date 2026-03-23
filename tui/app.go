@@ -341,7 +341,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			turn := m.session.StartTurn()
 			m.persistTurnStart(turn)
-			m.addItemToTurn(turn, &session.UserMessage{Content: prompt})
 			submittedPrompt := promptWithInternalState(prompt, m.session.TodoItems)
 			m.input.SetValue("")
 			m.runtime.busy = true

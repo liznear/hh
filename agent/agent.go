@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type State struct {
@@ -82,6 +83,13 @@ func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event))
 		RunID:        runID,
 		Interactions: interactions,
 	}
+	onEvent(Event{
+		Type:      EventTypeMessage,
+		Data:      EventDataMessage{Message: Message{Role: RoleUser, Content: input.Content}},
+		RunID:     runID,
+		TurnID:    1,
+		Timestamp: time.Now().UTC(),
+	})
 	RunAgentLoop(ctx, aCtx, func(event Event) {
 		onEvent(event)
 		switch event.Type {

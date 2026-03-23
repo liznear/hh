@@ -260,7 +260,7 @@ Mark items as done by changing `- [ ]` to `- [x]`.
 
 ### Wave 2 - Mid-run steering
 
-- [ ] Refactor normal submit flow to append user messages from runner `EventTypeMessage` only.
+- [x] Refactor normal submit flow to append user messages from runner `EventTypeMessage` only.
 - [ ] Add per-run steering queue to `AgentRunner` and `Context`.
 - [ ] Add enqueue API for `user_message_received` with ordered sequence IDs.
 - [ ] Drain queue after each completed turn before next turn.

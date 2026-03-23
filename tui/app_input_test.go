@@ -56,3 +56,40 @@ func TestUpdate_QuestionDialogEnterWithoutRunnerShowsError(t *testing.T) {
 		t.Fatalf("error = %q, want %q", got, "runner unavailable")
 	}
 }
+
+func TestHandleAgentEvent_MessageUserAppendsUserMessage(t *testing.T) {
+	m := newInputTestModel()
+	m.session.StartTurn()
+
+	m.handleAgentEvent(agent.Event{
+		Type: agent.EventTypeMessage,
+		Data: agent.EventDataMessage{Message: agent.Message{Role: agent.RoleUser, Content: "from event"}},
+	})
+
+	last := m.session.LastItem()
+	msg, ok := last.(*session.UserMessage)
+	if !ok {
+		t.Fatalf("last item type = %T, want *session.UserMessage", last)
+	}
+	if msg.Content != "from event" {
+		t.Fatalf("user message content = %q, want %q", msg.Content, "from event")
+	}
+}
+
+func TestUpdate_EnterDoesNotDirectlyAppendUserMessage(t *testing.T) {
+	m := newInputTestModel()
+	m.input.SetValue("hello")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	after := updated.(*model)
+
+	turn := after.session.CurrentTurn()
+	if turn == nil {
+		t.Fatal("expected turn to be started")
+	}
+	for _, item := range turn.Items {
+		if _, ok := item.(*session.UserMessage); ok {
+			t.Fatal("did not expect direct user message append on submit")
+		}
+	}
+}

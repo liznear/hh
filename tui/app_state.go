@@ -25,6 +25,14 @@ func (m *model) handleAgentEvent(e agent.Event) {
 			return
 		}
 		m.appendMessageDelta(data.Delta)
+	case agent.EventTypeMessage:
+		data, ok := e.Data.(agent.EventDataMessage)
+		if !ok {
+			return
+		}
+		if data.Message.Role == agent.RoleUser {
+			m.addItem(&session.UserMessage{Content: data.Message.Content})
+		}
 
 	case agent.EventTypeToolCallStart:
 		if data, ok := e.Data.(agent.EventDataToolCallStart); ok {

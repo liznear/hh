@@ -55,3 +55,33 @@ func TestNormalizeSessionTitle(t *testing.T) {
 		t.Fatalf("normalizeSessionTitle() = %q, want %q", got, "A Better Plan")
 	}
 }
+
+func TestAgentRunner_EmitsInitialUserMessageEvent(t *testing.T) {
+	provider := &titleMockProvider{responses: []ProviderResponse{{Message: Message{Role: RoleAssistant, Content: "Done"}}}}
+	runner := NewAgentRunner("test-model", provider)
+
+	var messageEvents []EventDataMessage
+	err := runner.Run(context.Background(), Input{Content: "hello world", Type: "text"}, func(e Event) {
+		if e.Type != EventTypeMessage {
+			return
+		}
+		data, ok := e.Data.(EventDataMessage)
+		if !ok {
+			t.Fatalf("message event data type = %T", e.Data)
+		}
+		messageEvents = append(messageEvents, data)
+	})
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if len(messageEvents) == 0 {
+		t.Fatal("expected at least one message event")
+	}
+	first := messageEvents[0].Message
+	if first.Role != RoleUser {
+		t.Fatalf("first message role = %q, want %q", first.Role, RoleUser)
+	}
+	if first.Content != "hello world" {
+		t.Fatalf("first message content = %q, want %q", first.Content, "hello world")
+	}
+}
