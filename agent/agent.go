@@ -13,6 +13,7 @@ type State struct {
 	SystemPrompt string
 	Messages     []Message
 	Tools        map[string]Tool
+	Approver     ToolApprover
 	titleMu      sync.Mutex
 	titleReady   bool
 	titlePending bool
@@ -82,6 +83,7 @@ func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event))
 			{Role: RoleUser, Content: input.Content},
 		},
 		Tools:        a.state.Tools,
+		Approver:     a.state.Approver,
 		RunID:        runID,
 		Interactions: interactions,
 		Steering:     steering,
@@ -300,5 +302,11 @@ func WithSystemPrompt(prompt string) Opt {
 func WithTools(tools map[string]Tool) Opt {
 	return func(s *State) {
 		s.Tools = tools
+	}
+}
+
+func WithToolApprover(approver ToolApprover) Opt {
+	return func(s *State) {
+		s.Approver = approver
 	}
 }

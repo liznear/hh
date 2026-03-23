@@ -75,7 +75,7 @@ func (m *model) handleAgentEvent(e agent.Event) {
 		}
 	case agent.EventTypeInteractionRequested:
 		if data, ok := e.Data.(agent.EventDataInteractionRequested); ok {
-			if data.Request.Kind == agent.InteractionKindQuestion {
+			if data.Request.Kind == agent.InteractionKindQuestion || data.Request.Kind == agent.InteractionKindApproval {
 				m.openQuestionDialog(data.Request)
 			}
 		}
@@ -95,7 +95,7 @@ func (m *model) handleAgentEvent(e agent.Event) {
 		if data, ok := e.Data.(agent.EventDataInteractionExpired); ok {
 			if dlg := m.runtime.questionDialog; dlg != nil && dlg.request.InteractionID == data.InteractionID {
 				m.closeQuestionDialog()
-				m.addItem(&session.ErrorItem{Message: "question timed out"})
+				m.addItem(&session.ErrorItem{Message: "interaction timed out"})
 			}
 		}
 	}

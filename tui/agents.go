@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/liznear/hh/agent"
+	"github.com/liznear/hh/config"
 	"github.com/liznear/hh/skills"
 	"github.com/liznear/hh/tools"
 )
@@ -23,8 +24,13 @@ var agents = map[string]Agent{
 	},
 }
 
-func newAgentRunner(modelName string, provider agent.Provider, agentName string) (*agent.AgentRunner, error) {
+func newAgentRunner(modelName string, provider agent.Provider, agentName string, cfg config.Config, workingDir string) (*agent.AgentRunner, error) {
 	agentConfig, err := getAgent(agentName)
+	if err != nil {
+		return nil, err
+	}
+
+	approver, err := newToolApprover(cfg, workingDir)
 	if err != nil {
 		return nil, err
 	}
@@ -41,6 +47,7 @@ func newAgentRunner(modelName string, provider agent.Provider, agentName string)
 		provider,
 		agent.WithSystemPrompt(systemPrompt),
 		agent.WithTools(resolveTools(agentConfig)),
+		agent.WithToolApprover(approver),
 	), nil
 }
 

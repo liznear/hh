@@ -189,6 +189,9 @@ func (m *model) renderQuestionDialog(width, height int) string {
 
 	maxRows := max(1, height-8)
 	lines := []string{"", lipgloss.NewStyle().Bold(true).Render(dlg.request.Title), ""}
+	if content := strings.TrimSpace(dlg.request.Content); content != "" {
+		lines = append(lines, content, "")
+	}
 
 	for idx, opt := range dlg.request.Options {
 		prefix := " "

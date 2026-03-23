@@ -130,3 +130,28 @@ func TestLoad_ValidatesDefaultModel(t *testing.T) {
 		})
 	}
 }
+
+func TestToolPermissionPolicy(t *testing.T) {
+	cfg := Config{Permission: map[string]string{
+		"write": "ASK",
+		"edit":  "deny",
+		"bash":  "allow",
+		"read":  "invalid",
+	}}
+
+	if got := cfg.ToolPermissionPolicy("write"); got != "ask" {
+		t.Fatalf("ToolPermissionPolicy(write) = %q, want ask", got)
+	}
+	if got := cfg.ToolPermissionPolicy("edit"); got != "deny" {
+		t.Fatalf("ToolPermissionPolicy(edit) = %q, want deny", got)
+	}
+	if got := cfg.ToolPermissionPolicy("bash"); got != "allow" {
+		t.Fatalf("ToolPermissionPolicy(bash) = %q, want allow", got)
+	}
+	if got := cfg.ToolPermissionPolicy("read"); got != "allow" {
+		t.Fatalf("ToolPermissionPolicy(read) = %q, want allow", got)
+	}
+	if got := cfg.ToolPermissionPolicy("missing"); got != "allow" {
+		t.Fatalf("ToolPermissionPolicy(missing) = %q, want allow", got)
+	}
+}

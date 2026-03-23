@@ -127,23 +127,24 @@ type markdownPerfStats struct {
 func Run(cfg config.Config) error {
 	modelName := cfg.DefaultModel()
 	agentName := "Build"
+	workingDir := detectWorkingDirectory()
 
 	provider, err := cfg.ModelRouterProvider()
 	if err != nil {
 		return err
 	}
 
-	runner, err := newAgentRunner(modelName, provider, agentName)
+	runner, err := newAgentRunner(modelName, provider, agentName, cfg, workingDir)
 	if err != nil {
 		return err
 	}
 
-	p := tea.NewProgram(newModel(runner, modelName, agentName, cfg))
+	p := tea.NewProgram(newModel(runner, modelName, agentName, cfg, workingDir))
 	_, err = p.Run()
 	return err
 }
 
-func newModel(runner *agent.AgentRunner, modelName, agentName string, cfg config.Config) *model {
+func newModel(runner *agent.AgentRunner, modelName, agentName string, cfg config.Config, workingDir string) *model {
 	in := newTextareaInput()
 	theme := DefaultTheme()
 	spin := spinner.New(spinner.WithSpinner(spinner.Dot))
@@ -152,8 +153,6 @@ func newModel(runner *agent.AgentRunner, modelName, agentName string, cfg config
 	store := newSessionStorage(state)
 
 	state.SetTitle("Untitled Session")
-	workingDir := detectWorkingDirectory()
-
 	m := &model{
 		runner:    runner,
 		agentName: agentName,

@@ -15,8 +15,9 @@ import (
 const defaultRelPath = ".config/hh/config.json"
 
 type Config struct {
-	Models    ModelSelectionConfig      `json:"models"`
-	Providers map[string]ProviderConfig `json:"providers"`
+	Models     ModelSelectionConfig      `json:"models"`
+	Providers  map[string]ProviderConfig `json:"providers"`
+	Permission map[string]string         `json:"permission"`
 }
 
 type ModelSelectionConfig struct {
@@ -164,6 +165,25 @@ func (f Config) HasModel(modelName string) bool {
 		}
 	}
 	return false
+}
+
+func (f Config) ToolPermissionPolicy(toolName string) string {
+	toolName = strings.ToLower(strings.TrimSpace(toolName))
+	if toolName == "" {
+		return "allow"
+	}
+
+	if f.Permission == nil {
+		return "allow"
+	}
+
+	policy := strings.ToLower(strings.TrimSpace(f.Permission[toolName]))
+	switch policy {
+	case "allow", "ask", "deny":
+		return policy
+	default:
+		return "allow"
+	}
 }
 
 func (f Config) ModelRouterProvider() (agent.Provider, error) {

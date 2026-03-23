@@ -115,7 +115,8 @@ func executeTools(ctx context.Context, aContext Context, turnID int, toolCalls [
 			result ToolResult
 			args   = make(map[string]any)
 		)
-		if tool, ok := aContext.Tools[toolName]; !ok {
+		tool, ok := aContext.Tools[toolName]
+		if !ok {
 			result = ToolResult{IsErr: true, Data: "Not found"}
 		} else if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
 			result = ToolResult{IsErr: true, Data: fmt.Sprintf("Invalid arguments: %q", toolCall.Arguments)}
@@ -126,7 +127,15 @@ func executeTools(ctx context.Context, aContext Context, turnID int, toolCalls [
 				EventEmitter:    onEvent,
 				CurrentToolCall: toolCall.ID,
 			})
-			result = tool.Handler.Handle(toolCtx, args)
+			if aContext.Approver != nil {
+				if err := aContext.Approver.Approve(toolCtx, toolName, args); err != nil {
+					result = ToolResult{IsErr: true, Data: fmt.Sprintf("permission denied: %v", err)}
+				} else {
+					result = tool.Handler.Handle(toolCtx, args)
+				}
+			} else {
+				result = tool.Handler.Handle(toolCtx, args)
+			}
 		}
 		onEvent(Event{Type: EventTypeToolCallEnd, Data: EventDataToolCallEnd{Call: toolCall, Result: result}, TurnID: turnID, ToolCallID: toolCall.ID})
 		ret = append(ret, result)
