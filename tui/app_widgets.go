@@ -63,7 +63,16 @@ func formatElapsedSeconds(d time.Duration) string {
 }
 
 func (m *model) renderUserMessageWidget(item *session.UserMessage, width int) []string {
-	userLines := wrapLine(item.Content, max(1, width-3))
+	content := item.Content
+	if item != nil && item.Queued {
+		badge := lipgloss.NewStyle().
+			Foreground(m.theme.Background()).
+			Background(m.theme.Foreground()).
+			Padding(0, 1).
+			Render("Queued")
+		content = badge + " " + content
+	}
+	userLines := wrapLine(content, max(1, width-3))
 	if len(userLines) == 0 {
 		userLines = []string{""}
 	}

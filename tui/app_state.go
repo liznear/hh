@@ -14,7 +14,10 @@ import (
 )
 
 func (m *model) handleAgentEvent(e agent.Event) {
+	m.maybeClearQueuedSteering(e)
+
 	switch e.Type {
+	case agent.EventTypeTurnStart:
 	case agent.EventTypeThinkingDelta:
 		if data, ok := e.Data.(agent.EventDataThinkingDelta); ok {
 			m.appendThinkingDelta(data.Delta)
@@ -94,6 +97,23 @@ func (m *model) handleAgentEvent(e agent.Event) {
 				m.closeQuestionDialog()
 				m.addItem(&session.ErrorItem{Message: "question timed out"})
 			}
+		}
+	}
+}
+
+func (m *model) maybeClearQueuedSteering(e agent.Event) {
+	if len(m.runtime.queuedSteering) == 0 {
+		return
+	}
+
+	switch e.Type {
+	case agent.EventTypeTurnStart, agent.EventTypeTurnEnd, agent.EventTypeAgentEnd:
+		m.runtime.queuedSteering = nil
+		return
+	case agent.EventTypeMessage:
+		data, ok := e.Data.(agent.EventDataMessage)
+		if ok && data.Message.Role == agent.RoleUser {
+			m.runtime.queuedSteering = nil
 		}
 	}
 }

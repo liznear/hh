@@ -52,6 +52,7 @@ func (m *model) finalizeRun(runErr error) {
 	m.runtime.runCancel = nil
 	m.stopwatch, _ = m.stopwatch.Update(stopwatch.StartStopMsg{ID: m.stopwatch.ID()})
 	m.runtime.showRunResult = true
+	m.runtime.queuedSteering = nil
 	if runErr != nil {
 		m.addItem(&session.ErrorItem{Message: runErr.Error()})
 	}

@@ -9,4 +9,5 @@ type Context struct {
 	Tools        map[string]Tool
 	RunID        string
 	Interactions *InteractionManager
+	Steering     *SteeringQueue
 }

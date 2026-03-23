@@ -23,6 +23,7 @@ type State struct {
 type activeRun struct {
 	runID        string
 	interactions *InteractionManager
+	steering     *SteeringQueue
 }
 
 type AgentRunner struct {
@@ -60,7 +61,8 @@ type Input struct {
 func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event)) error {
 	runID := newRunID()
 	interactions := NewInteractionManager()
-	if err := a.setActiveRun(runID, interactions); err != nil {
+	steering := NewSteeringQueue()
+	if err := a.setActiveRun(runID, interactions, steering); err != nil {
 		return err
 	}
 	defer a.clearActiveRun(runID)
@@ -82,6 +84,7 @@ func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event))
 		Tools:        a.state.Tools,
 		RunID:        runID,
 		Interactions: interactions,
+		Steering:     steering,
 	}
 	onEvent(Event{
 		Type:      EventTypeMessage,
@@ -136,6 +139,23 @@ func (a *AgentRunner) DismissInteraction(interactionID, runID string) error {
 		return ErrNoActiveRun
 	}
 	return active.interactions.Dismiss(interactionID)
+}
+
+func (a *AgentRunner) SubmitSteeringMessage(content, runID string) error {
+	if a == nil || a.state == nil {
+		return ErrNoActiveRun
+	}
+	a.state.runMu.Lock()
+	active := a.state.activeRun
+	a.state.runMu.Unlock()
+	if active == nil || active.steering == nil {
+		return ErrNoActiveRun
+	}
+	if runID != "" && runID != active.runID {
+		return ErrNoActiveRun
+	}
+	_, err := active.steering.Enqueue(content)
+	return err
 }
 
 func (a *AgentRunner) maybeGenerateSessionTitleAsync(ctx context.Context, input Input, onEvent func(Event), started chan<- struct{}) <-chan struct{} {
@@ -241,7 +261,7 @@ func newRunID() string {
 	return fmt.Sprintf("run_%d", id)
 }
 
-func (a *AgentRunner) setActiveRun(runID string, interactions *InteractionManager) error {
+func (a *AgentRunner) setActiveRun(runID string, interactions *InteractionManager, steering *SteeringQueue) error {
 	if a == nil || a.state == nil {
 		return ErrNoActiveRun
 	}
@@ -250,7 +270,7 @@ func (a *AgentRunner) setActiveRun(runID string, interactions *InteractionManage
 	if a.state.activeRun != nil {
 		return fmt.Errorf("run %s is already active", a.state.activeRun.runID)
 	}
-	a.state.activeRun = &activeRun{runID: runID, interactions: interactions}
+	a.state.activeRun = &activeRun{runID: runID, interactions: interactions, steering: steering}
 	return nil
 }
 

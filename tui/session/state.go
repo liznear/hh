@@ -246,6 +246,7 @@ func (s *Start) Type() ItemType { return ItemTypeStart }
 type UserMessage struct {
 	baseItem
 	Content string
+	Queued  bool `json:"queued,omitempty"`
 }
 
 func (m *UserMessage) Type() ItemType { return ItemTypeUserMessage }

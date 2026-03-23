@@ -140,3 +140,12 @@ func TestFormatToolCallWidgetBody_Question(t *testing.T) {
 		t.Fatalf("body = %q, want %q", body, `Question: "Choose deployment mode"`)
 	}
 }
+
+func TestRenderUserMessageWidget_QueuedBadge(t *testing.T) {
+	m := newInputTestModel()
+	lines := m.renderUserMessageWidget(&session.UserMessage{Content: "steer", Queued: true}, 80)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "Queued") {
+		t.Fatalf("expected queued badge, got %q", joined)
+	}
+}

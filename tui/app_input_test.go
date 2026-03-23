@@ -93,3 +93,41 @@ func TestUpdate_EnterDoesNotDirectlyAppendUserMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleAgentEvent_MessageUserClearsQueuedSteering(t *testing.T) {
+	m := newInputTestModel()
+	m.runtime.busy = true
+	m.runtime.queuedSteering = []queuedSteeringMessage{{Content: "queued one"}, {Content: "queued two"}}
+	m.session.StartTurn()
+
+	m.handleAgentEvent(agent.Event{
+		Type: agent.EventTypeMessage,
+		Data: agent.EventDataMessage{Message: agent.Message{Role: agent.RoleUser, Content: "applied"}},
+	})
+
+	if len(m.runtime.queuedSteering) != 0 {
+		t.Fatalf("expected queued steering to be cleared, got %d", len(m.runtime.queuedSteering))
+	}
+}
+
+func TestHandleAgentEvent_TurnStartClearsQueuedSteering(t *testing.T) {
+	m := newInputTestModel()
+	m.runtime.queuedSteering = []queuedSteeringMessage{{Content: "queued one"}}
+
+	m.handleAgentEvent(agent.Event{Type: agent.EventTypeTurnStart})
+
+	if len(m.runtime.queuedSteering) != 0 {
+		t.Fatalf("expected queued steering to be cleared on turn start, got %d", len(m.runtime.queuedSteering))
+	}
+}
+
+func TestHandleAgentEvent_TurnEndClearsQueuedSteering(t *testing.T) {
+	m := newInputTestModel()
+	m.runtime.queuedSteering = []queuedSteeringMessage{{Content: "queued one"}}
+
+	m.handleAgentEvent(agent.Event{Type: agent.EventTypeTurnEnd})
+
+	if len(m.runtime.queuedSteering) != 0 {
+		t.Fatalf("expected queued steering to be cleared on turn end, got %d", len(m.runtime.queuedSteering))
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -322,5 +323,98 @@ func TestRunAgentLoop_PreservesAssistantToolCallsInHistory(t *testing.T) {
 	toolMessage := endData.Messages[1]
 	if toolMessage.Role != RoleTool || toolMessage.CallID != "call_1" {
 		t.Fatalf("expected tool message with call id call_1, got %+v", toolMessage)
+	}
+}
+
+func TestRunAgentLoop_DrainsSteeringQueueAndEmitsUserMessage(t *testing.T) {
+	steering := NewSteeringQueue()
+	if _, err := steering.Enqueue("adjust plan"); err != nil {
+		t.Fatalf("enqueue steering: %v", err)
+	}
+
+	mockP := &mockProvider{
+		responses: []ProviderResponse{
+			{Message: Message{Role: RoleAssistant, Content: "first"}},
+			{Message: Message{Role: RoleAssistant, Content: "second"}},
+		},
+	}
+
+	aCtx := Context{
+		Model:        "test-model",
+		Provider:     mockP,
+		SystemPrompt: "test system prompt",
+		Prompts:      []Message{{Role: RoleUser, Content: "start"}},
+		Tools:        map[string]Tool{},
+		Steering:     steering,
+	}
+
+	var sawSteeringEvent bool
+	var endData EventDataAgentEnd
+	RunAgentLoop(context.Background(), aCtx, func(e Event) {
+		if e.Type == EventTypeMessage {
+			data, ok := e.Data.(EventDataMessage)
+			if ok && data.Message.Role == RoleUser && data.Message.Content == "adjust plan" {
+				sawSteeringEvent = true
+			}
+		}
+		if e.Type == EventTypeAgentEnd {
+			if data, ok := e.Data.(EventDataAgentEnd); ok {
+				endData = data
+			}
+		}
+	})
+
+	if !sawSteeringEvent {
+		t.Fatal("expected steering message event")
+	}
+	foundSteeringInHistory := false
+	for _, msg := range endData.Messages {
+		if msg.Role == RoleUser && strings.Contains(msg.Content, "adjust plan") {
+			foundSteeringInHistory = true
+			break
+		}
+	}
+	if !foundSteeringInHistory {
+		t.Fatalf("expected steering message in history, got %+v", endData.Messages)
+	}
+}
+
+func TestRunAgentLoop_ProcessesLateSteeringAfterTurnEndEvent(t *testing.T) {
+	steering := NewSteeringQueue()
+	mockP := &mockProvider{
+		responses: []ProviderResponse{
+			{Message: Message{Role: RoleAssistant, Content: "first"}},
+			{Message: Message{Role: RoleAssistant, Content: "second"}},
+		},
+	}
+
+	aCtx := Context{
+		Model:        "test-model",
+		Provider:     mockP,
+		SystemPrompt: "test system prompt",
+		Prompts:      []Message{{Role: RoleUser, Content: "start"}},
+		Tools:        map[string]Tool{},
+		Steering:     steering,
+	}
+
+	queuedLate := false
+	seenSecondTurn := false
+	RunAgentLoop(context.Background(), aCtx, func(e Event) {
+		if e.Type == EventTypeTurnEnd && e.TurnID == 1 && !queuedLate {
+			queuedLate = true
+			if _, err := steering.Enqueue("late steer"); err != nil {
+				t.Fatalf("enqueue late steering: %v", err)
+			}
+		}
+		if e.Type == EventTypeTurnStart && e.TurnID == 2 {
+			seenSecondTurn = true
+		}
+	})
+
+	if !queuedLate {
+		t.Fatal("expected to enqueue late steering")
+	}
+	if !seenSecondTurn {
+		t.Fatal("expected second turn after late steering enqueue")
 	}
 }

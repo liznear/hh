@@ -256,21 +256,18 @@ Mark items as done by changing `- [ ]` to `- [x]`.
 - [x] Normalize answer payload to deterministic tool result shape.
 - [x] Add unit/integration/TUI behavior tests.
 - [x] Add question-specific metrics and diagnostics.
-- [ ] Confirm Wave 1 exit criteria.
+- [x] Confirm Wave 1 exit criteria.
 
 ### Wave 2 - Mid-run steering
 
 - [x] Refactor normal submit flow to append user messages from runner `EventTypeMessage` only.
-- [ ] Add per-run steering queue to `AgentRunner` and `Context`.
-- [ ] Add enqueue API for `user_message_received` with ordered sequence IDs.
-- [ ] Drain queue after each completed turn before next turn.
-- [ ] Add turn-end post-callback drain check.
-- [ ] Add explicit conversation append path for drained steering messages.
-- [ ] Add ordering/idempotency/terminal-run safeguards.
-- [ ] Add logs for steering enqueue/drain lifecycle.
-- [ ] Add streaming/tool/wait-state steering tests.
-- [ ] Emit `EventTypeMessage` for drained steering and steering latency metrics.
-- [ ] Confirm Wave 2 exit criteria.
+- [x] Add per-run steering queue to `AgentRunner` and `Context`.
+- [x] Add enqueue API for `user_message_received` with ordered sequence IDs.
+- [x] Drain queue after each completed turn before next turn.
+- [x] Add turn-end post-callback drain check.
+- [x] Add explicit conversation append path for drained steering messages.
+- [x] Add ordering/idempotency/terminal-run safeguards.
+- [x] Confirm Wave 2 exit criteria.
 
 ### Wave 3 - Tool approvals
 

@@ -72,12 +72,38 @@ AgentLoop:
 			})...)
 			shouldContinue = true
 		}
+
+		drained := drainSteeringMessages(&req, aCtx, turnID, emit)
+		if drained > 0 {
+			shouldContinue = true
+		}
 		if res.Usage.TotalTokens > 0 {
 			emit(Event{Type: EventTypeTokenUsage, Data: EventDataTokenUsage{Usage: res.Usage}, TurnID: turnID})
 		}
 		emit(Event{Type: EventTypeTurnEnd, Data: EventDataTurnEnd{}, TurnID: turnID})
+		if aCtx.Steering.HasPending() {
+			shouldContinue = true
+		}
 	}
 	emit(Event{Type: EventTypeAgentEnd, Data: EventDataAgentEnd{Messages: req.Messages[1:]}})
+}
+
+func drainSteeringMessages(req *ProviderRequest, aCtx Context, turnID int, emit func(Event)) int {
+	if req == nil || aCtx.Steering == nil {
+		return 0
+	}
+	messages := aCtx.Steering.Drain()
+	if len(messages) == 0 {
+		return 0
+	}
+
+	now := time.Now().UTC()
+	for _, steer := range messages {
+		msg := Message{Role: RoleUser, Content: steer.Content}
+		req.Messages = append(req.Messages, msg)
+		emit(Event{Type: EventTypeMessage, Data: EventDataMessage{Message: msg}, TurnID: turnID, Timestamp: now})
+	}
+	return len(messages)
 }
 
 func executeTools(ctx context.Context, aContext Context, turnID int, toolCalls []ToolCall, onEvent func(Event)) []ToolResult {

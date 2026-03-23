@@ -48,7 +48,7 @@ func (m *model) renderMessageList(width, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
-	items := m.session.AllItems()
+	items := m.displayItems()
 	if len(items) == 0 {
 		return ""
 	}
@@ -81,6 +81,19 @@ func (m *model) renderMessageList(width, height int) string {
 	}
 
 	return strings.Join(visible, "\n")
+}
+
+func (m *model) displayItems() []session.Item {
+	base := m.session.AllItems()
+	if len(m.runtime.queuedSteering) == 0 {
+		return base
+	}
+	out := make([]session.Item, 0, len(base)+len(m.runtime.queuedSteering))
+	out = append(out, base...)
+	for _, queued := range m.runtime.queuedSteering {
+		out = append(out, &session.UserMessage{Content: queued.Content, Queued: true})
+	}
+	return out
 }
 
 func (m *model) handleScrollKey(msg tea.KeyPressMsg) (bool, int) {
@@ -157,7 +170,7 @@ func (m *model) handleMouseWheelScroll(msg tea.MouseWheelMsg) int {
 }
 
 func (m *model) isListAtBottom(width, height int) bool {
-	items := m.session.AllItems()
+	items := m.displayItems()
 	if len(items) == 0 || width <= 0 || height <= 0 {
 		return true
 	}
@@ -173,7 +186,7 @@ func (m *model) isListAtBottom(width, height int) bool {
 }
 
 func (m *model) clampListOffset(width, height int) {
-	items := m.session.AllItems()
+	items := m.displayItems()
 	if len(items) == 0 {
 		m.listOffsetIdx = 0
 		m.listOffsetLine = 0
@@ -203,7 +216,7 @@ func (m *model) scrollListToBottom(width, height int) {
 }
 
 func (m *model) lastListOffset(width, height int) (int, int) {
-	items := m.session.AllItems()
+	items := m.displayItems()
 	if len(items) == 0 {
 		return 0, 0
 	}
@@ -227,7 +240,7 @@ func (m *model) scrollListBy(lines, width, height int) {
 	if lines == 0 {
 		return
 	}
-	items := m.session.AllItems()
+	items := m.displayItems()
 	if len(items) == 0 {
 		return
 	}
@@ -274,7 +287,7 @@ func (m *model) scrollListBy(lines, width, height int) {
 }
 
 func (m *model) currentListOffset(width int) int {
-	items := m.session.AllItems()
+	items := m.displayItems()
 	if len(items) == 0 || width <= 0 {
 		return 0
 	}

@@ -91,6 +91,12 @@ type RuntimeState struct {
 	questionLastLatency      time.Duration
 	questionSubmittedCount   int
 	questionValidationErrors int
+
+	queuedSteering []queuedSteeringMessage
+}
+
+type queuedSteeringMessage struct {
+	Content string
 }
 
 type itemRenderCacheEntry struct {
@@ -277,13 +283,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if key.Code == tea.KeyEnter {
 
-			if m.runtime.busy {
-				return m, statusCmd
-			}
-
 			inputValue := m.input.Value()
 			prompt := strings.TrimSpace(inputValue)
 			if prompt == "" {
+				return m, statusCmd
+			}
+
+			if m.runtime.busy {
+				if m.runner == nil {
+					m.addItem(&session.ErrorItem{Message: "runner unavailable"})
+					return m, statusCmd
+				}
+				if err := m.runner.SubmitSteeringMessage(prompt, ""); err != nil {
+					m.addItem(&session.ErrorItem{Message: err.Error()})
+					return m, statusCmd
+				}
+				m.runtime.queuedSteering = append(m.runtime.queuedSteering, queuedSteeringMessage{Content: prompt})
+				m.input.SetValue("")
+				m.refreshViewport()
 				return m, statusCmd
 			}
 
