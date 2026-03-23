@@ -22,26 +22,30 @@ Implementation constraint: deliver features strictly in sequence with no interle
 
 ## Design Overview
 
-### 1) Runtime model: event-driven state machine
+### 1) Runtime model: sequential loop with shared steering queue
 
-Refactor the runner/loop from a closed sequential loop into an event-driven state machine.
+Keep the core agent loop sequential. Add a thread-safe per-run steering queue shared between `AgentRunner` and TUI.
 
-Core states:
+The loop remains explicit:
 
-- `idle`: no active run.
-- `running`: model/tool execution active.
-- `waiting_for_interaction`: blocked on external response for an interaction.
-- `paused`: run intentionally paused (optional but useful).
-- `completed` / `failed` / `cancelled`: terminal states.
+- model call -> optional tool execution -> queue drain -> next turn.
 
-State transitions are driven by explicit events and should be logged.
+### 2) Steering integration: 3-step turn boundary design
 
-### 2) Two channels: data plane and control plane
+Steering is applied with a deterministic 3-step pattern:
 
-- Data plane: model streaming, tool calls, tool results.
-- Control plane: user messages, interaction responses, cancel/pause/resume.
+1. enqueue steering messages into a per-run queue while run is active,
+2. when a turn completes, execute tool calls if present and update message history,
+3. drain all queued steering messages into conversation history before the next turn.
 
-This separation prevents hidden coupling and makes interruption behavior explicit.
+This keeps steering behavior simple, inspectable, and deterministic.
+
+Queued-message UI behavior:
+
+- TUI stores busy-time steering submissions in a runtime-only queued list.
+- Runner emits `EventTypeMessage` when queued steering is drained into transcript history.
+- TUI clears the whole queued list on the first user-role message event received while busy.
+- This depends on the invariant that runner drains all queued steering messages as a single batch at turn boundary.
 
 ### 3) Generic interaction abstraction
 
@@ -87,27 +91,23 @@ Add an `InteractionManager` in the runner:
 - resolve once (idempotent),
 - timeout/expire stale interactions.
 
-### 5) Inbound event inbox
+### 5) Steering queue in context
 
-Add an inbox for external events:
+Add a queue object to run context and expose enqueue API from runner.
 
-- `user_message_received`
-- `interaction_responded`
-- `pause_requested`
-- `cancel_requested`
+- queue item: message content, timestamp, monotonically increasing `event_seq`, run correlation,
+- queue ownership: created by `AgentRunner` at run start, destroyed at run end,
+- queue semantics: FIFO, drain-all at turn boundary.
 
-Use ordered sequence numbers per run to preserve deterministic processing.
+### 6) Turn-boundary drain model
 
-### 6) Checkpoint preemption model
+Drain steering queue at deterministic points only:
 
-Support preemption at safe checkpoints (recommended default):
+- after tool execution path in a turn,
+- after non-tool turn completion,
+- and once more after turn-end callbacks to avoid late-enqueue drop.
 
-- after streaming chunk boundary,
-- after model turn completion,
-- before tool execution,
-- after tool result.
-
-At each checkpoint, process control events before continuing.
+Do not preempt mid-stream or mid-tool execution.
 
 ### 7) Policy gate for tools
 
@@ -132,7 +132,8 @@ Minimum events:
 - `run_started`, `run_checkpoint`, `run_completed`, `run_failed`
 - `interaction_requested`, `interaction_responded`, `interaction_expired`
 - `tool_call_started`, `tool_call_allowed`, `tool_call_denied`, `tool_call_completed`
-- `user_message_received`, `user_message_applied`
+- `user_message_received`
+- `message` (including drained steering messages)
 
 ### 9) Safety and failure handling
 
@@ -145,6 +146,13 @@ Minimum events:
 
 This roadmap intentionally avoids parallel feature development across question, steering, and approvals.
 Only complete shared runtime primitives and the current feature wave before starting the next one.
+
+Pre-Wave 2 refactor requirement:
+
+- Before implementing steering queue behavior, refactor baseline message submission to a single append path: transcript messages are appended from runner events only (including the initial user message for a new run).
+- TUI should stop directly appending submitted user messages to persisted turn items.
+- Runner should emit `EventTypeMessage` for the initial user prompt at run start.
+- This keeps one authoritative transcript mutation path and reduces steering integration complexity.
 
 ### Wave 0 - Shared primitives required for Question Tool only
 
@@ -183,15 +191,15 @@ Exit criteria:
 
 Scope rule: only steering behavior. Reuse existing interaction plumbing; do not add approval policy logic in this wave.
 
-1. Define state machine types and transitions for `idle`, `running`, `waiting_for_interaction`, terminal states, including pause/resume checkpoints.
-2. Add run inbox for `user_message_received` events with ordered sequence numbers.
-3. Add checkpoint processing hooks for safe steering application.
-4. Implement steering policy (`queue_until_checkpoint` default, optional `cancel_and_replan`).
-5. Add explicit conversation append path for steering messages.
-6. Add concurrency safeguards (ordering, idempotency, cancel race handling).
-7. Add logs for interaction lifecycle and state transitions during steering operations.
-8. Add tests for streaming/tool/waiting states with steering events.
-9. Emit `user_message_applied` and steering latency metrics.
+1. Refactor baseline submit workflow to runner-authoritative `EventTypeMessage` append path.
+2. Add steering message queue in `AgentRunner.State` and pass it via `Context`.
+3. Add `AgentRunner.SubmitSteeringMessage` for TUI to submit messages.
+4. On turn completion, execute tool calls if any, then drain queue into conversation history.
+5. Add turn-end post-callback drain check to avoid late-enqueue loss.
+6. Add concurrency safeguards (FIFO ordering, idempotent enqueue validation, terminal-run rejection).
+7. Add logs/events for enqueue and drained steering message actions.
+8. Add tests for steering during streaming/tool/waiting states and turn-end timing.
+9. Emit `EventTypeMessage` for drained steering.
 
 Exit criteria:
 
@@ -252,16 +260,16 @@ Mark items as done by changing `- [ ]` to `- [x]`.
 
 ### Wave 2 - Mid-run steering
 
-- [ ] Define runner state machine transitions for interaction pause/resume.
-- [ ] Add run inbox for `user_message_received` with ordered sequence IDs.
-- [ ] Add checkpoint hooks for control-plane event processing.
-- [ ] Implement default steering policy `queue_until_checkpoint`.
-- [ ] Optionally implement `cancel_and_replan` policy mode.
-- [ ] Add explicit conversation append path with `source=user_steer` tags.
-- [ ] Add ordering/idempotency/cancel-race safeguards.
-- [ ] Add logs for interaction lifecycle and state transitions.
+- [ ] Refactor normal submit flow to append user messages from runner `EventTypeMessage` only.
+- [ ] Add per-run steering queue to `AgentRunner` and `Context`.
+- [ ] Add enqueue API for `user_message_received` with ordered sequence IDs.
+- [ ] Drain queue after each completed turn before next turn.
+- [ ] Add turn-end post-callback drain check.
+- [ ] Add explicit conversation append path for drained steering messages.
+- [ ] Add ordering/idempotency/terminal-run safeguards.
+- [ ] Add logs for steering enqueue/drain lifecycle.
 - [ ] Add streaming/tool/wait-state steering tests.
-- [ ] Emit `user_message_applied` and steering latency metrics.
+- [ ] Emit `EventTypeMessage` for drained steering and steering latency metrics.
 - [ ] Confirm Wave 2 exit criteria.
 
 ### Wave 3 - Tool approvals
@@ -338,16 +346,18 @@ Question tool becomes a specific `InteractionKind = "question"` flow:
 
 ### How the design enables it
 
-Steering uses control plane events (`user_message_received`) processed at checkpoints.
-The loop remains responsive without unsafe arbitrary interruption.
+Steering uses a shared queue. New user messages are enqueued while a run is active, then drained into conversation history at deterministic turn boundaries.
+The loop stays sequential and does not require mid-stream preemption.
 
 Steering flow:
 
 1. User sends a new message during streaming/execution.
-2. Runner enqueues event in run inbox with sequence number.
-3. At next checkpoint, loop applies steering policy.
-4. Runner injects user message into conversation state.
-5. Loop continues with updated context.
+2. Runner enqueues it into the per-run queue with sequence number.
+3. Current turn completes (including tool execution if any).
+4. Loop drains queued messages and appends them.
+5. Runner emits `EventTypeMessage` for drained steering messages.
+6. TUI clears queued runtime list on first user-role message event while busy.
+7. Next turn starts with updated context.
 
 ### Detailed task breakdown
 
@@ -356,27 +366,31 @@ Steering flow:
 - Assign monotonic `event_seq` and timestamp.
 - Validate payload size and content constraints.
 
-2. Checkpoint processing
-- Define checkpoint locations and ordering guarantees.
-- Add handler to drain or partially drain inbox at checkpoint.
-- Ensure interaction responses are prioritized over steering when blocked.
+0. Baseline submit refactor (required before steering)
+- Move initial user message append to runner event emission path.
+- Ensure TUI no longer directly appends submitted user messages to persisted turn items.
+- Verify transcript rendering is unchanged after refactor.
 
-3. Steering policy
-- Define policy modes:
-  - `queue_until_checkpoint` (default)
-  - `cancel_and_replan` (optional)
-- Implement deterministic behavior for each mode.
-- Expose mode via config/feature flag.
+2. Turn boundary processing
+- Drain all queued steering messages after each completed turn.
+- Ensure tool calls are executed before draining queue for that turn.
+- Add post-turn callback drain check so late enqueues are not dropped.
 
-4. Conversation state mutation
+3. Conversation state mutation
 - Add explicit append path for steering messages.
-- Tag inserted messages as `source=user_steer` for traceability.
 - Ensure no hidden rewriting of prior model/tool history.
+
+4. TUI queued rendering
+- Store queued steering submissions in runtime-only state while run is busy.
+- Render queued list after current turn items with `Queued` badge.
+- Clear whole queued list on first user-role message event while busy.
+- Document invariant: runner drains all queued steering as one batch.
 
 5. Concurrency and correctness
 - Handle multiple steering messages in order.
 - Handle steering while waiting for interaction.
-- Prevent race between cancel and steering apply.
+- Reject enqueue for terminal/non-active runs.
+- Prevent late-enqueue loss around turn-end boundaries.
 
 6. Testing
 - Integration tests for steering during streaming and tool phases.
@@ -384,8 +398,8 @@ Steering flow:
 - Failure tests for malformed/late events.
 
 7. UX feedback
-- Emit `user_message_applied` event so UI confirms steering took effect.
-- Optionally show "applied at checkpoint" indicator.
+- Use drained steering `EventTypeMessage` as UI confirmation that steering took effect.
+- Optionally show "applied at turn boundary" indicator.
 
 ---
 
