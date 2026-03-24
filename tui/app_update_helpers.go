@@ -8,67 +8,67 @@ import (
 )
 
 func (m *model) recordScrollInteraction(inputType string, startedAt time.Time, deltaRows int, updateGap time.Duration, timeSinceView time.Duration) {
-	m.runtime.autoScroll = m.isListAtBottom(m.messageWidth, m.messageHeight)
-	m.runtime.suppressRefreshUntil = time.Now().Add(scrollPriorityWindow)
-	if m.runtime.pendingScrollAt.IsZero() {
-		m.runtime.pendingScrollAt = time.Now()
-		m.runtime.pendingScrollEvents = 0
+	m.autoScroll = m.isListAtBottom(m.messageWidth, m.messageHeight)
+	m.suppressRefreshUntil = time.Now().Add(scrollPriorityWindow)
+	if m.pendingScrollAt.IsZero() {
+		m.pendingScrollAt = time.Now()
+		m.pendingScrollEvents = 0
 	}
-	m.runtime.pendingScrollEvents++
-	if m.runtime.autoScroll && m.runtime.viewportDirty {
+	m.pendingScrollEvents++
+	if m.autoScroll && m.viewportDirty {
 		m.refreshViewport()
-		m.runtime.viewportDirty = false
+		m.viewportDirty = false
 	}
-	if !m.runtime.debug {
+	if !m.debug {
 		return
 	}
-	m.runtime.lastScrollStats = scrollPerfStats{
+	m.lastScrollStats = scrollPerfStats{
 		inputType:      inputType,
 		viewportUpdate: time.Since(startedAt),
 		deltaRows:      deltaRows,
 		updateGap:      updateGap,
 		timeSinceView:  timeSinceView,
 	}
-	m.runtime.maxScrollStats.viewportUpdate = maxDuration(m.runtime.maxScrollStats.viewportUpdate, m.runtime.lastScrollStats.viewportUpdate)
-	m.runtime.maxScrollStats.updateGap = maxDuration(m.runtime.maxScrollStats.updateGap, m.runtime.lastScrollStats.updateGap)
-	m.runtime.maxScrollStats.timeSinceView = maxDuration(m.runtime.maxScrollStats.timeSinceView, m.runtime.lastScrollStats.timeSinceView)
+	m.maxScrollStats.viewportUpdate = maxDuration(m.maxScrollStats.viewportUpdate, m.lastScrollStats.viewportUpdate)
+	m.maxScrollStats.updateGap = maxDuration(m.maxScrollStats.updateGap, m.lastScrollStats.updateGap)
+	m.maxScrollStats.timeSinceView = maxDuration(m.maxScrollStats.timeSinceView, m.lastScrollStats.timeSinceView)
 }
 
 func (m *model) refreshAfterStreamEvent() {
-	if m.runtime.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight) {
+	if m.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight) {
 		if m.shouldRefreshNow() {
 			m.refreshViewport()
-			m.runtime.viewportDirty = false
-			m.runtime.lastRefreshAt = time.Now()
+			m.viewportDirty = false
+			m.lastRefreshAt = time.Now()
 			return
 		}
 	}
-	m.runtime.viewportDirty = true
+	m.viewportDirty = true
 }
 
 func (m *model) finalizeRun(runErr error) {
-	m.runtime.busy = false
-	m.runtime.escPending = false
-	m.runtime.runCancel = nil
+	m.busy = false
+	m.escPending = false
+	m.runCancel = nil
 	m.stopwatch, _ = m.stopwatch.Update(stopwatch.StartStopMsg{ID: m.stopwatch.ID()})
-	m.runtime.showRunResult = true
-	m.runtime.queuedSteering = nil
+	m.showRunResult = true
+	m.queuedSteering = nil
 	if runErr != nil {
 		m.addItem(&session.ErrorItem{Message: runErr.Error()})
 	}
 	if turn := m.session.CurrentTurn(); turn != nil {
-		if m.runtime.cancelledRun {
+		if m.cancelledRun {
 			turn.EndWithStatus("cancelled")
 		} else {
 			turn.End()
 		}
 		m.persistTurnEnd(turn)
 	}
-	m.runtime.cancelledRun = false
+	m.cancelledRun = false
 	m.stream = nil
 	m.refreshViewport()
-	m.runtime.lastRefreshAt = time.Now()
-	m.runtime.viewportDirty = false
+	m.lastRefreshAt = time.Now()
+	m.viewportDirty = false
 }
 
 func (m *model) hasPendingToolCalls() bool {
@@ -76,11 +76,11 @@ func (m *model) hasPendingToolCalls() bool {
 }
 
 func (m *model) shouldRefreshNow() bool {
-	if !m.runtime.suppressRefreshUntil.IsZero() && time.Now().Before(m.runtime.suppressRefreshUntil) {
+	if !m.suppressRefreshUntil.IsZero() && time.Now().Before(m.suppressRefreshUntil) {
 		return false
 	}
-	if m.runtime.lastRefreshAt.IsZero() {
+	if m.lastRefreshAt.IsZero() {
 		return true
 	}
-	return time.Since(m.runtime.lastRefreshAt) >= renderRefreshInterval
+	return time.Since(m.lastRefreshAt) >= renderRefreshInterval
 }

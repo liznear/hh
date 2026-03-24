@@ -4,10 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
-	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/stopwatch"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/liznear/hh/tui/session"
@@ -53,21 +50,12 @@ func TestRunShellCommandCmdWithContext(t *testing.T) {
 }
 
 func TestUpdate_EnterInShellModeRunsCommandAndAddsShellMessage(t *testing.T) {
-	m := &model{
-		theme:           DefaultTheme(),
-		input:           newTextareaInput(),
-		spinner:         spinner.New(spinner.WithSpinner(spinner.Dot)),
-		stopwatch:       stopwatch.New(stopwatch.WithInterval(time.Second)),
-		session:         session.NewState("test-model"),
-		toolCalls:       map[string]*session.ToolCallItem{},
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-	}
+	m := newTestModel()
 	m.input.SetValue("!printf hello")
 
 	updated, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	after := updated.(*model)
-	if !after.runtime.busy {
+	if !after.busy {
 		t.Fatal("expected busy run after shell submit")
 	}
 	if cmd == nil {
@@ -77,7 +65,7 @@ func TestUpdate_EnterInShellModeRunsCommandAndAddsShellMessage(t *testing.T) {
 	doneMsg := shellCommandDoneMsg{command: "printf hello", output: "hello"}
 	updated, _ = after.Update(doneMsg)
 	afterDone := updated.(*model)
-	if afterDone.runtime.busy {
+	if afterDone.busy {
 		t.Fatal("expected busy to be false after shell completion")
 	}
 
@@ -104,20 +92,11 @@ func TestUpdate_EnterInShellModeRunsCommandAndAddsShellMessage(t *testing.T) {
 }
 
 func TestUpdate_BangEntersShellModeWithoutInputBang(t *testing.T) {
-	m := &model{
-		theme:           DefaultTheme(),
-		input:           newTextareaInput(),
-		spinner:         spinner.New(spinner.WithSpinner(spinner.Dot)),
-		stopwatch:       stopwatch.New(stopwatch.WithInterval(time.Second)),
-		session:         session.NewState("test-model"),
-		toolCalls:       map[string]*session.ToolCallItem{},
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-	}
+	m := newTestModel()
 
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: '!', Text: "!"}))
 	after := updated.(*model)
-	if !after.runtime.shellMode {
+	if !after.shellMode {
 		t.Fatal("expected shell mode after typing !")
 	}
 	if after.input.Value() != "" {
@@ -126,42 +105,24 @@ func TestUpdate_BangEntersShellModeWithoutInputBang(t *testing.T) {
 }
 
 func TestUpdate_BackspaceLeavesShellModeWhenInputEmpty(t *testing.T) {
-	m := &model{
-		theme:           DefaultTheme(),
-		input:           newTextareaInput(),
-		spinner:         spinner.New(spinner.WithSpinner(spinner.Dot)),
-		stopwatch:       stopwatch.New(stopwatch.WithInterval(time.Second)),
-		session:         session.NewState("test-model"),
-		toolCalls:       map[string]*session.ToolCallItem{},
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-	}
+	m := newTestModel()
 	m.setShellMode(true)
 
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
 	after := updated.(*model)
-	if after.runtime.shellMode {
+	if after.shellMode {
 		t.Fatal("expected backspace on empty shell input to leave shell mode")
 	}
 }
 
 func TestUpdate_EnterInExplicitShellModeExitsShellMode(t *testing.T) {
-	m := &model{
-		theme:           DefaultTheme(),
-		input:           newTextareaInput(),
-		spinner:         spinner.New(spinner.WithSpinner(spinner.Dot)),
-		stopwatch:       stopwatch.New(stopwatch.WithInterval(time.Second)),
-		session:         session.NewState("test-model"),
-		toolCalls:       map[string]*session.ToolCallItem{},
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-	}
+	m := newTestModel()
 	m.setShellMode(true)
 	m.input.SetValue("printf hello")
 
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	after := updated.(*model)
-	if after.runtime.shellMode {
+	if after.shellMode {
 		t.Fatal("expected shell mode to exit after submitting a shell command")
 	}
 }

@@ -48,13 +48,13 @@ func (m *model) handleAgentEvent(e agent.Event) {
 	case agent.EventTypeError:
 		switch data := e.Data.(type) {
 		case error:
-			if errors.Is(data, context.Canceled) && m.runtime.cancelledRun {
+			if errors.Is(data, context.Canceled) && m.cancelledRun {
 				return
 			}
 			m.addItem(&session.ErrorItem{Message: data.Error()})
 		case agent.EventDataError:
 			if data.Err != nil {
-				if errors.Is(data.Err, context.Canceled) && m.runtime.cancelledRun {
+				if errors.Is(data.Err, context.Canceled) && m.cancelledRun {
 					return
 				}
 				m.addItem(&session.ErrorItem{Message: data.Err.Error()})
@@ -70,7 +70,7 @@ func (m *model) handleAgentEvent(e agent.Event) {
 	case agent.EventTypeTokenUsage:
 		if data, ok := e.Data.(agent.EventDataTokenUsage); ok {
 			if data.Usage.TotalTokens > 0 {
-				m.runtime.contextWindowUsed = data.Usage.TotalTokens
+				m.contextWindowUsed = data.Usage.TotalTokens
 			}
 		}
 	case agent.EventTypeInteractionRequested:
@@ -81,19 +81,19 @@ func (m *model) handleAgentEvent(e agent.Event) {
 		}
 	case agent.EventTypeInteractionResponded:
 		if data, ok := e.Data.(agent.EventDataInteractionResponded); ok {
-			if dlg := m.runtime.questionDialog; dlg != nil && dlg.request.InteractionID == data.Response.InteractionID {
+			if dlg := m.questionDialog; dlg != nil && dlg.request.InteractionID == data.Response.InteractionID {
 				m.closeQuestionDialog()
 			}
 		}
 	case agent.EventTypeInteractionDismissed:
 		if data, ok := e.Data.(agent.EventDataInteractionDismissed); ok {
-			if dlg := m.runtime.questionDialog; dlg != nil && dlg.request.InteractionID == data.InteractionID {
+			if dlg := m.questionDialog; dlg != nil && dlg.request.InteractionID == data.InteractionID {
 				m.closeQuestionDialog()
 			}
 		}
 	case agent.EventTypeInteractionExpired:
 		if data, ok := e.Data.(agent.EventDataInteractionExpired); ok {
-			if dlg := m.runtime.questionDialog; dlg != nil && dlg.request.InteractionID == data.InteractionID {
+			if dlg := m.questionDialog; dlg != nil && dlg.request.InteractionID == data.InteractionID {
 				m.closeQuestionDialog()
 				m.addItem(&session.ErrorItem{Message: "interaction timed out"})
 			}
@@ -102,18 +102,18 @@ func (m *model) handleAgentEvent(e agent.Event) {
 }
 
 func (m *model) maybeClearQueuedSteering(e agent.Event) {
-	if len(m.runtime.queuedSteering) == 0 {
+	if len(m.queuedSteering) == 0 {
 		return
 	}
 
 	switch e.Type {
 	case agent.EventTypeTurnStart, agent.EventTypeTurnEnd, agent.EventTypeAgentEnd:
-		m.runtime.queuedSteering = nil
+		m.queuedSteering = nil
 		return
 	case agent.EventTypeMessage:
 		data, ok := e.Data.(agent.EventDataMessage)
 		if ok && data.Message.Role == agent.RoleUser {
-			m.runtime.queuedSteering = nil
+			m.queuedSteering = nil
 		}
 	}
 }
@@ -172,7 +172,7 @@ func (m *model) completeToolCall(call agent.ToolCall, result agent.ToolResult) {
 	if item, ok := m.toolCalls[key]; ok {
 		item.Complete(result)
 		m.applyToolState(call, result)
-		m.runtime.lastGitRefreshAt = time.Time{}
+		m.lastGitRefreshAt = time.Time{}
 		m.persistItem(m.turnNumber(m.session.CurrentTurn()), item)
 		m.persistMeta()
 		delete(m.toolCalls, key)
@@ -186,7 +186,7 @@ func (m *model) completeToolCall(call agent.ToolCall, result agent.ToolResult) {
 	}
 	item.Complete(result)
 	m.applyToolState(call, result)
-	m.runtime.lastGitRefreshAt = time.Time{}
+	m.lastGitRefreshAt = time.Time{}
 	m.addItem(item)
 }
 

@@ -8,11 +8,7 @@ import (
 )
 
 func TestFormatSessionForViewport_ReusesAndUpdatesItemRenderCache(t *testing.T) {
-	m := &model{
-		session:         session.NewState("test-model"),
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-	}
+	m := newTestModel()
 
 	msg := &session.UserMessage{Content: "hello"}
 	m.session.AddItem(msg)

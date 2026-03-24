@@ -96,8 +96,7 @@ func (m *model) switchModel(modelName string) {
 
 	m.modelName = modelName
 	m.session.SetModel(modelName)
-	m.runtime.contextWindowTotal = m.contextWindowTotalFor(strings.TrimSpace(modelName))
-	m.runtime.contextWindowUsed = 0
+	m.contextWindowUsed = 0
 	if m.runner != nil {
 		m.runner.SetModel(modelName)
 	}

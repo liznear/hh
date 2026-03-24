@@ -23,7 +23,7 @@ func (m *model) syncLayoutWith(layout layoutState) {
 	wasAtBottom := m.isListAtBottom(m.messageWidth, m.messageHeight)
 	m.messageWidth = layout.mainWidth
 	m.messageHeight = layout.messageHeight
-	if m.runtime.autoScroll || wasAtBottom {
+	if m.autoScroll || wasAtBottom {
 		m.scrollListToBottom(m.messageWidth, m.messageHeight)
 	} else {
 		m.clampListOffset(m.messageWidth, m.messageHeight)
@@ -36,9 +36,9 @@ func (m *model) refreshViewport() {
 	if m.messageWidth <= 0 || m.messageHeight <= 0 {
 		return
 	}
-	if m.runtime.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight) {
+	if m.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight) {
 		m.scrollListToBottom(m.messageWidth, m.messageHeight)
-		m.runtime.autoScroll = true
+		m.autoScroll = true
 		return
 	}
 	m.clampListOffset(m.messageWidth, m.messageHeight)
@@ -85,12 +85,12 @@ func (m *model) renderMessageList(width, height int) string {
 
 func (m *model) displayItems() []session.Item {
 	base := m.session.AllItems()
-	if len(m.runtime.queuedSteering) == 0 {
+	if len(m.queuedSteering) == 0 {
 		return base
 	}
-	out := make([]session.Item, 0, len(base)+len(m.runtime.queuedSteering))
+	out := make([]session.Item, 0, len(base)+len(m.queuedSteering))
 	out = append(out, base...)
-	for _, queued := range m.runtime.queuedSteering {
+	for _, queued := range m.queuedSteering {
 		out = append(out, &session.UserMessage{Content: queued.Content, Queued: true})
 	}
 	return out

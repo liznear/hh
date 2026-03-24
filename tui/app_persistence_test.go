@@ -16,10 +16,9 @@ func TestPersistState_CreatesFilesOnlyAfterFirstUserPrompt(t *testing.T) {
 	}
 
 	state := session.NewState("test-model")
-	m := &model{
-		session: state,
-		storage: store,
-	}
+	m := newTestModel()
+	m.session = state
+	m.storage = store
 
 	metaPath := filepath.Join(tempDir, state.ID+".meta.json")
 	itemsPath := filepath.Join(tempDir, state.ID+".jsonl")

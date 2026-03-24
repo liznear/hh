@@ -9,12 +9,7 @@ import (
 )
 
 func TestRenderMessageList_MixedContentRespectsWidthAndHeight(t *testing.T) {
-	m := &model{
-		theme:           DefaultTheme(),
-		session:         session.NewState("test-model"),
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-	}
+	m := newTestModel()
 
 	m.session.AddItem(&session.UserMessage{Content: "plain " + strings.Repeat("text ", 20)})
 	m.session.AddItem(&session.AssistantMessage{Content: "Markdown:\n\n```go\n" + strings.Repeat("x", 140) + "\n```"})
@@ -32,12 +27,7 @@ func TestRenderMessageList_MixedContentRespectsWidthAndHeight(t *testing.T) {
 }
 
 func TestRenderMessageList_InsertsSingleBlankLineBetweenMessageBlocks(t *testing.T) {
-	m := &model{
-		theme:           DefaultTheme(),
-		session:         session.NewState("test-model"),
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-	}
+	m := newTestModel()
 
 	m.session.AddItem(&session.UserMessage{Content: "user message"})
 	m.session.AddItem(&session.ThinkingBlock{Content: "thinking message"})
@@ -73,13 +63,7 @@ func TestRenderMessageList_InsertsSingleBlankLineBetweenMessageBlocks(t *testing
 }
 
 func TestRenderMessageList_ShowsMutedTurnFooterAfterAssistantOnTurnEnd(t *testing.T) {
-	m := &model{
-		theme:           DefaultTheme(),
-		session:         session.NewState("test-model"),
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-		modelName:       "test-model",
-	}
+	m := newTestModel()
 
 	turn := m.session.StartTurn()
 	turn.AddItem(&session.AssistantMessage{Content: "assistant message"})
@@ -106,13 +90,7 @@ func TestRenderMessageList_ShowsMutedTurnFooterAfterAssistantOnTurnEnd(t *testin
 }
 
 func TestRenderMessageList_ShowsCancelledTurnFooter(t *testing.T) {
-	m := &model{
-		theme:           DefaultTheme(),
-		session:         session.NewState("test-model"),
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-		modelName:       "test-model",
-	}
+	m := newTestModel()
 
 	turn := m.session.StartTurn()
 	turn.AddItem(&session.AssistantMessage{Content: "assistant message"})

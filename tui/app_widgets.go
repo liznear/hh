@@ -215,7 +215,7 @@ type toolCallWidgetModel struct {
 }
 
 func (m *model) renderToolCallWidget(item *session.ToolCallItem, width int) []string {
-	vm := toolCallWidgetModel{Item: item, Width: max(1, width-2), WorkingDir: m.runtime.workingDir}
+	vm := toolCallWidgetModel{Item: item, Width: max(1, width-2), WorkingDir: m.workingDir}
 	toolLines := renderToolCallWidget(vm, m.theme)
 	return prefixedLines(toolLines, "  ")
 }

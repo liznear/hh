@@ -3,10 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
-	"time"
 
-	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/stopwatch"
 	tea "charm.land/bubbletea/v2"
 	"github.com/liznear/hh/config"
 	"github.com/liznear/hh/tui/commands"
@@ -51,18 +48,9 @@ func TestUpdate_NewSlashCommandStartsFreshSession(t *testing.T) {
 	state := session.NewState("test-model")
 	state.StartTurn().AddItem(&session.UserMessage{Content: "hello"})
 
-	m := &model{
-		modelName:       "test-model",
-		theme:           DefaultTheme(),
-		input:           newTextareaInput(),
-		spinner:         spinner.New(spinner.WithSpinner(spinner.Dot)),
-		stopwatch:       stopwatch.New(stopwatch.WithInterval(time.Second)),
-		session:         state,
-		toolCalls:       map[string]*session.ToolCallItem{"tool-1": {ID: "tool-1"}},
-		slashCommands:   commands.BuiltIn(),
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-	}
+	m := newTestModel()
+	m.session = state
+	m.toolCalls = map[string]*session.ToolCallItem{"tool-1": {ID: "tool-1"}}
 	m.input.SetValue("/new")
 
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -77,7 +65,7 @@ func TestUpdate_NewSlashCommandStartsFreshSession(t *testing.T) {
 	if len(after.toolCalls) != 0 {
 		t.Fatalf("expected tool calls to be cleared, got %d", len(after.toolCalls))
 	}
-	if after.runtime.busy {
+	if after.busy {
 		t.Fatal("expected slash command to not start busy run")
 	}
 	if got := after.input.Value(); got != "" {
@@ -86,18 +74,7 @@ func TestUpdate_NewSlashCommandStartsFreshSession(t *testing.T) {
 }
 
 func TestUpdate_UnknownSlashCommandShowsErrorItem(t *testing.T) {
-	m := &model{
-		modelName:       "test-model",
-		theme:           DefaultTheme(),
-		input:           newTextareaInput(),
-		spinner:         spinner.New(spinner.WithSpinner(spinner.Dot)),
-		stopwatch:       stopwatch.New(stopwatch.WithInterval(time.Second)),
-		session:         session.NewState("test-model"),
-		toolCalls:       map[string]*session.ToolCallItem{},
-		slashCommands:   commands.BuiltIn(),
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-	}
+	m := newTestModel()
 	m.input.SetValue("/does-not-exist")
 
 	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
@@ -111,33 +88,24 @@ func TestUpdate_UnknownSlashCommandShowsErrorItem(t *testing.T) {
 	if !strings.Contains(errItem.Message, "unknown slash command") {
 		t.Fatalf("unexpected error message: %q", errItem.Message)
 	}
-	if after.runtime.busy {
+	if after.busy {
 		t.Fatal("expected unknown slash command to not start busy run")
 	}
 }
 
 func TestUpdate_ModelSlashCommandOpensPickerAndSwitchesModel(t *testing.T) {
-	m := &model{
-		modelName:     "proxy/glm-5",
-		theme:         DefaultTheme(),
-		input:         newTextareaInput(),
-		spinner:       spinner.New(spinner.WithSpinner(spinner.Dot)),
-		stopwatch:     stopwatch.New(stopwatch.WithInterval(time.Second)),
-		session:       session.NewState("proxy/glm-5"),
-		toolCalls:     map[string]*session.ToolCallItem{},
-		slashCommands: commands.BuiltIn(),
-		config: config.Config{
-			Providers: map[string]config.ProviderConfig{
-				"proxy": {
-					Models: map[string]config.ModelConfig{
-						"glm-5":         {},
-						"gpt-5.3-codex": {},
-					},
+	m := newTestModel()
+	m.modelName = "proxy/glm-5"
+	m.session = session.NewState("proxy/glm-5")
+	m.config = config.Config{
+		Providers: map[string]config.ProviderConfig{
+			"proxy": {
+				Models: map[string]config.ModelConfig{
+					"glm-5":         {},
+					"gpt-5.3-codex": {},
 				},
 			},
 		},
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
 	}
 	m.input.SetValue("/model")
 

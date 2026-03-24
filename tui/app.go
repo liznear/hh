@@ -23,10 +23,33 @@ type model struct {
 	theme     Theme
 	storage   *session.Storage
 
-	config      config.Config
-	modelPicker *modelPickerState
+	State
+
+	config config.Config
+
+	spinner               spinner.Model
+	stopwatch             stopwatch.Model
+	markdownRenderer      *glamour.TermRenderer
+	markdownRendererWidth int
+	markdownCache         map[string]string
+	itemRenderCache       map[uintptr]itemRenderCacheEntry
+}
+
+type State struct {
+	domainState
+	uiState
+	runtimeState
+}
+
+type domainState struct {
+	session   *session.State
+	toolCalls map[string]*session.ToolCallItem
 
 	slashCommands map[string]commands.Command
+}
+
+type uiState struct {
+	modelPicker *modelPickerState
 
 	width  int
 	height int
@@ -37,23 +60,12 @@ type model struct {
 	listOffsetIdx  int
 	listOffsetLine int
 
-	stream  <-chan tea.Msg
-	runtime RuntimeState
-
-	session   *session.State
-	toolCalls map[string]*session.ToolCallItem
-
-	spinner               spinner.Model
-	stopwatch             stopwatch.Model
-	markdownRenderer      *glamour.TermRenderer
-	markdownRendererWidth int
-	markdownCache         map[string]string
-	itemRenderCache       map[uintptr]itemRenderCacheEntry
+	stream <-chan tea.Msg
 }
 
-// RuntimeState holds ephemeral TUI runtime fields that should not be persisted
+// runtimeState holds ephemeral TUI runtime fields that should not be persisted
 // as part of session state.
-type RuntimeState struct {
+type runtimeState struct {
 	busy         bool
 	autoScroll   bool
 	debug        bool
@@ -80,12 +92,11 @@ type RuntimeState struct {
 	lastScrollStats   scrollPerfStats
 	maxScrollStats    scrollPerfStats
 
-	workingDir         string
-	gitBranch          string
-	modifiedFiles      []modifiedFileStat
-	lastGitRefreshAt   time.Time
-	contextWindowTotal int
-	contextWindowUsed  int
+	workingDir        string
+	gitBranch         string
+	modifiedFiles     []modifiedFileStat
+	lastGitRefreshAt  time.Time
+	contextWindowUsed int
 
 	questionPromptedAt       time.Time
 	questionLastLatency      time.Duration
@@ -124,6 +135,40 @@ type markdownPerfStats struct {
 	fallbackToWrap bool
 }
 
+func newDomainState(state *session.State, modelName string) domainState {
+	if state == nil {
+		state = session.NewState(modelName)
+	}
+	return domainState{
+		session:       state,
+		toolCalls:     map[string]*session.ToolCallItem{},
+		slashCommands: commands.BuiltIn(),
+	}
+}
+
+func newUIState(input textarea.Model) uiState {
+	return uiState{input: input}
+}
+
+func newRuntimeState(workingDir string) runtimeState {
+	return runtimeState{
+		autoScroll:       true,
+		debug:            isDebugEnabled(),
+		workingDir:       workingDir,
+		gitBranch:        detectGitBranch(workingDir),
+		modifiedFiles:    collectModifiedFiles(workingDir),
+		lastGitRefreshAt: time.Now(),
+	}
+}
+
+func newState(state *session.State, modelName string, input textarea.Model, workingDir string) State {
+	return State{
+		domainState:  newDomainState(state, modelName),
+		uiState:      newUIState(input),
+		runtimeState: newRuntimeState(workingDir),
+	}
+}
+
 func Run(cfg config.Config) error {
 	modelName := cfg.DefaultModel()
 	agentName := "Build"
@@ -152,32 +197,19 @@ func newModel(runner *agent.AgentRunner, modelName, agentName string, cfg config
 	state := session.NewState(modelName)
 	store := newSessionStorage(state)
 
-	state.SetTitle("Untitled Session")
 	m := &model{
-		runner:    runner,
-		agentName: agentName,
-		modelName: modelName,
-		theme:     theme,
-		storage:   store,
-		config:    cfg,
-		input:     in,
-		spinner:   spin,
-		stopwatch: sw,
-		runtime: RuntimeState{
-			autoScroll: true,
-			debug:      isDebugEnabled(),
-			workingDir: workingDir,
-		},
+		runner:          runner,
+		agentName:       agentName,
+		modelName:       modelName,
+		theme:           theme,
+		storage:         store,
+		config:          cfg,
+		spinner:         spin,
+		stopwatch:       sw,
+		State:           newState(state, modelName, in, workingDir),
 		markdownCache:   map[string]string{},
 		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-		session:         state,
-		toolCalls:       map[string]*session.ToolCallItem{},
-		slashCommands:   commands.BuiltIn(),
 	}
-	m.runtime.gitBranch = detectGitBranch(m.runtime.workingDir)
-	m.runtime.modifiedFiles = collectModifiedFiles(m.runtime.workingDir)
-	m.runtime.lastGitRefreshAt = time.Now()
-	m.runtime.contextWindowTotal = m.contextWindowTotalFor(strings.TrimSpace(modelName))
 	return m
 }
 
@@ -196,18 +228,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updateStart := time.Now()
 	updateGap := time.Duration(0)
 	timeSinceView := time.Duration(0)
-	if !m.runtime.lastUpdateAt.IsZero() {
-		updateGap = updateStart.Sub(m.runtime.lastUpdateAt)
+	if !m.lastUpdateAt.IsZero() {
+		updateGap = updateStart.Sub(m.lastUpdateAt)
 	}
-	if !m.runtime.lastViewDoneAt.IsZero() {
-		timeSinceView = updateStart.Sub(m.runtime.lastViewDoneAt)
+	if !m.lastViewDoneAt.IsZero() {
+		timeSinceView = updateStart.Sub(m.lastViewDoneAt)
 	}
 	defer func() {
-		m.runtime.lastUpdateAt = updateStart
+		m.lastUpdateAt = updateStart
 	}()
 
 	var spinnerCmd tea.Cmd
-	if m.runtime.busy {
+	if m.busy {
 		m.spinner, spinnerCmd = m.spinner.Update(msg)
 	}
 	var stopwatchCmd tea.Cmd
@@ -223,7 +255,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, statusCmd
 
 	case tea.KeyPressMsg:
-		if m.runtime.questionDialog != nil {
+		if m.questionDialog != nil {
 			if m.handleQuestionDialogKey(msg) {
 				m.refreshViewport()
 				return m, statusCmd
@@ -232,8 +264,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.modelPicker != nil {
 			if m.handleModelPickerKey(msg) {
-				m.runtime.showRunResult = false
-				m.runtime.escPending = false
+				m.showRunResult = false
+				m.escPending = false
 				return m, statusCmd
 			}
 		}
@@ -250,26 +282,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		key := msg.Key()
-		if key.Code == tea.KeyEscape && m.runtime.busy {
-			if m.runtime.escPending {
-				if m.runtime.runCancel != nil {
-					m.runtime.runCancel()
+		if key.Code == tea.KeyEscape && m.busy {
+			if m.escPending {
+				if m.runCancel != nil {
+					m.runCancel()
 				}
-				m.runtime.cancelledRun = true
-				m.runtime.escPending = false
+				m.cancelledRun = true
+				m.escPending = false
 			} else {
-				m.runtime.escPending = true
+				m.escPending = true
 			}
 			return m, statusCmd
 		}
 
-		if !m.runtime.busy {
-			if !m.runtime.shellMode && msg.String() == "!" && strings.TrimSpace(m.input.Value()) == "" {
+		if !m.busy {
+			if !m.shellMode && msg.String() == "!" && strings.TrimSpace(m.input.Value()) == "" {
 				m.setShellMode(true)
 				return m, statusCmd
 			}
 
-			if m.runtime.shellMode && key.Code == tea.KeyBackspace && m.input.Value() == "" {
+			if m.shellMode && key.Code == tea.KeyBackspace && m.input.Value() == "" {
 				m.setShellMode(false)
 				return m, statusCmd
 			}
@@ -288,7 +320,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, statusCmd
 			}
 
-			if m.runtime.busy {
+			if m.busy {
 				if m.runner == nil {
 					m.addItem(&session.ErrorItem{Message: "runner unavailable"})
 					return m, statusCmd
@@ -297,13 +329,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.addItem(&session.ErrorItem{Message: err.Error()})
 					return m, statusCmd
 				}
-				m.runtime.queuedSteering = append(m.runtime.queuedSteering, queuedSteeringMessage{Content: prompt})
+				m.queuedSteering = append(m.queuedSteering, queuedSteeringMessage{Content: prompt})
 				m.input.SetValue("")
 				m.refreshViewport()
 				return m, statusCmd
 			}
 
-			if m.runtime.shellMode {
+			if m.shellMode {
 				command := strings.TrimSpace(inputValue)
 				if command == "" {
 					return m, statusCmd
@@ -313,12 +345,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.persistTurnStart(turn)
 				m.input.SetValue("")
 				m.setShellMode(false)
-				m.runtime.busy = true
-				m.runtime.escPending = false
-				m.runtime.cancelledRun = false
-				m.runtime.showRunResult = false
+				m.busy = true
+				m.escPending = false
+				m.cancelledRun = false
+				m.showRunResult = false
 				runCtx, cancel := context.WithCancel(context.Background())
-				m.runtime.runCancel = cancel
+				m.runCancel = cancel
 				m.refreshViewport()
 
 				return m, tea.Batch(runShellCommandCmdWithContext(runCtx, command), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
@@ -335,12 +367,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				turn := m.session.StartTurn()
 				m.persistTurnStart(turn)
 				m.input.SetValue("")
-				m.runtime.busy = true
-				m.runtime.escPending = false
-				m.runtime.cancelledRun = false
-				m.runtime.showRunResult = false
+				m.busy = true
+				m.escPending = false
+				m.cancelledRun = false
+				m.showRunResult = false
 				runCtx, cancel := context.WithCancel(context.Background())
-				m.runtime.runCancel = cancel
+				m.runCancel = cancel
 				m.refreshViewport()
 
 				return m, tea.Batch(runShellCommandCmdWithContext(runCtx, command), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
@@ -350,8 +382,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if m.handleSlashCommand(prompt) {
 				m.input.SetValue("")
-				m.runtime.showRunResult = false
-				m.runtime.escPending = false
+				m.showRunResult = false
+				m.escPending = false
 				return m, statusCmd
 			}
 
@@ -359,12 +391,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.persistTurnStart(turn)
 			submittedPrompt := promptWithInternalState(prompt, m.session.TodoItems)
 			m.input.SetValue("")
-			m.runtime.busy = true
-			m.runtime.escPending = false
-			m.runtime.cancelledRun = false
-			m.runtime.showRunResult = false
+			m.busy = true
+			m.escPending = false
+			m.cancelledRun = false
+			m.showRunResult = false
 			runCtx, cancel := context.WithCancel(context.Background())
-			m.runtime.runCancel = cancel
+			m.runCancel = cancel
 			m.refreshViewport()
 
 			return m, tea.Batch(startAgentStreamCmdWithContext(runCtx, m.runner, submittedPrompt), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
@@ -376,7 +408,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		}
-		m.runtime.escPending = false
+		m.escPending = false
 
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
@@ -399,11 +431,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, statusCmd
 
 	case spinner.TickMsg:
-		if m.runtime.busy && m.hasPendingToolCalls() && (m.runtime.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight)) && m.shouldRefreshNow() {
+		if m.busy && m.hasPendingToolCalls() && (m.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight)) && m.shouldRefreshNow() {
 			m.refreshViewport()
-			m.runtime.lastRefreshAt = time.Now()
-		} else if m.runtime.busy && m.hasPendingToolCalls() {
-			m.runtime.viewportDirty = true
+			m.lastRefreshAt = time.Now()
+		} else if m.busy && m.hasPendingToolCalls() {
+			m.viewportDirty = true
 		}
 		return m, statusCmd
 

@@ -5,10 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/bubbles/v2/spinner"
-	"charm.land/bubbles/v2/stopwatch"
 	tea "charm.land/bubbletea/v2"
-	"github.com/liznear/hh/tui/session"
 )
 
 func TestRenderStatusWidget_ShowsEscInterruptHintWhileBusy(t *testing.T) {
@@ -35,22 +32,11 @@ func TestRenderStatusWidget_ShellModeShowsShell(t *testing.T) {
 }
 
 func TestUpdate_EscTwiceCancelsBusyRun(t *testing.T) {
-	m := &model{
-		theme:           DefaultTheme(),
-		input:           newTextareaInput(),
-		spinner:         spinner.New(spinner.WithSpinner(spinner.Dot)),
-		stopwatch:       stopwatch.New(stopwatch.WithInterval(time.Second)),
-		session:         session.NewState("test-model"),
-		toolCalls:       map[string]*session.ToolCallItem{},
-		markdownCache:   map[string]string{},
-		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
-		runtime: RuntimeState{
-			busy: true,
-		},
-	}
+	m := newTestModel()
+	m.busy = true
 
 	cancelCalled := false
-	m.runtime.runCancel = func() {
+	m.runCancel = func() {
 		cancelCalled = true
 	}
 
@@ -58,10 +44,10 @@ func TestUpdate_EscTwiceCancelsBusyRun(t *testing.T) {
 
 	updated, _ := m.Update(esc)
 	m1 := updated.(*model)
-	if !m1.runtime.escPending {
+	if !m1.escPending {
 		t.Fatal("expected first Esc to set escPending")
 	}
-	if m1.runtime.cancelledRun {
+	if m1.cancelledRun {
 		t.Fatal("expected first Esc to not mark run as cancelled")
 	}
 	if cancelCalled {
@@ -70,10 +56,10 @@ func TestUpdate_EscTwiceCancelsBusyRun(t *testing.T) {
 
 	updated, _ = m1.Update(esc)
 	m2 := updated.(*model)
-	if m2.runtime.escPending {
+	if m2.escPending {
 		t.Fatal("expected second Esc to clear escPending")
 	}
-	if !m2.runtime.cancelledRun {
+	if !m2.cancelledRun {
 		t.Fatal("expected second Esc to mark run as cancelled")
 	}
 	if !cancelCalled {

@@ -30,7 +30,7 @@ func parseShellCommand(input string) string {
 }
 
 func (m *model) setShellMode(enabled bool) {
-	m.runtime.shellMode = enabled
+	m.shellMode = enabled
 	if enabled {
 		applyTextareaPromptColor(&m.input, m.theme.Color(ThemeColorInputPromptShell))
 		return
@@ -39,7 +39,7 @@ func (m *model) setShellMode(enabled bool) {
 }
 
 func (m *model) shellModeActive() bool {
-	return m.runtime.shellMode || isShellModeInput(m.input.Value())
+	return m.shellMode || isShellModeInput(m.input.Value())
 }
 
 func runShellCommandCmdWithContext(ctx context.Context, command string) tea.Cmd {

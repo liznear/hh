@@ -20,21 +20,21 @@ type frameViewModel struct {
 
 func (m *model) View() tea.View {
 	start := time.Now()
-	scrollPaintPending := !m.runtime.pendingScrollAt.IsZero()
-	pendingScrollAt := m.runtime.pendingScrollAt
-	pendingScrollEvents := m.runtime.pendingScrollEvents
+	scrollPaintPending := !m.pendingScrollAt.IsZero()
+	pendingScrollAt := m.pendingScrollAt
+	pendingScrollEvents := m.pendingScrollEvents
 	defer func() {
-		m.runtime.lastRenderLatency = time.Since(start)
-		if m.runtime.debug {
-			m.runtime.maxRenderLatency = maxDuration(m.runtime.maxRenderLatency, m.runtime.lastRenderLatency)
+		m.lastRenderLatency = time.Since(start)
+		if m.debug {
+			m.maxRenderLatency = maxDuration(m.maxRenderLatency, m.lastRenderLatency)
 		}
 	}()
 
-	if m.runtime.debug && scrollPaintPending {
-		m.runtime.lastScrollStats.inputToViewStart = time.Since(pendingScrollAt)
-		m.runtime.lastScrollStats.coalescedEvents = pendingScrollEvents
-		m.runtime.maxScrollStats.inputToViewStart = maxDuration(m.runtime.maxScrollStats.inputToViewStart, m.runtime.lastScrollStats.inputToViewStart)
-		m.runtime.maxScrollStats.coalescedEvents = maxInt(m.runtime.maxScrollStats.coalescedEvents, pendingScrollEvents)
+	if m.debug && scrollPaintPending {
+		m.lastScrollStats.inputToViewStart = time.Since(pendingScrollAt)
+		m.lastScrollStats.coalescedEvents = pendingScrollEvents
+		m.maxScrollStats.inputToViewStart = maxDuration(m.maxScrollStats.inputToViewStart, m.lastScrollStats.inputToViewStart)
+		m.maxScrollStats.coalescedEvents = maxInt(m.maxScrollStats.coalescedEvents, pendingScrollEvents)
 	}
 
 	layout := m.computeLayout(m.width, m.height)
@@ -45,27 +45,27 @@ func (m *model) View() tea.View {
 
 	vm := m.buildFrameViewModel(layout)
 	content := m.renderFrame(vm)
-	if m.runtime.debug {
-		m.runtime.lastFrameBytes = len(content)
-		m.runtime.maxFrameBytes = maxInt(m.runtime.maxFrameBytes, m.runtime.lastFrameBytes)
+	if m.debug {
+		m.lastFrameBytes = len(content)
+		m.maxFrameBytes = maxInt(m.maxFrameBytes, m.lastFrameBytes)
 	}
 
 	v := m.newAppView(content)
-	if m.runtime.debug && scrollPaintPending {
-		m.runtime.lastScrollStats.inputToViewDone = time.Since(pendingScrollAt)
-		m.runtime.maxScrollStats.inputToViewDone = maxDuration(m.runtime.maxScrollStats.inputToViewDone, m.runtime.lastScrollStats.inputToViewDone)
+	if m.debug && scrollPaintPending {
+		m.lastScrollStats.inputToViewDone = time.Since(pendingScrollAt)
+		m.maxScrollStats.inputToViewDone = maxDuration(m.maxScrollStats.inputToViewDone, m.lastScrollStats.inputToViewDone)
 	}
 	if scrollPaintPending {
-		m.runtime.pendingScrollAt = time.Time{}
-		m.runtime.pendingScrollEvents = 0
+		m.pendingScrollAt = time.Time{}
+		m.pendingScrollEvents = 0
 	}
-	m.runtime.lastViewDoneAt = time.Now()
+	m.lastViewDoneAt = time.Now()
 	return v
 }
 
 func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
 	messageList := m.renderMessageList(layout.mainWidth, layout.messageHeight)
-	if m.runtime.questionDialog != nil {
+	if m.questionDialog != nil {
 		messageList = m.renderQuestionDialog(layout.mainWidth, layout.messageHeight)
 	} else if m.modelPicker != nil {
 		messageList = m.renderModelPickerDialog(layout.mainWidth, layout.messageHeight)
@@ -77,11 +77,11 @@ func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
 		status: statusWidgetModel{
 			AgentName:     m.agentName,
 			ModelName:     m.modelName,
-			Busy:          m.runtime.busy,
-			ShowRunResult: m.runtime.showRunResult,
+			Busy:          m.busy,
+			ShowRunResult: m.showRunResult,
 			SpinnerView:   m.spinner.View(),
 			Elapsed:       m.stopwatch.Elapsed(),
-			EscPending:    m.runtime.escPending,
+			EscPending:    m.escPending,
 			ShellMode:     m.shellModeActive(),
 		},
 		sidebarLines: m.buildSidebarLines(layout.sidebarWidth),
@@ -148,17 +148,17 @@ func (m *model) buildSidebarLines(sidebarWidth int) []string {
 	}
 	title = bold.Render(title)
 
-	wdLine := m.runtime.workingDir
+	wdLine := m.workingDir
 	if wdLine == "" {
 		wdLine = "."
 	}
 	wdLine = beautifySidebarPath(wdLine, os.Getenv("HOME"))
-	if strings.TrimSpace(m.runtime.gitBranch) != "" {
-		wdLine = fmt.Sprintf("%s @ %s", wdLine, m.runtime.gitBranch)
+	if strings.TrimSpace(m.gitBranch) != "" {
+		wdLine = fmt.Sprintf("%s @ %s", wdLine, m.gitBranch)
 	}
 
-	usedTokens := maxInt(0, m.runtime.contextWindowUsed)
-	totalTokens := m.runtime.contextWindowTotal
+	usedTokens := maxInt(0, m.contextWindowUsed)
+	totalTokens := m.contextWindowTotalFor(strings.TrimSpace(m.modelName))
 	if totalTokens <= 0 {
 		totalTokens = 1
 	}
@@ -192,21 +192,21 @@ func (m *model) buildSidebarLines(sidebarWidth int) []string {
 		contextLine,
 	}
 
-	if m.runtime.questionSubmittedCount > 0 || m.runtime.questionValidationErrors > 0 {
-		questionLine := fmt.Sprintf("%s %d", bold.Render("Questions answered:"), m.runtime.questionSubmittedCount)
-		if m.runtime.questionValidationErrors > 0 {
-			questionLine += fmt.Sprintf(" (%d errors)", m.runtime.questionValidationErrors)
+	if m.questionSubmittedCount > 0 || m.questionValidationErrors > 0 {
+		questionLine := fmt.Sprintf("%s %d", bold.Render("Questions answered:"), m.questionSubmittedCount)
+		if m.questionValidationErrors > 0 {
+			questionLine += fmt.Sprintf(" (%d errors)", m.questionValidationErrors)
 		}
 		sidebarLines = append(sidebarLines, "", questionLine)
-		if m.runtime.questionLastLatency > 0 {
-			sidebarLines = append(sidebarLines, fmt.Sprintf("%s %s", bold.Render("Last answer latency:"), formatDuration(m.runtime.questionLastLatency)))
+		if m.questionLastLatency > 0 {
+			sidebarLines = append(sidebarLines, fmt.Sprintf("%s %s", bold.Render("Last answer latency:"), formatDuration(m.questionLastLatency)))
 		}
 	}
 
 	contentWidth := max(1, sidebarWidth-2)
-	if len(m.runtime.modifiedFiles) > 0 {
+	if len(m.modifiedFiles) > 0 {
 		sidebarLines = append(sidebarLines, "", bold.Render("Modified Files"))
-		for _, file := range m.runtime.modifiedFiles {
+		for _, file := range m.modifiedFiles {
 			sidebarLines = append(sidebarLines, renderModifiedFileLine(contentWidth, file, success, errorStyle))
 		}
 	}
@@ -225,20 +225,20 @@ func (m *model) buildSidebarLines(sidebarWidth int) []string {
 		}
 	}
 
-	if !m.runtime.debug {
+	if !m.debug {
 		return sidebarLines
 	}
 
 	return append(sidebarLines,
 		"",
 		bold.Render("Debug"),
-		fmt.Sprintf("Render: %s (max %s)", formatDuration(m.runtime.lastRenderLatency), formatDuration(m.runtime.maxRenderLatency)),
-		fmt.Sprintf("Scroll[%s]: %s (max %s, dy=%d)", m.runtime.lastScrollStats.inputType, formatDuration(m.runtime.lastScrollStats.viewportUpdate), formatDuration(m.runtime.maxScrollStats.viewportUpdate), m.runtime.lastScrollStats.deltaRows),
-		fmt.Sprintf("Scroll gap/view: %s / %s", formatDuration(m.runtime.lastScrollStats.updateGap), formatDuration(m.runtime.lastScrollStats.timeSinceView)),
-		fmt.Sprintf("Scroll gap/view max: %s / %s", formatDuration(m.runtime.maxScrollStats.updateGap), formatDuration(m.runtime.maxScrollStats.timeSinceView)),
-		fmt.Sprintf("Scroll->View: %s / %s", formatDuration(m.runtime.lastScrollStats.inputToViewStart), formatDuration(m.runtime.lastScrollStats.inputToViewDone)),
-		fmt.Sprintf("Scroll->View max: %s / %s (events max %d)", formatDuration(m.runtime.maxScrollStats.inputToViewStart), formatDuration(m.runtime.maxScrollStats.inputToViewDone), m.runtime.maxScrollStats.coalescedEvents),
-		fmt.Sprintf("Frame bytes: %d (max %d)", m.runtime.lastFrameBytes, m.runtime.maxFrameBytes),
+		fmt.Sprintf("Render: %s (max %s)", formatDuration(m.lastRenderLatency), formatDuration(m.maxRenderLatency)),
+		fmt.Sprintf("Scroll[%s]: %s (max %s, dy=%d)", m.lastScrollStats.inputType, formatDuration(m.lastScrollStats.viewportUpdate), formatDuration(m.maxScrollStats.viewportUpdate), m.lastScrollStats.deltaRows),
+		fmt.Sprintf("Scroll gap/view: %s / %s", formatDuration(m.lastScrollStats.updateGap), formatDuration(m.lastScrollStats.timeSinceView)),
+		fmt.Sprintf("Scroll gap/view max: %s / %s", formatDuration(m.maxScrollStats.updateGap), formatDuration(m.maxScrollStats.timeSinceView)),
+		fmt.Sprintf("Scroll->View: %s / %s", formatDuration(m.lastScrollStats.inputToViewStart), formatDuration(m.lastScrollStats.inputToViewDone)),
+		fmt.Sprintf("Scroll->View max: %s / %s (events max %d)", formatDuration(m.maxScrollStats.inputToViewStart), formatDuration(m.maxScrollStats.inputToViewDone), m.maxScrollStats.coalescedEvents),
+		fmt.Sprintf("Frame bytes: %d (max %d)", m.lastFrameBytes, m.maxFrameBytes),
 	)
 }
 
@@ -272,13 +272,13 @@ func (m *model) refreshGitSnapshotMaybe() {
 	if m == nil {
 		return
 	}
-	if m.runtime.workingDir == "" {
-		m.runtime.workingDir = detectWorkingDirectory()
+	if m.workingDir == "" {
+		m.workingDir = detectWorkingDirectory()
 	}
-	if m.runtime.lastGitRefreshAt.IsZero() || time.Since(m.runtime.lastGitRefreshAt) >= sidebarGitRefreshInterval {
-		m.runtime.gitBranch = detectGitBranch(m.runtime.workingDir)
-		m.runtime.modifiedFiles = collectModifiedFiles(m.runtime.workingDir)
-		m.runtime.lastGitRefreshAt = time.Now()
+	if m.lastGitRefreshAt.IsZero() || time.Since(m.lastGitRefreshAt) >= sidebarGitRefreshInterval {
+		m.gitBranch = detectGitBranch(m.workingDir)
+		m.modifiedFiles = collectModifiedFiles(m.workingDir)
+		m.lastGitRefreshAt = time.Now()
 	}
 }
 

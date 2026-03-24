@@ -22,20 +22,20 @@ func (m *model) openQuestionDialog(req agent.InteractionRequest) {
 	if len(req.Options) == 0 {
 		return
 	}
-	m.runtime.questionDialog = &questionDialogState{request: req}
-	m.runtime.questionPromptedAt = time.Now()
+	m.questionDialog = &questionDialogState{request: req}
+	m.questionPromptedAt = time.Now()
 }
 
 func (m *model) closeQuestionDialog() {
-	m.runtime.questionDialog = nil
+	m.questionDialog = nil
 }
 
 func (m *model) handleQuestionDialogKey(msg tea.KeyPressMsg) bool {
-	if m.runtime.questionDialog == nil {
+	if m.questionDialog == nil {
 		return false
 	}
 
-	dlg := m.runtime.questionDialog
+	dlg := m.questionDialog
 	key := msg.Key()
 
 	if dlg.typingCustom {
@@ -52,12 +52,12 @@ func (m *model) handleQuestionDialogKey(msg tea.KeyPressMsg) bool {
 			custom := strings.TrimSpace(dlg.customInput)
 			if custom == "" {
 				dlg.errorMessage = "Custom answer cannot be empty"
-				m.runtime.questionValidationErrors++
+				m.questionValidationErrors++
 				return true
 			}
 			if m.runner == nil {
 				dlg.errorMessage = "runner unavailable"
-				m.runtime.questionValidationErrors++
+				m.questionValidationErrors++
 				return true
 			}
 			err := m.runner.SubmitInteractionResponse(agent.InteractionResponse{
@@ -67,12 +67,12 @@ func (m *model) handleQuestionDialogKey(msg tea.KeyPressMsg) bool {
 			})
 			if err != nil {
 				dlg.errorMessage = err.Error()
-				m.runtime.questionValidationErrors++
+				m.questionValidationErrors++
 				return true
 			}
-			m.runtime.questionSubmittedCount++
-			if !m.runtime.questionPromptedAt.IsZero() {
-				m.runtime.questionLastLatency = time.Since(m.runtime.questionPromptedAt)
+			m.questionSubmittedCount++
+			if !m.questionPromptedAt.IsZero() {
+				m.questionLastLatency = time.Since(m.questionPromptedAt)
 			}
 			dlg.errorMessage = ""
 			return true
@@ -118,7 +118,7 @@ func (m *model) handleQuestionDialogKey(msg tea.KeyPressMsg) bool {
 		selected := dlg.request.Options[dlg.selectedIndex]
 		if m.runner == nil {
 			dlg.errorMessage = "runner unavailable"
-			m.runtime.questionValidationErrors++
+			m.questionValidationErrors++
 			return true
 		}
 		err := m.runner.SubmitInteractionResponse(agent.InteractionResponse{
@@ -128,12 +128,12 @@ func (m *model) handleQuestionDialogKey(msg tea.KeyPressMsg) bool {
 		})
 		if err != nil {
 			dlg.errorMessage = err.Error()
-			m.runtime.questionValidationErrors++
+			m.questionValidationErrors++
 			return true
 		}
-		m.runtime.questionSubmittedCount++
-		if !m.runtime.questionPromptedAt.IsZero() {
-			m.runtime.questionLastLatency = time.Since(m.runtime.questionPromptedAt)
+		m.questionSubmittedCount++
+		if !m.questionPromptedAt.IsZero() {
+			m.questionLastLatency = time.Since(m.questionPromptedAt)
 		}
 		dlg.errorMessage = ""
 		return true
@@ -162,19 +162,19 @@ func (m *model) handleQuestionDialogKey(msg tea.KeyPressMsg) bool {
 }
 
 func (m *model) dismissQuestionDialog() bool {
-	dlg := m.runtime.questionDialog
+	dlg := m.questionDialog
 	if dlg == nil {
 		return false
 	}
 	if m.runner == nil {
 		dlg.errorMessage = "runner unavailable"
-		m.runtime.questionValidationErrors++
+		m.questionValidationErrors++
 		return true
 	}
 	err := m.runner.DismissInteraction(dlg.request.InteractionID, dlg.request.RunID)
 	if err != nil {
 		dlg.errorMessage = err.Error()
-		m.runtime.questionValidationErrors++
+		m.questionValidationErrors++
 		return true
 	}
 	m.closeQuestionDialog()
@@ -182,7 +182,7 @@ func (m *model) dismissQuestionDialog() bool {
 }
 
 func (m *model) renderQuestionDialog(width, height int) string {
-	dlg := m.runtime.questionDialog
+	dlg := m.questionDialog
 	if dlg == nil {
 		return ""
 	}

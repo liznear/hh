@@ -61,9 +61,9 @@ func (m *model) startNewSession() {
 	m.toolCalls = map[string]*session.ToolCallItem{}
 	m.listOffsetIdx = 0
 	m.listOffsetLine = 0
-	m.runtime.autoScroll = true
-	m.runtime.showRunResult = false
-	m.runtime.viewportDirty = false
+	m.autoScroll = true
+	m.showRunResult = false
+	m.viewportDirty = false
 	m.markdownCache = map[string]string{}
 	m.itemRenderCache = map[uintptr]itemRenderCacheEntry{}
 	m.persistState()
