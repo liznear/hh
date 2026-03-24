@@ -14,6 +14,23 @@ and command-driven side effects), with a pragmatic rollout:
 - Keep rendering deterministic.
 - Keep growth manageable as interaction modes and tools expand.
 
+## Implementation Status
+
+- [x] Keep a single root Bubble Tea model with a giant `Update` switch.
+- [x] Introduce top-level `State` with embedded `domainState`, `uiState`, and
+  `runtimeState`.
+- [x] Add explicit state constructors (`newDomainState`, `newUIState`,
+  `newRuntimeState`, `newState`).
+- [x] Keep message-first update flow (`Update` mutates state and returns cmds).
+- [x] Keep command boundary for IO and async work (`tea.Cmd`/typed messages).
+- [x] Keep deterministic view composition (`app_layout.go`, `app_view.go`,
+  `app_widgets.go`).
+- [x] Add invariant tests for run lifecycle, autoscroll, dialog precedence,
+  resize stability, and busy-mode behavior.
+- [x] Keep giant switch as top-level orchestrator while complexity is measured.
+- [x] Begin branch extraction into bounded handlers (`app_update_branches.go`)
+  while preserving top-level routing in `app.go`.
+
 ## Core Principles
 
 1. **Single root model**

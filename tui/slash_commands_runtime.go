@@ -29,8 +29,6 @@ func (m *model) handleSlashCommand(prompt string) bool {
 		m.refreshViewport()
 		return true
 	}
-
-	m.refreshViewport()
 	return true
 }
 
