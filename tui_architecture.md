@@ -30,6 +30,14 @@ and command-driven side effects), with a pragmatic rollout:
 - [x] Keep giant switch as top-level orchestrator while complexity is measured.
 - [x] Begin branch extraction into bounded handlers (`app_update_branches.go`)
   while preserving top-level routing in `app.go`.
+- [x] Extract run lifecycle transitions into focused helpers
+  (`app_update_run.go`) without changing behavior.
+- [x] Extract dialog key routing into focused helper (`app_update_dialog.go`)
+  while preserving key precedence.
+- [x] Extract input, stream, and scroll branches into focused modules
+  (`app_update_input.go`, `app_update_stream.go`, `app_update_scroll.go`) while
+  preserving top-level dispatch in `app.go`.
+- [x] Add more branch-focused tests for extracted handlers.
 
 ## Core Principles
 
