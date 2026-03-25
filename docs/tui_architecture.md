@@ -14,31 +14,6 @@ and command-driven side effects), with a pragmatic rollout:
 - Keep rendering deterministic.
 - Keep growth manageable as interaction modes and tools expand.
 
-## Implementation Status
-
-- [x] Keep a single root Bubble Tea model with a giant `Update` switch.
-- [x] Introduce top-level `State` with embedded `domainState`, `uiState`, and
-  `runtimeState`.
-- [x] Add explicit state constructors (`newDomainState`, `newUIState`,
-  `newRuntimeState`, `newState`).
-- [x] Keep message-first update flow (`Update` mutates state and returns cmds).
-- [x] Keep command boundary for IO and async work (`tea.Cmd`/typed messages).
-- [x] Keep deterministic view composition (`app_layout.go`, `app_view.go`,
-  `app_widgets.go`).
-- [x] Add invariant tests for run lifecycle, autoscroll, dialog precedence,
-  resize stability, and busy-mode behavior.
-- [x] Keep giant switch as top-level orchestrator while complexity is measured.
-- [x] Begin branch extraction into bounded handlers (`app_update_branches.go`)
-  while preserving top-level routing in `app.go`.
-- [x] Extract run lifecycle transitions into focused helpers
-  (`app_update_run.go`) without changing behavior.
-- [x] Extract dialog key routing into focused helper (`app_update_dialog.go`)
-  while preserving key precedence.
-- [x] Extract input, stream, and scroll branches into focused modules
-  (`app_update_input.go`, `app_update_stream.go`, `app_update_scroll.go`) while
-  preserving top-level dispatch in `app.go`.
-- [x] Add more branch-focused tests for extracted handlers.
-
 ## Core Principles
 
 1. **Single root model**
@@ -83,7 +58,7 @@ and command-driven side effects), with a pragmatic rollout:
    - `View` computes layout and read-only view models, then renders.
    - Rendering depends only on current model state.
 
-## Recommended Module Shape
+## Module Shape
 
 ### Phase 1: Start simple
 
@@ -104,11 +79,15 @@ Extract handlers when one of these is true:
 
 Typical extraction order:
 
-- input handling,
-- stream/agent events,
-- dialog routing,
-- scroll behavior,
-- run lifecycle helpers.
+1. input handling (`app_update_input.go`)
+2. stream/agent events (`app_update_stream.go`)
+3. dialog routing (`app_update_dialog.go`)
+4. scroll behavior (`app_update_scroll.go`)
+5. run lifecycle helpers (`app_update_run.go`)
+6. window resize (`app_update_branches.go`)
+
+All extracted handlers preserve top-level dispatch in `app.go` - the giant switch
+routes to handlers rather than replacing the centralized message matching.
 
 ## Update Flow
 
@@ -190,7 +169,10 @@ Important invariants:
   - run lifecycle transitions,
   - autoscroll behavior,
   - dialog precedence,
-  - resize/layout stability.
+  - resize/layout stability,
+  - busy-mode behavior.
+- Add branch-focused tests for extracted handlers to ensure they preserve
+  behavior.
 
 ## Migration Plan
 
