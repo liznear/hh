@@ -23,6 +23,9 @@
             version = "0.0.1";
             
             src = ./.;
+
+            # Only build/install the root command, exclude binaries under cmd/
+            subPackages = [ "." ];
             
             vendorHash = "sha256-8kfClqMS7Nfq1jfzd2FjEMi+mnzS+LXZ984kqjtxqWE=";
             
