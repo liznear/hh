@@ -23,4 +23,4 @@
 - [x] System prompt
 - [x] Make read tool's start/offset parameter optional
 - [x] Internal state is leaked and shown in UI
-- [ ] Cancel bash tool.
+- [x] Cancel bash tool.

@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/liznear/hh/agent"
 )
 
 func TestBashTool(t *testing.T) {
@@ -39,5 +42,33 @@ func TestBashTool_NonZeroExit(t *testing.T) {
 	}
 	if structured.ExitCode != 7 {
 		t.Fatalf("unexpected exit code: %d", structured.ExitCode)
+	}
+}
+
+func TestBashTool_Cancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start a long-running command
+	done := make(chan agent.ToolResult, 1)
+	go func() {
+		res := NewBashTool().Handler.Handle(ctx, map[string]any{"command": "sleep 10"})
+		done <- res
+	}()
+
+	// Cancel after a short delay
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	// Should get a quick response after cancellation
+	select {
+	case res := <-done:
+		if !res.IsErr {
+			t.Fatalf("expected error after cancellation, got success")
+		}
+		if !strings.Contains(res.Data, "interrupted") {
+			t.Fatalf("expected interrupted message, got: %q", res.Data)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("bash command should have been interrupted quickly")
 	}
 }
