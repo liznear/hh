@@ -5,10 +5,10 @@ import (
 	"strings"
 
 	"github.com/liznear/hh/agent"
-	"github.com/liznear/hh/agents"
 	"github.com/liznear/hh/config"
 	"github.com/liznear/hh/skills"
 	"github.com/liznear/hh/tools"
+	"github.com/liznear/hh/tui/agents"
 )
 
 func newAgentRunner(modelName string, provider agent.Provider, agentName string, cfg config.Config, workingDir string) (*agent.AgentRunner, error) {

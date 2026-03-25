@@ -1,6 +1,6 @@
-- [ ] Support fine-grained bash permissions like claude.
-- [ ] Support permission spec like .claude/settings.local.json.
-- [ ] Update tool call rendering: don't mute.
+- [x] Support fine-grained bash permissions like claude.
+- [x] Support permission spec like .claude/settings.local.json.
+- [x] Update tool call rendering: don't mute.
 - [ ] Make "Modified Files" / "TODO" items foldable.
 - [ ] Highlight the current WIP todo item.
 - [ ] Make subagent clickable.
@@ -12,11 +12,15 @@
 - [ ] Subagent doesn't have question tool, but LLM still try. Fix prompt injection.
 - [ ] Subagent failure is not rendered in the main session.
 - [ ] Know current date.
-- [ ] Error message is not wrapped
-- [ ] Table style
+- [x] Error message is not wrapped
+- [x] Table style
 - [ ] Don't make the line changes number bold
 - [ ] Support mcp
-- [ ] Bash pattern too specific
-- [ ] Bash pattern match not correct. Allow `git diff --short` in the session would allow `git diff*` in the session temporarily.
-- [ ] Queue message
-- [ ] Question tool
+- [x] Bash pattern too specific
+- [x] Bash pattern match not correct. Allow `git diff --short` in the session would allow `git diff*` in the session temporarily.
+- [x] Queue message
+- [x] Question tool
+- [ ] System prompt
+- [ ] Make read tool's start/offset parameter optional
+- [ ] Internal state is leaked and shown in UI
+- [ ] Cancel bash tool.
