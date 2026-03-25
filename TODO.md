@@ -2,10 +2,10 @@
 - [x] Support permission spec like .claude/settings.local.json.
 - [x] Update tool call rendering: don't mute.
 - [ ] Make "Modified Files" / "TODO" items foldable.
-- [ ] Highlight the current WIP todo item.
+- [x] Highlight the current WIP todo item.
 - [ ] Make subagent clickable.
 - [ ] Show the current running skill.
-- [ ] Support loading AGENT.md
+- [x] Support loading AGENT.md
 - [ ] Support custom slash commands.
 - [ ] Support allowed tools for skills.
 - [ ] Support rendering memaid graph.
@@ -21,6 +21,6 @@
 - [x] Queue message
 - [x] Question tool
 - [ ] System prompt
-- [ ] Make read tool's start/offset parameter optional
+- [x] Make read tool's start/offset parameter optional
 - [ ] Internal state is leaked and shown in UI
 - [ ] Cancel bash tool.

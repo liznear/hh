@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/liznear/hh/agent"
@@ -27,7 +29,7 @@ func newAgentRunner(modelName string, provider agent.Provider, agentName string,
 		return nil, err
 	}
 	tools.SetSkillCatalog(skillCatalog)
-	systemPrompt := buildSystemPrompt(agentConfig.SystemPrompt, skillCatalog)
+	systemPrompt := buildSystemPrompt(agentConfig.SystemPrompt, skillCatalog, workingDir)
 
 	return agent.NewAgentRunner(
 		modelName,
@@ -38,22 +40,60 @@ func newAgentRunner(modelName string, provider agent.Provider, agentName string,
 	), nil
 }
 
-func buildSystemPrompt(base string, skillCatalog skills.Catalog) string {
+func buildSystemPrompt(base string, skillCatalog skills.Catalog, workingDir string) string {
+	var parts []string
+
 	base = strings.TrimSpace(base)
-	if skillCatalog.IsEmpty() {
-		return base
+	if base != "" {
+		parts = append(parts, base)
 	}
 
 	skillBlock := strings.TrimSpace(skillCatalog.PromptFrontmatterBlock())
-	if skillBlock == "" {
-		return base
+	if skillBlock != "" {
+		parts = append(parts, skillBlock)
 	}
 
-	if base == "" {
-		return skillBlock
+	// Inject global AGENTS.md from ~/.agents/AGENTS.md
+	globalAgentsMD := readAgentsMDFile(getGlobalAgentsMDPath())
+	if globalAgentsMD != "" {
+		parts = append(parts, "<global-agents-md>\n"+globalAgentsMD+"\n</global-agents-md>")
 	}
 
-	return base + "\n\n" + skillBlock
+	// Inject project AGENTS.md from working directory
+	projectAgentsMD := readAgentsMDFile(projectAgentsMDPath(workingDir))
+	if projectAgentsMD != "" {
+		parts = append(parts, "<project-agents-md>\n"+projectAgentsMD+"\n</project-agents-md>")
+	}
+
+	return strings.Join(parts, "\n\n")
+}
+
+// getGlobalAgentsMDPath returns the path to the global AGENTS.md file.
+// It can be overridden in tests.
+var getGlobalAgentsMDPath = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".agents", "AGENTS.md")
+}
+
+func projectAgentsMDPath(workingDir string) string {
+	if workingDir == "" {
+		return ""
+	}
+	return filepath.Join(workingDir, "AGENTS.md")
+}
+
+func readAgentsMDFile(path string) string {
+	if path == "" {
+		return ""
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(content))
 }
 
 func getAgent(name string) (agents.Agent, error) {
