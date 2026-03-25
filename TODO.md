@@ -24,3 +24,8 @@
 - [x] Make read tool's start/offset parameter optional
 - [x] Internal state is leaked and shown in UI
 - [x] Cancel bash tool.
+- [ ] Shell mode during busy
+- [ ] Support sub-agent
+- [ ] Support btw
+- [ ] Plan mode
+- [ ] Resume
