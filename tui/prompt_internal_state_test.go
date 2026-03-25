@@ -7,22 +7,20 @@ import (
 	"github.com/liznear/hh/tui/session"
 )
 
-func TestPromptWithInternalState_NoTodos(t *testing.T) {
-	prompt := "Actual user input"
-	got := promptWithInternalState(prompt, nil)
-	if got != prompt {
-		t.Fatalf("prompt mismatch: got %q, want %q", got, prompt)
+func TestBuildInternalState_NoTodos(t *testing.T) {
+	got := buildInternalState(nil)
+	if got != "" {
+		t.Fatalf("internal state mismatch: got %q, want empty", got)
 	}
 }
 
-func TestPromptWithInternalState_WithTodos(t *testing.T) {
-	prompt := "Actual user input"
+func TestBuildInternalState_WithTodos(t *testing.T) {
 	todos := []session.TodoItem{
 		{Content: "Write tests", Status: session.TodoStatusPending},
 		{Content: "Fix <bug>", Status: session.TodoStatusWIP},
 	}
 
-	got := promptWithInternalState(prompt, todos)
+	got := buildInternalState(todos)
 
 	for _, want := range []string{
 		"<internal-state>",
@@ -35,7 +33,7 @@ func TestPromptWithInternalState_WithTodos(t *testing.T) {
 		"</internal-state>",
 	} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("expected prompt to contain %q, got %q", want, got)
+			t.Fatalf("expected internal state to contain %q, got %q", want, got)
 		}
 	}
 }

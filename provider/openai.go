@@ -168,7 +168,11 @@ func toOpenAIMessage(m *agent.Message) openai.ChatCompletionMessageParamUnion {
 	case agent.RoleSystem:
 		return openai.SystemMessage(m.Content)
 	case agent.RoleUser:
-		return openai.UserMessage(m.Content)
+		content := m.Content
+		if m.InternalState != "" {
+			content = content + "\n\n" + m.InternalState
+		}
+		return openai.UserMessage(content)
 	case agent.RoleAssistant:
 		if len(m.ToolCalls) == 0 {
 			return openai.AssistantMessage(m.Content)

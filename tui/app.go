@@ -742,11 +742,11 @@ func (m *model) beginRun() context.Context {
 func (m *model) beginAgentRun(prompt string) (tea.Model, tea.Cmd) {
 	turn := m.session.StartTurn()
 	m.persistTurnStart(turn)
-	submittedPrompt := promptWithInternalState(prompt, m.session.TodoItems)
+	internalState := buildInternalState(m.session.TodoItems)
 	m.input.SetValue("")
 	runCtx := m.beginRun()
 
-	return m, tea.Batch(startAgentStreamCmdWithContext(runCtx, m.runner, submittedPrompt), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
+	return m, tea.Batch(startAgentStreamCmdWithContext(runCtx, m.runner, prompt, internalState), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
 		return m.spinner.Tick()
 	})
 }
@@ -983,14 +983,14 @@ type streamBatchMsg struct {
 }
 
 func startAgentStreamCmd(runner *agent.AgentRunner, prompt string) tea.Cmd {
-	return startAgentStreamCmdWithContext(context.Background(), runner, prompt)
+	return startAgentStreamCmdWithContext(context.Background(), runner, prompt, "")
 }
 
-func startAgentStreamCmdWithContext(ctx context.Context, runner *agent.AgentRunner, prompt string) tea.Cmd {
+func startAgentStreamCmdWithContext(ctx context.Context, runner *agent.AgentRunner, prompt, internalState string) tea.Cmd {
 	return func() tea.Msg {
 		ch := make(chan tea.Msg)
 		go func() {
-			err := runner.Run(ctx, agent.Input{Content: prompt, Type: "text"}, func(e agent.Event) {
+			err := runner.Run(ctx, agent.Input{Content: prompt, InternalState: internalState, Type: "text"}, func(e agent.Event) {
 				ch <- agentEventMsg{event: e}
 			})
 			ch <- agentRunDoneMsg{err: err}

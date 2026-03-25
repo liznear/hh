@@ -55,8 +55,9 @@ func NewAgentRunner(model string, provider Provider, opts ...Opt) *AgentRunner {
 }
 
 type Input struct {
-	Content string
-	Type    string
+	Content       string
+	InternalState string // Additional context for LLM, not displayed in TUI
+	Type          string
 }
 
 func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event)) error {
@@ -80,7 +81,7 @@ func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event))
 		SystemPrompt: a.state.SystemPrompt,
 		History:      a.state.Messages,
 		Prompts: []Message{
-			{Role: RoleUser, Content: input.Content},
+			{Role: RoleUser, Content: input.Content, InternalState: input.InternalState},
 		},
 		Tools:        a.state.Tools,
 		Approver:     a.state.Approver,
@@ -90,7 +91,7 @@ func (a *AgentRunner) Run(ctx context.Context, input Input, onEvent func(Event))
 	}
 	onEvent(Event{
 		Type:      EventTypeMessage,
-		Data:      EventDataMessage{Message: Message{Role: RoleUser, Content: input.Content}},
+		Data:      EventDataMessage{Message: Message{Role: RoleUser, Content: input.Content, InternalState: input.InternalState}},
 		RunID:     runID,
 		TurnID:    1,
 		Timestamp: time.Now().UTC(),

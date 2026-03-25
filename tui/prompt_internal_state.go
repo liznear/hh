@@ -6,14 +6,13 @@ import (
 	"github.com/liznear/hh/tui/session"
 )
 
-func promptWithInternalState(prompt string, todoItems []session.TodoItem) string {
+func buildInternalState(todoItems []session.TodoItem) string {
 	if len(todoItems) == 0 {
-		return prompt
+		return ""
 	}
 
 	b := strings.Builder{}
-	b.WriteString(prompt)
-	b.WriteString("\n\n<internal-state>\n")
+	b.WriteString("<internal-state>\n")
 	b.WriteString("<todo-items>\n")
 
 	for _, item := range todoItems {

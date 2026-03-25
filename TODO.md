@@ -14,13 +14,13 @@
 - [ ] Know current date.
 - [x] Error message is not wrapped
 - [x] Table style
-- [ ] Don't make the line changes number bold
+- [x] Don't make the line changes number bold
 - [ ] Support mcp
 - [x] Bash pattern too specific
 - [x] Bash pattern match not correct. Allow `git diff --short` in the session would allow `git diff*` in the session temporarily.
 - [x] Queue message
 - [x] Question tool
-- [ ] System prompt
+- [x] System prompt
 - [x] Make read tool's start/offset parameter optional
-- [ ] Internal state is leaked and shown in UI
+- [x] Internal state is leaked and shown in UI
 - [ ] Cancel bash tool.
