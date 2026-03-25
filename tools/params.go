@@ -64,6 +64,18 @@ func toInt(v any) (int, bool) {
 	}
 }
 
+func optionalInt(params map[string]any, key string, defaultValue int) (int, error) {
+	v, ok := params[key]
+	if !ok || v == nil {
+		return defaultValue, nil
+	}
+	i, ok := toInt(v)
+	if !ok {
+		return 0, fmt.Errorf("%s must be an integer", key)
+	}
+	return i, nil
+}
+
 func optionalBool(params map[string]any, key string) (bool, error) {
 	v, ok := params[key]
 	if !ok || v == nil {

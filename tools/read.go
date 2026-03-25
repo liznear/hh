@@ -32,7 +32,7 @@ func NewReadTool() agent.Tool {
 				"start": map[string]any{"type": "integer", "minimum": 0},
 				"limit": map[string]any{"type": "integer", "minimum": 0},
 			},
-			"required": []string{"path", "start", "limit"},
+			"required": []string{"path"},
 		},
 		Handler: agent.FuncToolHandler(handleRead),
 	}
@@ -43,11 +43,11 @@ func handleRead(_ context.Context, params map[string]any) agent.ToolResult {
 	if err != nil {
 		return toolErr("%s", err.Error())
 	}
-	start, err := requiredInt(params, "start")
+	start, err := optionalInt(params, "start", 0)
 	if err != nil {
 		return toolErr("%s", err.Error())
 	}
-	limit, err := requiredInt(params, "limit")
+	limit, err := optionalInt(params, "limit", 0)
 	if err != nil {
 		return toolErr("%s", err.Error())
 	}
@@ -69,19 +69,18 @@ func handleRead(_ context.Context, params map[string]any) agent.ToolResult {
 	buf := make([]byte, 64*1024)
 	scanner.Buffer(buf, 10*1024*1024)
 
+	// limit == 0 means read all lines from start
+	readAll := limit == 0
 	end := start + limit
-	if limit == 0 {
-		end = start
-	}
 
 	line := 0
-	lines := make([]string, 0, limit)
+	var lines []string
 	for scanner.Scan() {
-		if line >= start && line < end {
+		if line >= start && (readAll || line < end) {
 			lines = append(lines, scanner.Text())
 		}
 		line++
-		if line >= end {
+		if !readAll && line >= end {
 			break
 		}
 	}
