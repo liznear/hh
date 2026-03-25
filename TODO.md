@@ -28,4 +28,7 @@
 - [ ] Support sub-agent
 - [ ] Support btw
 - [ ] Plan mode
-- [ ] Resume
+- [x] Resume
+- [ ] Review mode
+- [ ] Add path in grep tool line
+- [ ] Read line show start and limit
