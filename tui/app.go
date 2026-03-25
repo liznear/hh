@@ -1,19 +1,27 @@
 package tui
 
 import (
-	"context"
-	"strings"
-	"time"
-
+	"bytes"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/stopwatch"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/liznear/hh/agent"
 	"github.com/liznear/hh/config"
+	"github.com/liznear/hh/tools"
 	"github.com/liznear/hh/tui/commands"
 	"github.com/liznear/hh/tui/session"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"time"
 )
 
 type model struct {
@@ -293,3 +301,855 @@ func isInsertNewlineKey(msg tea.KeyPressMsg) bool {
 		return false
 	}
 }
+
+func (m *model) handleAgentEvent(e agent.Event) {
+	m.maybeClearQueuedSteering(e)
+
+	switch e.Type {
+	case agent.EventTypeTurnStart:
+	case agent.EventTypeThinkingDelta:
+		if data, ok := e.Data.(agent.EventDataThinkingDelta); ok {
+			m.appendThinkingDelta(data.Delta)
+		}
+	case agent.EventTypeMessageDelta:
+		data, ok := e.Data.(agent.EventDataMessageDelta)
+		if !ok {
+			return
+		}
+		m.appendMessageDelta(data.Delta)
+	case agent.EventTypeMessage:
+		data, ok := e.Data.(agent.EventDataMessage)
+		if !ok {
+			return
+		}
+		if data.Message.Role == agent.RoleUser {
+			m.addItem(&session.UserMessage{Content: data.Message.Content})
+		}
+
+	case agent.EventTypeToolCallStart:
+		if data, ok := e.Data.(agent.EventDataToolCallStart); ok {
+			m.addToolCall(data.Call)
+		}
+	case agent.EventTypeToolCallEnd:
+		if data, ok := e.Data.(agent.EventDataToolCallEnd); ok {
+			m.completeToolCall(data.Call, data.Result)
+		}
+	case agent.EventTypeError:
+		switch data := e.Data.(type) {
+		case error:
+			if errors.Is(data, context.Canceled) && m.cancelledRun {
+				return
+			}
+			m.addItem(&session.ErrorItem{Message: data.Error()})
+		case agent.EventDataError:
+			if data.Err != nil {
+				if errors.Is(data.Err, context.Canceled) && m.cancelledRun {
+					return
+				}
+				m.addItem(&session.ErrorItem{Message: data.Err.Error()})
+			}
+		default:
+			m.addItem(&session.ErrorItem{Message: "unknown error"})
+		}
+	case agent.EventTypeSessionTitle:
+		if data, ok := e.Data.(agent.EventDataSessionTitle); ok {
+			m.session.SetTitle(data.Title)
+			m.persistMeta()
+		}
+	case agent.EventTypeTokenUsage:
+		if data, ok := e.Data.(agent.EventDataTokenUsage); ok {
+			if data.Usage.TotalTokens > 0 {
+				m.contextWindowUsed = data.Usage.TotalTokens
+			}
+		}
+	case agent.EventTypeInteractionRequested:
+		if data, ok := e.Data.(agent.EventDataInteractionRequested); ok {
+			if data.Request.Kind == agent.InteractionKindQuestion || data.Request.Kind == agent.InteractionKindApproval {
+				m.openQuestionDialog(data.Request)
+			}
+		}
+	case agent.EventTypeInteractionResponded:
+		if data, ok := e.Data.(agent.EventDataInteractionResponded); ok {
+			if dlg := m.questionDialog; dlg != nil && dlg.request.InteractionID == data.Response.InteractionID {
+				m.closeQuestionDialog()
+			}
+		}
+	case agent.EventTypeInteractionDismissed:
+		if data, ok := e.Data.(agent.EventDataInteractionDismissed); ok {
+			if dlg := m.questionDialog; dlg != nil && dlg.request.InteractionID == data.InteractionID {
+				m.closeQuestionDialog()
+			}
+		}
+	case agent.EventTypeInteractionExpired:
+		if data, ok := e.Data.(agent.EventDataInteractionExpired); ok {
+			if dlg := m.questionDialog; dlg != nil && dlg.request.InteractionID == data.InteractionID {
+				m.closeQuestionDialog()
+				m.addItem(&session.ErrorItem{Message: "interaction timed out"})
+			}
+		}
+	}
+}
+
+func (m *model) maybeClearQueuedSteering(e agent.Event) {
+	if len(m.queuedSteering) == 0 {
+		return
+	}
+
+	switch e.Type {
+	case agent.EventTypeTurnStart, agent.EventTypeTurnEnd, agent.EventTypeAgentEnd:
+		m.queuedSteering = nil
+		return
+	case agent.EventTypeMessage:
+		data, ok := e.Data.(agent.EventDataMessage)
+		if ok && data.Message.Role == agent.RoleUser {
+			m.queuedSteering = nil
+		}
+	}
+}
+
+func (m *model) appendThinkingDelta(delta string) {
+	if delta == "" {
+		return
+	}
+	last := m.session.LastItem()
+	if thinking, ok := last.(*session.ThinkingBlock); ok {
+		thinking.Append(delta)
+		m.persistMeta()
+		return
+	}
+	m.addItem(&session.ThinkingBlock{Content: delta})
+}
+
+func (m *model) appendMessageDelta(delta string) {
+	if delta == "" {
+		return
+	}
+	last := m.session.LastItem()
+	if _, ok := last.(*session.ThinkingBlock); ok {
+		items := m.session.CurrentTurnItems()
+		for i := len(items) - 2; i >= 0; i-- {
+			if msg, ok := items[i].(*session.AssistantMessage); ok {
+				msg.Append(delta)
+				m.persistMeta()
+				return
+			}
+			break
+		}
+	}
+	if msg, ok := last.(*session.AssistantMessage); ok {
+		msg.Append(delta)
+		m.persistMeta()
+		return
+	}
+	m.addItem(&session.AssistantMessage{Content: delta})
+}
+
+func (m *model) addToolCall(call agent.ToolCall) {
+	key := toolCallKey(call)
+	item := &session.ToolCallItem{
+		ID:        call.ID,
+		Name:      call.Name,
+		Arguments: call.Arguments,
+		Status:    session.ToolCallStatusPending,
+	}
+	m.toolCalls[key] = item
+	m.addItem(item)
+}
+
+func (m *model) completeToolCall(call agent.ToolCall, result agent.ToolResult) {
+	key := toolCallKey(call)
+	if item, ok := m.toolCalls[key]; ok {
+		item.Complete(result)
+		m.applyToolState(call, result)
+		m.lastGitRefreshAt = time.Time{}
+		m.persistItem(m.turnNumber(m.session.CurrentTurn()), item)
+		m.persistMeta()
+		delete(m.toolCalls, key)
+		return
+	}
+
+	item := &session.ToolCallItem{
+		ID:        call.ID,
+		Name:      call.Name,
+		Arguments: call.Arguments,
+	}
+	item.Complete(result)
+	m.applyToolState(call, result)
+	m.lastGitRefreshAt = time.Time{}
+	m.addItem(item)
+}
+
+func (m *model) applyToolState(call agent.ToolCall, result agent.ToolResult) {
+	if result.IsErr {
+		return
+	}
+	if call.Name != "todo_write" {
+		return
+	}
+	items, ok := toSessionTodoItems(result.Result)
+	if !ok {
+		return
+	}
+	m.session.SetTodoItems(items)
+}
+
+func toSessionTodoItems(raw any) ([]session.TodoItem, bool) {
+	if raw == nil {
+		return nil, true
+	}
+
+	decoded, ok := raw.(tools.TodoWriteResult)
+	if !ok {
+		ptr, ok := raw.(*tools.TodoWriteResult)
+		if ok && ptr != nil {
+			decoded = *ptr
+		} else {
+			buf, err := json.Marshal(raw)
+			if err != nil {
+				return nil, false
+			}
+			if err := json.Unmarshal(buf, &decoded); err != nil {
+				return nil, false
+			}
+		}
+	}
+
+	items := make([]session.TodoItem, 0, len(decoded.TodoItems))
+	for _, item := range decoded.TodoItems {
+		items = append(items, session.TodoItem{
+			Content: item.Content,
+			Status:  session.TodoStatus(item.Status),
+		})
+	}
+	return items, true
+}
+
+func (m *model) addItem(item session.Item) {
+	m.session.AddItem(item)
+	m.persistState()
+}
+
+func (m *model) addItemToTurn(turn *session.Turn, item session.Item) {
+	if turn == nil {
+		return
+	}
+	turn.AddItem(item)
+	m.persistState()
+}
+
+func (m *model) persistTurnStart(_ *session.Turn) {
+	m.persistState()
+}
+
+func (m *model) persistTurnEnd(_ *session.Turn) {
+	m.persistState()
+}
+
+func (m *model) persistMeta() {
+	m.persistState()
+}
+
+func (m *model) persistItem(_ int, _ session.Item) {
+	m.persistState()
+}
+
+func (m *model) turnNumber(turn *session.Turn) int {
+	for i, t := range m.session.Turns {
+		if t == turn {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func (m *model) persistState() {
+	if m.storage == nil {
+		return
+	}
+	if !m.hasSubmittedUserPrompt() {
+		return
+	}
+	if err := m.storage.Save(m.session); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to persist session: %v\n", err)
+	}
+}
+
+func (m *model) hasSubmittedUserPrompt() bool {
+	if m.session == nil {
+		return false
+	}
+	for _, item := range m.session.AllItems() {
+		if _, ok := item.(*session.UserMessage); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *model) handleKeyPressMsg(msg tea.KeyPressMsg, statusCmd tea.Cmd, updateGap time.Duration, timeSinceView time.Duration) (tea.Model, tea.Cmd) {
+	if updated, cmd, handled := m.handleDialogKeyPress(msg, statusCmd); handled {
+		return updated, cmd
+	}
+
+	prevOffset := m.currentListOffset(m.messageWidth)
+	scrollUpdateStart := time.Now()
+	scrolled, deltaRows := m.handleScrollKey(msg)
+	if scrolled {
+		if deltaRows == 0 {
+			deltaRows = m.currentListOffset(m.messageWidth) - prevOffset
+		}
+		m.recordScrollInteraction("keyboard", scrollUpdateStart, deltaRows, updateGap, timeSinceView)
+		return m, statusCmd
+	}
+
+	key := msg.Key()
+	if key.Code == tea.KeyEscape && m.busy {
+		m.requestCancelRun()
+		return m, statusCmd
+	}
+
+	if !m.busy {
+		if !m.shellMode && msg.String() == "!" && strings.TrimSpace(m.input.Value()) == "" {
+			m.setShellMode(true)
+			return m, statusCmd
+		}
+
+		if m.shellMode && key.Code == tea.KeyBackspace && m.input.Value() == "" {
+			m.setShellMode(false)
+			return m, statusCmd
+		}
+	}
+
+	if isInsertNewlineKey(msg) {
+		m.input.InsertRune('\n')
+		return m, statusCmd
+	}
+
+	if key.Code == tea.KeyEnter {
+		return m.handleEnterKey(msg, statusCmd)
+	}
+
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	}
+	m.escPending = false
+
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, tea.Batch(statusCmd, cmd)
+}
+
+func (m *model) handleEnterKey(_ tea.KeyPressMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	inputValue := m.input.Value()
+	prompt := strings.TrimSpace(inputValue)
+	if prompt == "" {
+		return m, statusCmd
+	}
+
+	if m.busy {
+		if m.runner == nil {
+			m.addItem(&session.ErrorItem{Message: "runner unavailable"})
+			return m, statusCmd
+		}
+		if err := m.runner.SubmitSteeringMessage(prompt, ""); err != nil {
+			m.addItem(&session.ErrorItem{Message: err.Error()})
+			return m, statusCmd
+		}
+		m.queuedSteering = append(m.queuedSteering, queuedSteeringMessage{Content: prompt})
+		m.input.SetValue("")
+		m.refreshViewport()
+		return m, statusCmd
+	}
+
+	if m.shellMode {
+		command := strings.TrimSpace(inputValue)
+		if command == "" {
+			return m, statusCmd
+		}
+		return m.beginShellRun(command, true)
+	}
+
+	if isShellModeInput(inputValue) {
+		command := parseShellCommand(inputValue)
+		if strings.TrimSpace(command) == "" {
+			return m, statusCmd
+		}
+		return m.beginShellRun(command, false)
+	}
+
+	if m.handleSlashCommand(prompt) {
+		m.input.SetValue("")
+		m.showRunResult = false
+		m.escPending = false
+		return m, statusCmd
+	}
+
+	return m.beginAgentRun(prompt)
+}
+
+func (m *model) handleShellCommandDoneMsg(msg shellCommandDoneMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if turn := m.session.CurrentTurn(); turn != nil {
+		m.addItemToTurn(turn, &session.ShellMessage{Command: msg.command, Output: msg.output})
+	}
+	m.finalizeRun(msg.err)
+	return m, statusCmd
+}
+
+func (m *model) handleAgentStreamStartedMsg(msg agentStreamStartedMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	m.stream = msg.ch
+	return m, tea.Batch(statusCmd, waitForStreamCmd(m.stream))
+}
+
+func (m *model) handleStreamBatchMsg(msg streamBatchMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if len(msg.events) > 0 {
+		for _, e := range msg.events {
+			m.handleAgentEvent(e)
+		}
+		m.refreshAfterStreamEvent()
+	}
+
+	if msg.done {
+		m.finalizeRun(msg.doneErr)
+		return m, statusCmd
+	}
+
+	return m, tea.Batch(statusCmd, waitForStreamCmd(m.stream))
+}
+
+func (m *model) handleAgentEventMsg(msg agentEventMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	m.handleAgentEvent(msg.event)
+	m.refreshAfterStreamEvent()
+	return m, tea.Batch(statusCmd, waitForStreamCmd(m.stream))
+}
+
+func (m *model) handleAgentRunDoneMsg(msg agentRunDoneMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	m.finalizeRun(msg.err)
+	return m, statusCmd
+}
+
+func (m *model) beginRun() context.Context {
+	m.busy = true
+	m.escPending = false
+	m.cancelledRun = false
+	m.showRunResult = false
+	runCtx, cancel := context.WithCancel(context.Background())
+	m.runCancel = cancel
+	m.refreshViewport()
+	return runCtx
+}
+
+func (m *model) beginAgentRun(prompt string) (tea.Model, tea.Cmd) {
+	turn := m.session.StartTurn()
+	m.persistTurnStart(turn)
+	submittedPrompt := promptWithInternalState(prompt, m.session.TodoItems)
+	m.input.SetValue("")
+	runCtx := m.beginRun()
+
+	return m, tea.Batch(startAgentStreamCmdWithContext(runCtx, m.runner, submittedPrompt), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
+		return m.spinner.Tick()
+	})
+}
+
+func (m *model) beginShellRun(command string, explicitShellMode bool) (tea.Model, tea.Cmd) {
+	turn := m.session.StartTurn()
+	m.persistTurnStart(turn)
+	m.input.SetValue("")
+	if explicitShellMode {
+		m.setShellMode(false)
+	}
+	runCtx := m.beginRun()
+
+	return m, tea.Batch(runShellCommandCmdWithContext(runCtx, command), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
+		return m.spinner.Tick()
+	})
+}
+
+func (m *model) requestCancelRun() {
+	if m.escPending {
+		if m.runCancel != nil {
+			m.runCancel()
+		}
+		m.cancelledRun = true
+		m.escPending = false
+		return
+	}
+	m.escPending = true
+}
+
+func (m *model) handleDialogKeyPress(msg tea.KeyPressMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd, bool) {
+	if m.questionDialog != nil {
+		if m.handleQuestionDialogKey(msg) {
+			m.refreshViewport()
+			return m, statusCmd, true
+		}
+	}
+
+	if m.modelPicker != nil {
+		if m.handleModelPickerKey(msg) {
+			m.showRunResult = false
+			m.escPending = false
+			return m, statusCmd, true
+		}
+	}
+
+	return m, nil, false
+}
+
+func (m *model) handleMouseWheelMsg(msg tea.MouseWheelMsg, statusCmd tea.Cmd, updateGap time.Duration, timeSinceView time.Duration) (tea.Model, tea.Cmd) {
+	scrollUpdateStart := time.Now()
+	deltaRows := m.handleMouseWheelScroll(msg)
+	if deltaRows != 0 {
+		m.recordScrollInteraction("mouse", scrollUpdateStart, deltaRows, updateGap, timeSinceView)
+		return m, statusCmd
+	}
+	return m, statusCmd
+}
+
+func (m *model) handleSpinnerTickMsg(statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if m.busy && m.hasPendingToolCalls() && (m.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight)) && m.shouldRefreshNow() {
+		m.refreshViewport()
+		m.lastRefreshAt = time.Now()
+	} else if m.busy && m.hasPendingToolCalls() {
+		m.viewportDirty = true
+	}
+	return m, statusCmd
+}
+
+func (m *model) handleWindowSizeMsg(msg tea.WindowSizeMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	m.width = msg.Width
+	m.height = msg.Height
+	m.syncLayout()
+	m.refreshViewport()
+	return m, statusCmd
+}
+
+func (m *model) recordScrollInteraction(inputType string, startedAt time.Time, deltaRows int, updateGap time.Duration, timeSinceView time.Duration) {
+	m.autoScroll = m.isListAtBottom(m.messageWidth, m.messageHeight)
+	m.suppressRefreshUntil = time.Now().Add(scrollPriorityWindow)
+	if m.pendingScrollAt.IsZero() {
+		m.pendingScrollAt = time.Now()
+		m.pendingScrollEvents = 0
+	}
+	m.pendingScrollEvents++
+	if m.autoScroll && m.viewportDirty {
+		m.refreshViewport()
+		m.viewportDirty = false
+	}
+	if !m.debug {
+		return
+	}
+	m.lastScrollStats = scrollPerfStats{
+		inputType:      inputType,
+		viewportUpdate: time.Since(startedAt),
+		deltaRows:      deltaRows,
+		updateGap:      updateGap,
+		timeSinceView:  timeSinceView,
+	}
+	m.maxScrollStats.viewportUpdate = maxDuration(m.maxScrollStats.viewportUpdate, m.lastScrollStats.viewportUpdate)
+	m.maxScrollStats.updateGap = maxDuration(m.maxScrollStats.updateGap, m.lastScrollStats.updateGap)
+	m.maxScrollStats.timeSinceView = maxDuration(m.maxScrollStats.timeSinceView, m.lastScrollStats.timeSinceView)
+}
+
+func (m *model) refreshAfterStreamEvent() {
+	if m.autoScroll || m.isListAtBottom(m.messageWidth, m.messageHeight) {
+		if m.shouldRefreshNow() {
+			m.refreshViewport()
+			m.viewportDirty = false
+			m.lastRefreshAt = time.Now()
+			return
+		}
+	}
+	m.viewportDirty = true
+}
+
+func (m *model) finalizeRun(runErr error) {
+	m.busy = false
+	m.escPending = false
+	m.runCancel = nil
+	m.stopwatch, _ = m.stopwatch.Update(stopwatch.StartStopMsg{ID: m.stopwatch.ID()})
+	m.showRunResult = true
+	m.queuedSteering = nil
+	if runErr != nil {
+		m.addItem(&session.ErrorItem{Message: runErr.Error()})
+	}
+	if turn := m.session.CurrentTurn(); turn != nil {
+		if m.cancelledRun {
+			turn.EndWithStatus("cancelled")
+		} else {
+			turn.End()
+		}
+		m.persistTurnEnd(turn)
+	}
+	m.cancelledRun = false
+	m.stream = nil
+	m.refreshViewport()
+	m.lastRefreshAt = time.Now()
+	m.viewportDirty = false
+}
+
+func (m *model) hasPendingToolCalls() bool {
+	return len(m.toolCalls) > 0
+}
+
+func (m *model) shouldRefreshNow() bool {
+	if !m.suppressRefreshUntil.IsZero() && time.Now().Before(m.suppressRefreshUntil) {
+		return false
+	}
+	if m.lastRefreshAt.IsZero() {
+		return true
+	}
+	return time.Since(m.lastRefreshAt) >= renderRefreshInterval
+}
+
+type shellCommandDoneMsg struct {
+	command string
+	output  string
+	err     error
+}
+
+func isShellModeInput(input string) bool {
+	trimmed := strings.TrimLeft(input, " \t")
+	return strings.HasPrefix(trimmed, "!")
+}
+
+func parseShellCommand(input string) string {
+	trimmed := strings.TrimLeft(input, " \t")
+	if !strings.HasPrefix(trimmed, "!") {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(trimmed, "!"))
+}
+
+func (m *model) setShellMode(enabled bool) {
+	m.shellMode = enabled
+	if enabled {
+		applyTextareaPromptColor(&m.input, m.theme.Color(ThemeColorInputPromptShell))
+		return
+	}
+	applyTextareaPromptColor(&m.input, m.theme.Color(ThemeColorInputPromptDefault))
+}
+
+func (m *model) shellModeActive() bool {
+	return m.shellMode || isShellModeInput(m.input.Value())
+}
+
+func runShellCommandCmdWithContext(ctx context.Context, command string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.CommandContext(ctx, "bash", "-lc", command)
+
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		err := cmd.Run()
+		output := strings.TrimRight(stdout.String(), "\n")
+		stderrOutput := strings.TrimRight(stderr.String(), "\n")
+		if stderrOutput != "" {
+			if output != "" {
+				output += "\n"
+			}
+			output += stderrOutput
+		}
+
+		if err != nil {
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				return shellCommandDoneMsg{command: command, output: output, err: err}
+			}
+		}
+
+		return shellCommandDoneMsg{command: command, output: output}
+	}
+}
+
+type agentStreamStartedMsg struct {
+	ch <-chan tea.Msg
+}
+
+type agentEventMsg struct {
+	event agent.Event
+}
+
+type agentRunDoneMsg struct {
+	err error
+}
+
+type streamBatchMsg struct {
+	events  []agent.Event
+	done    bool
+	doneErr error
+}
+
+func startAgentStreamCmd(runner *agent.AgentRunner, prompt string) tea.Cmd {
+	return startAgentStreamCmdWithContext(context.Background(), runner, prompt)
+}
+
+func startAgentStreamCmdWithContext(ctx context.Context, runner *agent.AgentRunner, prompt string) tea.Cmd {
+	return func() tea.Msg {
+		ch := make(chan tea.Msg)
+		go func() {
+			err := runner.Run(ctx, agent.Input{Content: prompt, Type: "text"}, func(e agent.Event) {
+				ch <- agentEventMsg{event: e}
+			})
+			ch <- agentRunDoneMsg{err: err}
+			close(ch)
+		}()
+		return agentStreamStartedMsg{ch: ch}
+	}
+}
+
+func waitForStreamCmd(ch <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		if ch == nil {
+			return nil
+		}
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+
+		switch first := msg.(type) {
+		case agentEventMsg:
+			events := []agent.Event{first.event}
+			for i := 1; i < streamBatchMaxEvents; i++ {
+				select {
+				case next, ok := <-ch:
+					if !ok {
+						return streamBatchMsg{events: events}
+					}
+					switch v := next.(type) {
+					case agentEventMsg:
+						events = append(events, v.event)
+					case agentRunDoneMsg:
+						return streamBatchMsg{events: events, done: true, doneErr: v.err}
+					default:
+						return streamBatchMsg{events: events}
+					}
+				default:
+					return streamBatchMsg{events: events}
+				}
+			}
+			return streamBatchMsg{events: events}
+
+		case agentRunDoneMsg:
+			return streamBatchMsg{done: true, doneErr: first.err}
+
+		default:
+			return msg
+		}
+	}
+}
+
+func newTextareaInput() textarea.Model {
+	in := textarea.New()
+	in.Prompt = ""
+	in.SetPromptFunc(2, func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			return "  > "
+		}
+		return " :: "
+	})
+	in.Placeholder = ""
+	in.ShowLineNumbers = false
+	in.SetHeight(inputInnerLines)
+	applyTextareaPromptColor(&in, DefaultTheme().Color(ThemeColorInputPromptDefault))
+	in.Focus()
+
+	return in
+}
+
+func applyTextareaPromptColor(in *textarea.Model, promptColor lipgloss.Color) {
+	styles := textarea.DefaultStyles(false)
+	styles.Focused.Base = styles.Focused.Base.UnsetBackground()
+	styles.Focused.Text = styles.Focused.Text.UnsetBackground()
+	styles.Focused.CursorLine = styles.Focused.CursorLine.UnsetBackground()
+	styles.Focused.Placeholder = styles.Focused.Placeholder.UnsetBackground()
+	styles.Focused.Prompt = styles.Focused.Prompt.
+		UnsetBackground().
+		Foreground(promptColor).
+		Bold(true)
+	styles.Focused.EndOfBuffer = styles.Focused.EndOfBuffer.UnsetBackground()
+	styles.Blurred.Base = styles.Blurred.Base.UnsetBackground()
+	styles.Blurred.Text = styles.Blurred.Text.UnsetBackground()
+	styles.Blurred.CursorLine = styles.Blurred.CursorLine.UnsetBackground()
+	styles.Blurred.Placeholder = styles.Blurred.Placeholder.UnsetBackground()
+	styles.Blurred.Prompt = styles.Blurred.Prompt.
+		UnsetBackground().
+		Foreground(promptColor).
+		Bold(true)
+	styles.Blurred.EndOfBuffer = styles.Blurred.EndOfBuffer.UnsetBackground()
+	in.SetStyles(styles)
+}
+
+func newSessionStorage(state *session.State) *session.Storage {
+	if state == nil {
+		return nil
+	}
+	dir, err := session.DefaultStorageDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve session storage directory: %v\n", err)
+		return nil
+	}
+
+	store, err := session.NewStorage(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize session storage: %v\n", err)
+		return nil
+	}
+
+	return store
+}
+
+func ternary[T any](cond bool, ifTrue, ifFalse T) T {
+	if cond {
+		return ifTrue
+	}
+	return ifFalse
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func isDebugEnabled() bool {
+	v := strings.TrimSpace(os.Getenv("HH_DEBUG"))
+	enabled, err := strconv.ParseBool(v)
+	return err == nil && enabled
+}
+
+func formatDuration(d time.Duration) string {
+	if d >= time.Millisecond {
+		return fmt.Sprintf("%.2fms", float64(d)/float64(time.Millisecond))
+	}
+	return fmt.Sprintf("%dus", d.Microseconds())
+}
+
+func toolCallKey(call agent.ToolCall) string {
+	if call.ID != "" {
+		return call.ID
+	}
+	return call.Name + "|" + call.Arguments
+}
+
+const renderRefreshInterval = 33 * time.Millisecond
+const scrollPriorityWindow = 120 * time.Millisecond
+const streamBatchMaxEvents = 64
