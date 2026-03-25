@@ -5,24 +5,11 @@ import (
 	"strings"
 
 	"github.com/liznear/hh/agent"
+	"github.com/liznear/hh/agents"
 	"github.com/liznear/hh/config"
 	"github.com/liznear/hh/skills"
 	"github.com/liznear/hh/tools"
 )
-
-type Agent struct {
-	Name         string
-	SystemPrompt string
-	AllowedTools []string
-}
-
-var agents = map[string]Agent{
-	"Build": {
-		Name:         "Build",
-		SystemPrompt: "You are Build, a software engineering agent focused on making correct, maintainable code changes.",
-		AllowedTools: nil,
-	},
-}
 
 func newAgentRunner(modelName string, provider agent.Provider, agentName string, cfg config.Config, workingDir string) (*agent.AgentRunner, error) {
 	agentConfig, err := getAgent(agentName)
@@ -69,18 +56,25 @@ func buildSystemPrompt(base string, skillCatalog skills.Catalog) string {
 	return base + "\n\n" + skillBlock
 }
 
-func getAgent(name string) (Agent, error) {
+func getAgent(name string) (agents.Agent, error) {
 	if name == "" {
 		name = "Build"
 	}
-	agentConfig, ok := agents[name]
-	if !ok {
-		return Agent{}, fmt.Errorf("agent %q not found", name)
+
+	catalog, err := agents.LoadDefaultCatalog()
+	if err != nil {
+		return agents.Agent{}, fmt.Errorf("load agent catalog: %w", err)
 	}
+
+	agentConfig, ok := catalog.Get(name)
+	if !ok {
+		return agents.Agent{}, fmt.Errorf("agent %q not found", name)
+	}
+
 	return agentConfig, nil
 }
 
-func resolveTools(agentConfig Agent) map[string]agent.Tool {
+func resolveTools(agentConfig agents.Agent) map[string]agent.Tool {
 	if agentConfig.AllowedTools == nil {
 		return tools.AllTools()
 	}
