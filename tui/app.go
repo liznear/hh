@@ -58,7 +58,8 @@ type domainState struct {
 }
 
 type uiState struct {
-	modelPicker *modelPickerState
+	modelPicker  *modelPickerState
+	resumePicker *resumePickerState
 
 	width  int
 	height int
@@ -788,6 +789,14 @@ func (m *model) handleDialogKeyPress(msg tea.KeyPressMsg, statusCmd tea.Cmd) (te
 
 	if m.modelPicker != nil {
 		if m.handleModelPickerKey(msg) {
+			m.showRunResult = false
+			m.escPending = false
+			return m, statusCmd, true
+		}
+	}
+
+	if m.resumePicker != nil {
+		if m.handleResumePickerKey(msg) {
 			m.showRunResult = false
 			m.escPending = false
 			return m, statusCmd, true

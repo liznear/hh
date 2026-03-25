@@ -71,6 +71,8 @@ func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
 	messageList := m.renderMessageList(layout.mainWidth, layout.messageHeight)
 	if m.questionDialog != nil {
 		messageList = m.renderQuestionDialog(layout.mainWidth, layout.messageHeight)
+	} else if m.resumePicker != nil {
+		messageList = m.renderResumePickerDialog(layout.mainWidth, layout.messageHeight)
 	} else if m.modelPicker != nil {
 		messageList = m.renderModelPickerDialog(layout.mainWidth, layout.messageHeight)
 	}

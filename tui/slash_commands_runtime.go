@@ -49,6 +49,11 @@ func (m *model) executeSlashCommand(cmd commands.Command, inv commands.Invocatio
 		}
 		m.openModelPicker()
 		return nil
+	case commands.ActionResumeSession:
+		if len(inv.Args) > 0 {
+			return fmt.Errorf("/%s does not accept arguments", inv.Name)
+		}
+		return m.openResumePicker()
 	default:
 		return fmt.Errorf("unsupported slash command action: %s", cmd.Action)
 	}

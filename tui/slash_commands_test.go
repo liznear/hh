@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/liznear/hh/config"
@@ -90,6 +91,147 @@ func TestUpdate_UnknownSlashCommandShowsErrorItem(t *testing.T) {
 	}
 	if after.busy {
 		t.Fatal("expected unknown slash command to not start busy run")
+	}
+}
+
+func TestUpdate_ResumeSlashCommandOpensPickerSortedByCreatedAtDesc(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := session.NewStorage(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+
+	oldState := session.NewState("test-model")
+	oldState.ID = "old-session"
+	oldState.SetTitle("Old session")
+	oldState.CreatedAt = time.Now().Add(-2 * time.Hour)
+	if err := store.SaveMeta(oldState); err != nil {
+		t.Fatalf("failed to save old session meta: %v", err)
+	}
+
+	newState := session.NewState("test-model")
+	newState.ID = "new-session"
+	newState.SetTitle("New session")
+	newState.CreatedAt = time.Now().Add(-1 * time.Hour)
+	if err := store.SaveMeta(newState); err != nil {
+		t.Fatalf("failed to save new session meta: %v", err)
+	}
+
+	untitledState := session.NewState("test-model")
+	untitledState.ID = "untitled-session"
+	untitledState.Title = "   "
+	untitledState.CreatedAt = time.Now()
+	if err := store.SaveMeta(untitledState); err != nil {
+		t.Fatalf("failed to save untitled session meta: %v", err)
+	}
+
+	m := newTestModel()
+	m.storage = store
+	m.input.SetValue("/resume")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	after := updated.(*model)
+
+	if after.resumePicker == nil {
+		t.Fatal("expected /resume to open resume picker")
+	}
+	if got := len(after.resumePicker.sessions); got != 3 {
+		t.Fatalf("session count = %d, want 3", got)
+	}
+	if got := strings.TrimSpace(after.resumePicker.sessions[0].Title); got != "" {
+		t.Fatalf("first title = %q, want blank (untitled)", got)
+	}
+	if got := after.resumePicker.sessions[1].Title; got != "New session" {
+		t.Fatalf("second title = %q, want %q", got, "New session")
+	}
+	if got := after.resumePicker.sessions[2].Title; got != "Old session" {
+		t.Fatalf("third title = %q, want %q", got, "Old session")
+	}
+	if after.busy {
+		t.Fatal("expected /resume to not start busy run")
+	}
+}
+
+func TestUpdate_ResumeSlashCommandSelectLoadsSession(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := session.NewStorage(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+
+	selectedState := session.NewState("resumed-model")
+	selectedState.ID = "selected-session"
+	selectedState.SetTitle("Selected")
+	selectedState.CreatedAt = time.Now()
+	turn := selectedState.StartTurn()
+	turn.AddItem(&session.UserMessage{Content: "resume me"})
+	turn.AddItem(&session.AssistantMessage{Content: "loaded"})
+	if err := store.Save(selectedState); err != nil {
+		t.Fatalf("failed to save selected session: %v", err)
+	}
+
+	otherState := session.NewState("test-model")
+	otherState.ID = "older-session"
+	otherState.SetTitle("Older")
+	otherState.CreatedAt = time.Now().Add(-1 * time.Hour)
+	if err := store.SaveMeta(otherState); err != nil {
+		t.Fatalf("failed to save other session meta: %v", err)
+	}
+
+	m := newTestModel()
+	m.storage = store
+	m.session = session.NewState("test-model")
+	m.session.StartTurn().AddItem(&session.UserMessage{Content: "current"})
+	m.input.SetValue("/resume")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	afterOpen := updated.(*model)
+	if afterOpen.resumePicker == nil {
+		t.Fatal("expected resume picker to be open")
+	}
+
+	updated, _ = afterOpen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	afterSelect := updated.(*model)
+	if afterSelect.resumePicker != nil {
+		t.Fatal("expected resume picker to close after selecting session")
+	}
+	if afterSelect.session.ID != "selected-session" {
+		t.Fatalf("session id = %q, want %q", afterSelect.session.ID, "selected-session")
+	}
+	if afterSelect.session.Title != "Selected" {
+		t.Fatalf("session title = %q, want %q", afterSelect.session.Title, "Selected")
+	}
+	last := afterSelect.session.LastItem()
+	assistantMsg, ok := last.(*session.AssistantMessage)
+	if !ok || assistantMsg.Content != "loaded" {
+		t.Fatalf("last item = %T (%v), want assistant message with loaded content", last, last)
+	}
+	if afterSelect.modelName != "resumed-model" {
+		t.Fatalf("modelName = %q, want %q", afterSelect.modelName, "resumed-model")
+	}
+}
+
+func TestUpdate_ResumeSlashCommandWithNoSessionsShowsEmptyMessage(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := session.NewStorage(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+
+	m := newTestModel()
+	m.storage = store
+	m.input.SetValue("/resume")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	after := updated.(*model)
+
+	last := after.session.LastItem()
+	msg, ok := last.(*session.AssistantMessage)
+	if !ok {
+		t.Fatalf("expected last item to be assistant message, got %T", last)
+	}
+	if msg.Content != "No sessions found for current path." {
+		t.Fatalf("content = %q, want %q", msg.Content, "No sessions found for current path.")
 	}
 }
 
