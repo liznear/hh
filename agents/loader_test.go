@@ -105,3 +105,54 @@ func TestExtractFrontmatter(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadDefaultCatalog(t *testing.T) {
+	catalog, err := LoadDefaultCatalog()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	buildAgent, ok := catalog.Get("Build")
+	if !ok {
+		t.Fatal("expected Build agent in catalog")
+	}
+
+	if buildAgent.Name != "Build" {
+		t.Errorf("expected name Build, got %q", buildAgent.Name)
+	}
+
+	if buildAgent.SystemPrompt == "" {
+		t.Error("expected non-empty system prompt")
+	}
+}
+
+func TestCatalogGet_NotFound(t *testing.T) {
+	catalog, err := LoadDefaultCatalog()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, ok := catalog.Get("NonExistent")
+	if ok {
+		t.Error("expected false for non-existent agent")
+	}
+}
+
+func TestCatalogAll(t *testing.T) {
+	catalog, err := LoadDefaultCatalog()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	all := catalog.All()
+	if len(all) == 0 {
+		t.Error("expected at least one agent")
+	}
+
+	// Verify sorted by name
+	for i := 1; i < len(all); i++ {
+		if all[i-1].Name > all[i].Name {
+			t.Errorf("agents not sorted: %s > %s", all[i-1].Name, all[i].Name)
+		}
+	}
+}
