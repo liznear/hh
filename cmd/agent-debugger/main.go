@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -12,53 +11,88 @@ import (
 	"github.com/liznear/hh/provider"
 	"github.com/liznear/hh/skills"
 	"github.com/liznear/hh/tools"
+	"github.com/urfave/cli/v3"
 )
 
 func main() {
-	providerType := flag.String("provider_type", "openai", "provider type")
-	baseURL := flag.String("base_url", os.Getenv("HH_BASE_URL"), "provider base URL")
-	apiKey := flag.String("api_key", os.Getenv("HH_API_KEY"), "provider API key")
-	model := flag.String("model", "glm-5", "model name")
-	prompt := flag.String("prompt", "", "required prompt to run")
-	flag.Parse()
+	cmd := &cli.Command{
+		Name: "agent-debugger",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  "provider_type",
+				Value: "openai",
+				Usage: "provider type",
+			},
+			&cli.StringFlag{
+				Name:    "base_url",
+				Value:   os.Getenv("HH_BASE_URL"),
+				Usage:   "provider base URL",
+				Sources: cli.EnvVars("HH_BASE_URL"),
+			},
+			&cli.StringFlag{
+				Name:    "api_key",
+				Value:   os.Getenv("HH_API_KEY"),
+				Usage:   "provider API key",
+				Sources: cli.EnvVars("HH_API_KEY"),
+			},
+			&cli.StringFlag{
+				Name:  "model",
+				Value: "glm-5",
+				Usage: "model name",
+			},
+			&cli.StringFlag{
+				Name:     "prompt",
+				Usage:    "required prompt to run",
+				Required: true,
+			},
+		},
+		OnUsageError: func(_ context.Context, _ *cli.Command, err error, _ bool) error {
+			return cli.Exit(err.Error(), 2)
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			p, err := buildProvider(cmd.String("provider_type"), cmd.String("base_url"), cmd.String("api_key"))
+			if err != nil {
+				return cli.Exit(err.Error(), 2)
+			}
 
-	if *prompt == "" {
-		fmt.Fprintln(os.Stderr, "missing required flag: -prompt")
-		os.Exit(2)
+			skillCatalog, err := skills.LoadDefaultCatalog()
+			if err != nil {
+				return cli.Exit(fmt.Sprintf("failed to load skills: %v", err), 1)
+			}
+			tools.SetSkillCatalog(skillCatalog)
+			systemPrompt := strings.TrimSpace(skillCatalog.PromptFrontmatterBlock())
+
+			runner := agent.NewAgentRunner(cmd.String("model"), p, agent.WithTools(tools.AllTools()), agent.WithSystemPrompt(systemPrompt))
+
+			var finalMessages []agent.Message
+			if err := runner.Run(ctx, agent.Input{Content: cmd.String("prompt"), Type: "text"}, func(e agent.Event) {
+				printEvent(e)
+				if e.Type != agent.EventTypeAgentEnd {
+					return
+				}
+				if data, ok := e.Data.(agent.EventDataAgentEnd); ok {
+					finalMessages = data.Messages
+				}
+			}); err != nil {
+				return cli.Exit(fmt.Sprintf("failed to run agent: %v", err), 1)
+			}
+
+			fmt.Println("FINAL_MESSAGES")
+			printJSON(finalMessages)
+			return nil
+		},
 	}
 
-	p, err := buildProvider(*providerType, *baseURL, *apiKey)
-	if err != nil {
+	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		if exitErr, ok := err.(interface{ ExitCode() int }); ok {
+			if msg := strings.TrimSpace(err.Error()); msg != "" {
+				fmt.Fprintln(os.Stderr, msg)
+			}
+			os.Exit(exitErr.ExitCode())
+		}
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
-	}
-
-	skillCatalog, err := skills.LoadDefaultCatalog()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load skills: %v\n", err)
 		os.Exit(1)
 	}
-	tools.SetSkillCatalog(skillCatalog)
-	systemPrompt := strings.TrimSpace(skillCatalog.PromptFrontmatterBlock())
-
-	runner := agent.NewAgentRunner(*model, p, agent.WithTools(tools.AllTools()), agent.WithSystemPrompt(systemPrompt))
-
-	var finalMessages []agent.Message
-	if err := runner.Run(context.Background(), agent.Input{Content: *prompt, Type: "text"}, func(e agent.Event) {
-		printEvent(e)
-		if e.Type != agent.EventTypeAgentEnd {
-			return
-		}
-		if data, ok := e.Data.(agent.EventDataAgentEnd); ok {
-			finalMessages = data.Messages
-		}
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to run agent: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Println("FINAL_MESSAGES")
-	printJSON(finalMessages)
 }
 
 func buildProvider(providerType, baseURL, apiKey string) (agent.Provider, error) {
