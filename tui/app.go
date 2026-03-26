@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/liznear/hh/agent"
 	"github.com/liznear/hh/config"
@@ -36,11 +35,9 @@ type model struct {
 
 	config config.Config
 
-	spinner               spinner.Model
-	stopwatch             stopwatch.Model
-	markdownRenderer      *glamour.TermRenderer
-	markdownRendererWidth int
-	itemRenderCache       map[uintptr]itemRenderCacheEntry
+	spinner         spinner.Model
+	stopwatch       stopwatch.Model
+	itemRenderCache map[uintptr]itemRenderCacheEntry
 }
 
 type State struct {
@@ -150,10 +147,6 @@ type scrollPerfStats struct {
 
 type modelPickerState struct {
 	index int
-}
-
-type markdownPerfStats struct {
-	fallbackToWrap bool
 }
 
 func newDomainState(state *session.State, modelName string) domainState {

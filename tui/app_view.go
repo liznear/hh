@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -512,8 +513,8 @@ func (m *model) renderShellMessageWidget(item *session.ShellMessage, width int) 
 	return strings.Split(box, "\n")
 }
 
-func (m *model) renderAssistantMessageWidget(item *session.AssistantMessage, width int, renderer *glamour.TermRenderer) []string {
-	renderedMarkdown, _ := m.renderMarkdown(item.Content, max(1, width-2), renderer)
+func (m *model) renderAssistantMessageWidget(item *session.AssistantMessage, width int) []string {
+	renderedMarkdown := renderMarkdown(item.Content, max(1, width-2))
 	assistantLines := strings.Split(renderedMarkdown, "\n")
 	for len(assistantLines) > 0 && strings.TrimSpace(ansi.Strip(assistantLines[0])) == "" {
 		assistantLines = assistantLines[1:]
@@ -528,8 +529,8 @@ func (m *model) renderAssistantMessageWidget(item *session.AssistantMessage, wid
 	return lines
 }
 
-func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int, renderer *glamour.TermRenderer) []string {
-	renderedMarkdown, _ := m.renderMarkdown(item.Content, max(1, width-2), renderer)
+func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int) []string {
+	renderedMarkdown := renderMarkdown(item.Content, max(1, width-2))
 	plainMarkdown := ansi.Strip(renderedMarkdown)
 	plainMarkdown = strings.Trim(plainMarkdown, "\r\n")
 	thinkingLines := strings.Split(plainMarkdown, "\n")
@@ -1123,44 +1124,43 @@ func cloneStringSlice(in []string) []string {
 	return out
 }
 
-func (m *model) getMarkdownRenderer(width int) *glamour.TermRenderer {
-	if m.markdownRenderer != nil && m.markdownRendererWidth == width {
-		return m.markdownRenderer
-	}
-	m.markdownRenderer = getMarkdownRenderer(width)
-	m.markdownRendererWidth = width
-	return m.markdownRenderer
-}
-
-func (m *model) renderMarkdown(content string, width int, renderer *glamour.TermRenderer) (string, markdownPerfStats) {
-	stats := markdownPerfStats{}
+func renderMarkdown(content string, width int) string {
 	if strings.TrimSpace(content) == "" {
-		return "", stats
+		return ""
 	}
 
-	if renderer == nil {
-		fallback := strings.Join(wrapLine(content, width), "\n")
-		return fallback, stats
-	}
-
+	renderer := getMarkdownRenderer(width)
 	rendered, err := renderer.Render(content)
 	if err != nil {
-		fallback := strings.Join(wrapLine(content, width), "\n")
-		return fallback, stats
+		return strings.Join(wrapLine(content, width), "\n")
 	}
 
-	trimmed := strings.TrimRight(rendered, "\n")
-	return trimmed, stats
+	return strings.TrimRight(rendered, "\n")
 }
 
+var (
+	markdownRenderersMu sync.Mutex
+	markdownRenderers   = map[int]*glamour.TermRenderer{}
+)
+
 func getMarkdownRenderer(width int) *glamour.TermRenderer {
+	wrapWidth := max(20, width)
+
+	markdownRenderersMu.Lock()
+	defer markdownRenderersMu.Unlock()
+
+	if renderer, ok := markdownRenderers[wrapWidth]; ok {
+		return renderer
+	}
+
 	r, err := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("light"),
 		glamour.WithPreservedNewLines(),
-		glamour.WithWordWrap(max(20, width)),
+		glamour.WithWordWrap(wrapWidth),
 	)
 	if err != nil {
 		panic(err)
 	}
+	markdownRenderers[wrapWidth] = r
 	return r
 }

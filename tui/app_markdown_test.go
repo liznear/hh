@@ -5,33 +5,35 @@ import (
 	"testing"
 )
 
-func TestRenderMarkdown_DoesNotFallbackForModeratelyLargeMarkdown(t *testing.T) {
-	m := &model{}
-	renderer := m.getMarkdownRenderer(80)
-	if renderer == nil {
-		t.Fatal("expected markdown renderer")
-	}
-
+func TestRenderMarkdown_RendersModeratelyLargeMarkdown(t *testing.T) {
 	content := strings.Repeat("- `item`\n", 3000)
-	rendered, stats := m.renderMarkdown(content, 80, renderer)
+	rendered := renderMarkdown(content, 80)
 
-	if stats.fallbackToWrap {
-		t.Fatal("expected markdown render without fallback")
-	}
 	if strings.Contains(rendered, "`item`") {
 		t.Fatal("expected inline markdown to be rendered, got raw markdown markers")
 	}
 }
 
-func TestRenderMarkdown_FallsBackWhenRendererUnavailable(t *testing.T) {
-	m := &model{}
-	content := strings.Repeat("- `item`\n", 100)
-	rendered, stats := m.renderMarkdown(content, 80, nil)
+func TestRenderMarkdown_EmptyContent(t *testing.T) {
+	rendered := renderMarkdown("   \n\t", 80)
 
-	if stats.fallbackToWrap {
-		t.Fatal("expected renderer-unavailable fallback without budget fallback flag")
+	if rendered != "" {
+		t.Fatal("expected empty markdown content to render as empty string")
 	}
-	if !strings.Contains(rendered, "`item`") {
-		t.Fatal("expected fallback output to preserve raw markdown")
+}
+
+func TestGetMarkdownRenderer_CachesByWidth(t *testing.T) {
+	r80 := getMarkdownRenderer(80)
+	r100 := getMarkdownRenderer(100)
+	r80Again := getMarkdownRenderer(80)
+
+	if r80 == nil || r100 == nil || r80Again == nil {
+		t.Fatal("expected markdown renderers for all widths")
+	}
+	if r80 == r100 {
+		t.Fatal("expected different widths to use different renderer instances")
+	}
+	if r80Again != r80 {
+		t.Fatal("expected same width to reuse cached renderer instance")
 	}
 }

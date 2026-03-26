@@ -5,7 +5,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/liznear/hh/tui/session"
@@ -55,14 +54,13 @@ func (m *model) renderMessageList(width, height int) string {
 	}
 
 	m.clampListOffset(width, height)
-	renderer := m.getMarkdownRenderer(width)
 
 	visible := make([]string, 0, height)
 	idx := m.listOffsetIdx
 	offset := m.listOffsetLine
 
 	for len(visible) < height && idx < len(items) {
-		lines := m.renderItemLinesAt(items, idx, width, renderer)
+		lines := m.renderItemLinesAt(items, idx, width)
 		if len(lines) == 0 {
 			lines = []string{""}
 		}
@@ -202,10 +200,9 @@ func (m *model) isListAtBottom(width, height int) bool {
 	if len(items) == 0 || width <= 0 || height <= 0 {
 		return true
 	}
-	renderer := m.getMarkdownRenderer(width)
 	total := 0
 	for i := m.listOffsetIdx; i < len(items); i++ {
-		total += len(m.renderItemLinesAt(items, i, width, renderer))
+		total += len(m.renderItemLinesAt(items, i, width))
 		if total > height+m.listOffsetLine {
 			return false
 		}
@@ -248,11 +245,10 @@ func (m *model) lastListOffset(width, height int) (int, int) {
 	if len(items) == 0 {
 		return 0, 0
 	}
-	renderer := m.getMarkdownRenderer(width)
 	total := 0
 	idx := len(items) - 1
 	for ; idx >= 0; idx-- {
-		total += len(m.renderItemLinesAt(items, idx, width, renderer))
+		total += len(m.renderItemLinesAt(items, idx, width))
 		if total > height {
 			break
 		}
@@ -272,11 +268,10 @@ func (m *model) scrollListBy(lines, width, height int) {
 	if len(items) == 0 {
 		return
 	}
-	renderer := m.getMarkdownRenderer(width)
 	if lines > 0 {
 		m.listOffsetLine += lines
 		for m.listOffsetIdx < len(items) {
-			itemHeight := len(m.renderItemLinesAt(items, m.listOffsetIdx, width, renderer))
+			itemHeight := len(m.renderItemLinesAt(items, m.listOffsetIdx, width))
 			if itemHeight <= 0 {
 				itemHeight = 1
 			}
@@ -306,7 +301,7 @@ func (m *model) scrollListBy(lines, width, height int) {
 			m.listOffsetLine = 0
 			return
 		}
-		itemHeight := len(m.renderItemLinesAt(items, m.listOffsetIdx, width, renderer))
+		itemHeight := len(m.renderItemLinesAt(items, m.listOffsetIdx, width))
 		if itemHeight <= 0 {
 			itemHeight = 1
 		}
@@ -319,17 +314,16 @@ func (m *model) currentListOffset(width int) int {
 	if len(items) == 0 || width <= 0 {
 		return 0
 	}
-	renderer := m.getMarkdownRenderer(width)
 	offset := 0
 	maxIdx := min(m.listOffsetIdx, len(items))
 	for i := 0; i < maxIdx; i++ {
-		offset += len(m.renderItemLinesAt(items, i, width, renderer))
+		offset += len(m.renderItemLinesAt(items, i, width))
 	}
 	offset += m.listOffsetLine
 	return offset
 }
 
-func (m *model) renderItemLinesAt(items []session.Item, idx int, width int, renderer *glamour.TermRenderer) []string {
+func (m *model) renderItemLinesAt(items []session.Item, idx int, width int) []string {
 	if idx < 0 || idx >= len(items) {
 		return []string{""}
 	}
@@ -340,7 +334,7 @@ func (m *model) renderItemLinesAt(items []session.Item, idx int, width int, rend
 		return append([]string{""}, footer...)
 	}
 
-	lines := m.renderItemLines(items[idx], width, renderer)
+	lines := m.renderItemLines(items[idx], width)
 	if idx <= 0 || !needsSpacerBetweenItems(items[idx-1], items[idx]) {
 		return lines
 	}
@@ -417,7 +411,7 @@ func isMessageBlock(item session.Item) bool {
 	}
 }
 
-func (m *model) renderItemLines(item session.Item, width int, renderer *glamour.TermRenderer) []string {
+func (m *model) renderItemLines(item session.Item, width int) []string {
 	if cached, ok := m.getCachedRenderedItem(item, width); ok {
 		return cached
 	}
@@ -432,10 +426,10 @@ func (m *model) renderItemLines(item session.Item, width int, renderer *glamour.
 		lines = m.renderShellMessageWidget(v, width)
 
 	case *session.AssistantMessage:
-		lines = m.renderAssistantMessageWidget(v, width, renderer)
+		lines = m.renderAssistantMessageWidget(v, width)
 
 	case *session.ThinkingBlock:
-		lines = m.renderThinkingWidget(v, width, renderer)
+		lines = m.renderThinkingWidget(v, width)
 		needsNormalize = false
 
 	case *session.ToolCallItem:
@@ -490,10 +484,8 @@ func (m *model) renderBTWExchangeWidget(item *session.BTWExchange, width int) []
 
 	// Answer
 	if item.Answer != "" {
-		renderer := getMarkdownRenderer(innerWidth)
 		contentLines = append(contentLines, "")
-		renderedAnswer, _ := renderer.Render(item.Answer)
-		renderedAnswer = strings.Trim(renderedAnswer, " \r\n")
+		renderedAnswer := renderMarkdown(item.Answer, innerWidth)
 		for line := range strings.SplitSeq(renderedAnswer, "\n") {
 			line = strings.TrimRight(line, "\r")
 			line = trimOneLeadingSpace(line)
