@@ -22,18 +22,22 @@ func TestRenderMarkdown_EmptyContent(t *testing.T) {
 	}
 }
 
-func TestGetMarkdownRenderer_CachesByWidth(t *testing.T) {
-	r80 := getMarkdownRenderer(80)
-	r100 := getMarkdownRenderer(100)
-	r80Again := getMarkdownRenderer(80)
+func TestGetMarkdownRenderer_CachesByWidthAndMode(t *testing.T) {
+	r80 := getMarkdownRenderer(80, false)
+	r100 := getMarkdownRenderer(100, false)
+	r80Again := getMarkdownRenderer(80, false)
+	r80Muted := getMarkdownRenderer(80, true)
 
-	if r80 == nil || r100 == nil || r80Again == nil {
-		t.Fatal("expected markdown renderers for all widths")
+	if r80 == nil || r100 == nil || r80Again == nil || r80Muted == nil {
+		t.Fatal("expected markdown renderers for all widths/modes")
 	}
 	if r80 == r100 {
 		t.Fatal("expected different widths to use different renderer instances")
 	}
 	if r80Again != r80 {
-		t.Fatal("expected same width to reuse cached renderer instance")
+		t.Fatal("expected same width+mode to reuse cached renderer instance")
+	}
+	if r80Muted == r80 {
+		t.Fatal("expected muted and non-muted renderer caches to be distinct")
 	}
 }

@@ -522,24 +522,11 @@ func (m *model) renderAssistantMessageWidget(item *session.AssistantMessage, wid
 }
 
 func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int) []string {
-	renderedMarkdown := renderMarkdown(item.Content, max(1, width-2))
-	plainMarkdown := ansi.Strip(renderedMarkdown)
-	plainMarkdown = strings.Trim(plainMarkdown, "\r\n")
-	thinkingLines := strings.Split(plainMarkdown, "\n")
-	for len(thinkingLines) > 0 && strings.TrimSpace(thinkingLines[0]) == "" {
-		thinkingLines = thinkingLines[1:]
+	renderedMarkdown := renderMarkdownMuted(item.Content, max(1, width-2))
+	if renderedMarkdown == "" {
+		return []string{""}
 	}
-	if len(thinkingLines) == 0 {
-		thinkingLines = []string{""}
-	}
-	muted := lipgloss.NewStyle().Foreground(m.theme.Color(ThemeColorThinkingForeground))
-	lines := make([]string, 0, len(thinkingLines))
-	for _, line := range thinkingLines {
-		line = strings.TrimRight(line, "\r")
-		line = strings.TrimLeft(line, " ")
-		lines = append(lines, "  "+muted.Render(line))
-	}
-	return lines
+	return strings.Split(renderedMarkdown, "\n")
 }
 
 func (m *model) renderTurnFooterWidget(modelName string, duration time.Duration, status string, width int) []string {
@@ -1117,11 +1104,19 @@ func cloneStringSlice(in []string) []string {
 }
 
 func renderMarkdown(content string, width int) string {
+	return renderMarkdownWithRenderer(content, width, false)
+}
+
+func renderMarkdownMuted(content string, width int) string {
+	return renderMarkdownWithRenderer(content, width, true)
+}
+
+func renderMarkdownWithRenderer(content string, width int, muted bool) string {
 	if strings.TrimSpace(content) == "" {
 		return ""
 	}
 
-	renderer := getMarkdownRenderer(width)
+	renderer := getMarkdownRenderer(width, muted)
 	rendered, err := renderer.Render(content)
 	if err != nil {
 		return strings.Join(wrapLine(content, width), "\n")
@@ -1132,30 +1127,41 @@ func renderMarkdown(content string, width int) string {
 
 var (
 	markdownRenderersMu sync.Mutex
-	markdownRenderers   = map[int]*glamour.TermRenderer{}
+	markdownRenderers   = map[markdownRendererKey]*glamour.TermRenderer{}
 )
 
-func getMarkdownRenderer(width int) *glamour.TermRenderer {
+type markdownRendererKey struct {
+	width int
+	muted bool
+}
+
+func getMarkdownRenderer(width int, muted bool) *glamour.TermRenderer {
 	wrapWidth := max(20, width)
+	key := markdownRendererKey{width: wrapWidth, muted: muted}
 
 	markdownRenderersMu.Lock()
 	defer markdownRenderersMu.Unlock()
 
-	if renderer, ok := markdownRenderers[wrapWidth]; ok {
+	if renderer, ok := markdownRenderers[key]; ok {
 		return renderer
 	}
 
-	style := glamour.DefaultStyles["light"]
-	*style.Document.Margin = 2
+	style := *glamour.DefaultStyles["light"]
+	if style.Document.Margin != nil {
+		*style.Document.Margin = 2
+	}
+	if muted {
+		style = mutedStyleConfig(style, 0.45)
+	}
 
 	r, err := glamour.NewTermRenderer(
 		glamour.WithPreservedNewLines(),
 		glamour.WithWordWrap(wrapWidth),
-		glamour.WithStyles(*style),
+		glamour.WithStyles(style),
 	)
 	if err != nil {
 		panic(err)
 	}
-	markdownRenderers[wrapWidth] = r
+	markdownRenderers[key] = r
 	return r
 }
