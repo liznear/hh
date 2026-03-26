@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/liznear/hh/tui/session"
 )
@@ -85,11 +86,38 @@ func (m *model) renderMessageList(width, height int) string {
 
 func (m *model) displayItems() []session.Item {
 	base := m.session.AllItems()
-	if len(m.queuedSteering) == 0 {
+	if len(m.ephemeralItems) == 0 && len(m.queuedSteering) == 0 {
 		return base
 	}
-	out := make([]session.Item, 0, len(base)+len(m.queuedSteering))
-	out = append(out, base...)
+
+	// Build a map of ephemeral items keyed by turnID:afterIndex
+	type epKey struct {
+		turnID     string
+		afterIndex int
+	}
+	ephemeralMap := make(map[epKey][]session.Item)
+	for _, ep := range m.ephemeralItems {
+		k := epKey{turnID: ep.turnID, afterIndex: ep.afterIndex}
+		ephemeralMap[k] = append(ephemeralMap[k], ep.item)
+	}
+
+	// Iterate through turns and items, inserting ephemeral items at the right spots
+	out := make([]session.Item, 0, len(base)+len(m.ephemeralItems))
+	for _, turn := range m.session.Turns {
+		if turn == nil {
+			continue
+		}
+		for i, item := range turn.Items {
+			out = append(out, item)
+			// Check for ephemeral items after this index
+			k := epKey{turnID: turn.ID, afterIndex: i}
+			if eps, ok := ephemeralMap[k]; ok {
+				out = append(out, eps...)
+			}
+		}
+	}
+
+	// Append queued steering messages at the end
 	for _, queued := range m.queuedSteering {
 		out = append(out, &session.UserMessage{Content: queued.Content, Queued: true})
 	}
@@ -381,7 +409,8 @@ func isMessageBlock(item session.Item) bool {
 		session.ItemTypeAssistantMessage,
 		session.ItemTypeThinkingBlock,
 		session.ItemTypeToolCall,
-		session.ItemTypeError:
+		session.ItemTypeError,
+		session.ItemTypeBTWExchange:
 		return true
 	default:
 		return false
@@ -415,6 +444,9 @@ func (m *model) renderItemLines(item session.Item, width int, renderer *glamour.
 	case *session.ErrorItem:
 		lines = m.renderErrorWidget(v, width)
 
+	case *session.BTWExchange:
+		lines = m.renderBTWExchangeWidget(v, width)
+
 	default:
 		lines = []string{""}
 	}
@@ -427,6 +459,67 @@ func (m *model) renderItemLines(item session.Item, width int, renderer *glamour.
 	}
 	m.setCachedRenderedItem(item, width, lines)
 	return lines
+}
+
+func (m *model) renderBTWExchangeWidget(item *session.BTWExchange, width int) []string {
+	if item == nil {
+		return []string{""}
+	}
+
+	const btwBoxLeftMargin = 2
+	// Account for: left margin (2) + border (2) + padding (2) = 6
+	innerWidth := max(1, width-6)
+
+	badge := lipgloss.NewStyle().
+		Foreground(m.theme.Color(ThemeColorUserMessageBorderForeground)).
+		Render("[btw]")
+
+	badgePlain := "[btw] "
+	badgeWidth := ansi.StringWidth(badgePlain)
+
+	var contentLines []string
+
+	// Question - first line has badge, subsequent lines are indented
+	questionInnerWidth := max(1, innerWidth-badgeWidth)
+	questionLines := wrapLine(item.Question, questionInnerWidth)
+	contentLines = append(contentLines, badge+" "+questionLines[0])
+	indent := strings.Repeat(" ", badgeWidth)
+	for i := 1; i < len(questionLines); i++ {
+		contentLines = append(contentLines, indent+questionLines[i])
+	}
+
+	// Answer
+	if item.Answer != "" {
+		renderer := getMarkdownRenderer(innerWidth)
+		contentLines = append(contentLines, "")
+		renderedAnswer, _ := renderer.Render(item.Answer)
+		renderedAnswer = strings.Trim(renderedAnswer, " \r\n")
+		for line := range strings.SplitSeq(renderedAnswer, "\n") {
+			line = strings.TrimRight(line, "\r")
+			line = trimOneLeadingSpace(line)
+			if strings.TrimSpace(ansi.Strip(line)) == "" {
+				contentLines = append(contentLines, "")
+			} else {
+				contentLines = append(contentLines, line)
+			}
+		}
+	} else if m.btwBusy {
+		// Show processing indicator
+		contentLines = append(contentLines, "")
+		spinner := m.spinner.View()
+		contentLines = append(contentLines, spinner)
+	}
+
+	// Render all content as a single box
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.theme.Color(ThemeColorInputBorder)).
+		Padding(0, 1).
+		MarginLeft(btwBoxLeftMargin).
+		Width(innerWidth).
+		Render(strings.Join(contentLines, "\n"))
+
+	return strings.Split(box, "\n")
 }
 
 func normalizeLinesForWidth(lines []string, width int) []string {

@@ -26,9 +26,10 @@
 - [x] Cancel bash tool.
 - [ ] Shell mode during busy
 - [ ] Support sub-agent
-- [ ] Support btw
+- [x] Support btw
 - [ ] Plan mode
 - [x] Resume
 - [ ] Review mode
 - [ ] Add path in grep tool line
 - [ ] Read line show start and limit
+- [ ] Context usage is not cleaned up on /new

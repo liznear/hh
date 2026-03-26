@@ -17,6 +17,7 @@ type Invocation struct {
 const ActionNewSession = "new_session"
 const ActionModelPicker = "model_picker"
 const ActionResumeSession = "resume_session"
+const ActionBTW = "btw"
 
 func BuiltIn() map[string]Command {
 	commands := []Command{
@@ -34,6 +35,11 @@ func BuiltIn() map[string]Command {
 			Name:    "resume",
 			Summary: "list recent sessions for this path",
 			Action:  ActionResumeSession,
+		},
+		{
+			Name:    "btw",
+			Summary: "ask a quick question about current context",
+			Action:  ActionBTW,
 		},
 	}
 

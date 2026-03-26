@@ -70,7 +70,9 @@ type uiState struct {
 	listOffsetIdx  int
 	listOffsetLine int
 
-	stream <-chan tea.Msg
+	stream       <-chan tea.Msg
+	btwStream    <-chan tea.Msg
+	btwStreamCmd tea.Cmd
 }
 
 // runtimeState holds ephemeral TUI runtime fields that should not be persisted
@@ -83,6 +85,8 @@ type runtimeState struct {
 	runCancel    context.CancelFunc
 	escPending   bool
 	cancelledRun bool
+
+	btwBusy bool
 
 	showRunResult        bool
 	viewportDirty        bool
@@ -114,6 +118,14 @@ type runtimeState struct {
 	questionValidationErrors int
 
 	queuedSteering []queuedSteeringMessage
+
+	ephemeralItems []ephemeralItem
+}
+
+type ephemeralItem struct {
+	turnID     string
+	afterIndex int
+	item       session.Item
 }
 
 type queuedSteeringMessage struct {
@@ -283,6 +295,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentRunDoneMsg:
 		return m.handleAgentRunDoneMsg(msg, statusCmd)
+
+	case btwRunDoneMsg:
+		return m.handleBTWRunDoneMsg(msg, statusCmd)
+
+	case btwStreamBatchMsg:
+		return m.handleBTWStreamBatchMsg(msg, statusCmd)
+
+	case btwStreamStartedMsg:
+		return m.handleBTWStreamStartedMsg(msg, statusCmd)
 	}
 
 	var cmd tea.Cmd
@@ -649,6 +670,25 @@ func (m *model) handleEnterKey(_ tea.KeyPressMsg, statusCmd tea.Cmd) (tea.Model,
 		return m, statusCmd
 	}
 
+	// Check for /btw command even when busy
+	if inv, ok := commands.ParseInvocation(prompt); ok && inv.Name == "btw" {
+		if inv.ArgsRaw == "" {
+			m.addItem(&session.ErrorItem{Message: "/btw requires a prompt"})
+			m.input.SetValue("")
+			m.refreshViewport()
+			return m, statusCmd
+		}
+		if err := m.startBTWRun(inv.ArgsRaw); err != nil {
+			m.addItem(&session.ErrorItem{Message: err.Error()})
+			m.refreshViewport()
+			return m, statusCmd
+		}
+		m.input.SetValue("")
+		cmd := m.btwStreamCmd
+		m.btwStreamCmd = nil
+		return m, tea.Batch(statusCmd, cmd)
+	}
+
 	if m.busy {
 		if m.runner == nil {
 			m.addItem(&session.ErrorItem{Message: "runner unavailable"})
@@ -720,14 +760,121 @@ func (m *model) handleStreamBatchMsg(msg streamBatchMsg, statusCmd tea.Cmd) (tea
 }
 
 func (m *model) handleAgentEventMsg(msg agentEventMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if msg.btw {
+		m.handleBTWEvent(msg.event, msg.btwItem)
+		m.refreshAfterStreamEvent()
+		return m, tea.Batch(statusCmd, waitForBTWStreamCmd(m.btwStream))
+	}
 	m.handleAgentEvent(msg.event)
 	m.refreshAfterStreamEvent()
 	return m, tea.Batch(statusCmd, waitForStreamCmd(m.stream))
 }
 
+func (m *model) handleBTWEvent(e agent.Event, item session.Item) {
+	exchange, ok := item.(*session.BTWExchange)
+	if !ok {
+		return
+	}
+	switch e.Type {
+	case agent.EventTypeMessageDelta:
+		if data, ok := e.Data.(agent.EventDataMessageDelta); ok {
+			exchange.AppendAnswer(data.Delta)
+			m.refreshViewport()
+		}
+	case agent.EventTypeError:
+		switch data := e.Data.(type) {
+		case error:
+			m.addItem(&session.ErrorItem{Message: data.Error()})
+		case agent.EventDataError:
+			if data.Err != nil {
+				m.addItem(&session.ErrorItem{Message: data.Err.Error()})
+			}
+		}
+	}
+}
+
 func (m *model) handleAgentRunDoneMsg(msg agentRunDoneMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
 	m.finalizeRun(msg.err)
 	return m, statusCmd
+}
+
+func (m *model) handleBTWStreamStartedMsg(msg btwStreamStartedMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	m.btwStream = msg.ch
+	m.btwBusy = true
+	return m, tea.Batch(statusCmd, waitForBTWStreamCmd(m.btwStream))
+}
+
+func (m *model) handleBTWRunDoneMsg(msg btwRunDoneMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	m.btwStream = nil
+	m.btwBusy = false
+	m.refreshViewport()
+	return m, statusCmd
+}
+
+func (m *model) handleBTWStreamBatchMsg(msg btwStreamBatchMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if len(msg.events) > 0 {
+		for _, e := range msg.events {
+			// Find the last BTWExchange item to update
+			for i := len(m.ephemeralItems) - 1; i >= 0; i-- {
+				if exchange, ok := m.ephemeralItems[i].item.(*session.BTWExchange); ok {
+					m.handleBTWEvent(e, exchange)
+					break
+				}
+			}
+		}
+		m.refreshAfterStreamEvent()
+	}
+
+	if msg.done {
+		m.btwStream = nil
+		m.btwBusy = false
+		m.refreshViewport()
+		return m, statusCmd
+	}
+
+	return m, tea.Batch(statusCmd, waitForBTWStreamCmd(m.btwStream))
+}
+
+func waitForBTWStreamCmd(ch <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		if ch == nil {
+			return nil
+		}
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+
+		switch first := msg.(type) {
+		case agentEventMsg:
+			events := []agent.Event{first.event}
+			for i := 1; i < streamBatchMaxEvents; i++ {
+				select {
+				case next, ok := <-ch:
+					if !ok {
+						return btwStreamBatchMsg{events: events}
+					}
+					switch v := next.(type) {
+					case agentEventMsg:
+						events = append(events, v.event)
+					case btwRunDoneMsg:
+						return btwStreamBatchMsg{events: events, done: true, doneErr: v.err}
+					default:
+						return btwStreamBatchMsg{events: events}
+					}
+				default:
+					return btwStreamBatchMsg{events: events}
+				}
+			}
+			return btwStreamBatchMsg{events: events}
+
+		case btwRunDoneMsg:
+			return btwStreamBatchMsg{done: true, doneErr: first.err}
+
+		default:
+			return msg
+		}
+	}
 }
 
 func (m *model) beginRun() context.Context {
@@ -1004,7 +1151,25 @@ type agentStreamStartedMsg struct {
 }
 
 type agentEventMsg struct {
-	event agent.Event
+	event     agent.Event
+	btw       bool
+	btwTurnID string
+	btwItem   session.Item
+}
+
+type btwStreamStartedMsg struct {
+	ch <-chan tea.Msg
+}
+
+type btwRunDoneMsg struct {
+	turnID string
+	err    error
+}
+
+type btwStreamBatchMsg struct {
+	events  []agent.Event
+	done    bool
+	doneErr error
 }
 
 type agentRunDoneMsg struct {

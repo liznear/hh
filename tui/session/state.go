@@ -216,6 +216,7 @@ const (
 	ItemTypeToolCall
 	ItemTypeError
 	ItemTypeEnd
+	ItemTypeBTWExchange
 )
 
 type Item interface {
@@ -344,6 +345,18 @@ type End struct {
 }
 
 func (e *End) Type() ItemType { return ItemTypeEnd }
+
+type BTWExchange struct {
+	baseItem
+	Question string
+	Answer   string
+}
+
+func (b *BTWExchange) Type() ItemType { return ItemTypeBTWExchange }
+
+func (b *BTWExchange) AppendAnswer(delta string) {
+	b.Answer += delta
+}
 
 func generateID() string {
 	return time.Now().Format("20060102-150405")

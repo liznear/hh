@@ -1,18 +1,19 @@
 package tui
 
 import (
-	tea "charm.land/bubbletea/v2"
 	"encoding/json"
 	"fmt"
+	"os"
+	"reflect"
+	"strings"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/liznear/hh/tools"
 	"github.com/liznear/hh/tui/session"
-	"os"
-	"reflect"
-	"strings"
-	"time"
 )
 
 type frameViewModel struct {
@@ -1035,6 +1036,10 @@ func (m *model) getCachedRenderedItem(item session.Item, width int) ([]string, b
 	if tc, ok := item.(*session.ToolCallItem); ok && tc.Status == session.ToolCallStatusPending {
 		return nil, false
 	}
+	// Don't cache BTWExchange items as they stream in
+	if _, ok := item.(*session.BTWExchange); ok {
+		return nil, false
+	}
 	key := itemCacheKey(item)
 	if key == 0 {
 		return nil, false
@@ -1058,6 +1063,10 @@ func (m *model) setCachedRenderedItem(item session.Item, width int, lines []stri
 		return
 	}
 	if tc, ok := item.(*session.ToolCallItem); ok && tc.Status == session.ToolCallStatusPending {
+		return
+	}
+	// Don't cache BTWExchange items as they stream in
+	if _, ok := item.(*session.BTWExchange); ok {
 		return
 	}
 	key := itemCacheKey(item)
@@ -1101,6 +1110,8 @@ func itemCacheSignature(item session.Item) (string, bool) {
 		return fmt.Sprintf("tool:%d:%s:%s:%s:%t", v.Status, v.Name, v.Arguments, summary, v.Result != nil), true
 	case *session.ErrorItem:
 		return "error:" + v.Message, true
+	case *session.BTWExchange:
+		return "btw:" + v.Question + "\n" + v.Answer, true
 	default:
 		return "", false
 	}
@@ -1116,19 +1127,7 @@ func (m *model) getMarkdownRenderer(width int) *glamour.TermRenderer {
 	if m.markdownRenderer != nil && m.markdownRendererWidth == width {
 		return m.markdownRenderer
 	}
-
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("light"),
-		glamour.WithPreservedNewLines(),
-		glamour.WithWordWrap(max(20, width)),
-	)
-	if err != nil {
-		m.markdownRenderer = nil
-		m.markdownRendererWidth = 0
-		return nil
-	}
-
-	m.markdownRenderer = renderer
+	m.markdownRenderer = getMarkdownRenderer(width)
 	m.markdownRendererWidth = width
 	m.markdownCache = map[string]string{}
 	return m.markdownRenderer
@@ -1161,4 +1160,16 @@ func (m *model) renderMarkdown(content string, width int, renderer *glamour.Term
 	trimmed := strings.TrimRight(rendered, "\n")
 	m.markdownCache[cacheKey] = trimmed
 	return trimmed, stats
+}
+
+func getMarkdownRenderer(width int) *glamour.TermRenderer {
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStandardStyle("light"),
+		glamour.WithPreservedNewLines(),
+		glamour.WithWordWrap(max(20, width)),
+	)
+	if err != nil {
+		panic(err)
+	}
+	return r
 }

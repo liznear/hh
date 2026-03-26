@@ -161,6 +161,47 @@ func (a *AgentRunner) SubmitSteeringMessage(content, runID string) error {
 	return err
 }
 
+func (a *AgentRunner) RunSideQuery(ctx context.Context, history []Message, prompt string, onEvent func(Event)) error {
+	if a == nil || a.provider == nil {
+		return ErrNoActiveRun
+	}
+
+	messages := make([]Message, 0, len(history)+1)
+	if a.state.SystemPrompt != "" {
+		messages = append(messages, Message{Role: RoleSystem, Content: a.state.SystemPrompt})
+	}
+	messages = append(messages, history...)
+	messages = append(messages, Message{Role: RoleUser, Content: prompt})
+
+	req := ProviderRequest{
+		Model:    a.model,
+		Messages: messages,
+	}
+
+	var content string
+	_, err := a.provider.ChatCompletionStream(ctx, req, func(ev ProviderStreamEvent) error {
+		if ev.MessageDelta != "" {
+			content += ev.MessageDelta
+			onEvent(Event{
+				Type:      EventTypeMessageDelta,
+				Data:      EventDataMessageDelta{Delta: ev.MessageDelta},
+				Timestamp: time.Now().UTC(),
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	onEvent(Event{
+		Type:      EventTypeMessage,
+		Data:      EventDataMessage{Message: Message{Role: RoleAssistant, Content: content}},
+		Timestamp: time.Now().UTC(),
+	})
+	return nil
+}
+
 func (a *AgentRunner) maybeGenerateSessionTitleAsync(ctx context.Context, input Input, onEvent func(Event), started chan<- struct{}) <-chan struct{} {
 	if a == nil || a.state == nil || a.provider == nil {
 		return nil
