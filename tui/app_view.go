@@ -1129,7 +1129,6 @@ func (m *model) getMarkdownRenderer(width int) *glamour.TermRenderer {
 	}
 	m.markdownRenderer = getMarkdownRenderer(width)
 	m.markdownRendererWidth = width
-	m.markdownCache = map[string]string{}
 	return m.markdownRenderer
 }
 
@@ -1139,26 +1138,18 @@ func (m *model) renderMarkdown(content string, width int, renderer *glamour.Term
 		return "", stats
 	}
 
-	cacheKey := fmt.Sprintf("%d:%s", width, content)
-	if cached, ok := m.markdownCache[cacheKey]; ok {
-		return cached, stats
-	}
-
 	if renderer == nil {
 		fallback := strings.Join(wrapLine(content, width), "\n")
-		m.markdownCache[cacheKey] = fallback
 		return fallback, stats
 	}
 
 	rendered, err := renderer.Render(content)
 	if err != nil {
 		fallback := strings.Join(wrapLine(content, width), "\n")
-		m.markdownCache[cacheKey] = fallback
 		return fallback, stats
 	}
 
 	trimmed := strings.TrimRight(rendered, "\n")
-	m.markdownCache[cacheKey] = trimmed
 	return trimmed, stats
 }
 

@@ -127,7 +127,6 @@ func (m *model) selectResumeSession() error {
 	m.autoScroll = true
 	m.showRunResult = false
 	m.viewportDirty = false
-	m.markdownCache = map[string]string{}
 	m.itemRenderCache = map[uintptr]itemRenderCacheEntry{}
 	return nil
 }

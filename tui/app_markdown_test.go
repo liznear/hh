@@ -6,7 +6,7 @@ import (
 )
 
 func TestRenderMarkdown_DoesNotFallbackForModeratelyLargeMarkdown(t *testing.T) {
-	m := &model{markdownCache: map[string]string{}}
+	m := &model{}
 	renderer := m.getMarkdownRenderer(80)
 	if renderer == nil {
 		t.Fatal("expected markdown renderer")
@@ -24,7 +24,7 @@ func TestRenderMarkdown_DoesNotFallbackForModeratelyLargeMarkdown(t *testing.T) 
 }
 
 func TestRenderMarkdown_FallsBackWhenRendererUnavailable(t *testing.T) {
-	m := &model{markdownCache: map[string]string{}}
+	m := &model{}
 	content := strings.Repeat("- `item`\n", 100)
 	rendered, stats := m.renderMarkdown(content, 80, nil)
 

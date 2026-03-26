@@ -75,7 +75,6 @@ func (m *model) startNewSession() {
 	m.autoScroll = true
 	m.showRunResult = false
 	m.viewportDirty = false
-	m.markdownCache = map[string]string{}
 	m.itemRenderCache = map[uintptr]itemRenderCacheEntry{}
 	m.ephemeralItems = nil
 	m.contextWindowUsed = 0

@@ -40,7 +40,6 @@ type model struct {
 	stopwatch             stopwatch.Model
 	markdownRenderer      *glamour.TermRenderer
 	markdownRendererWidth int
-	markdownCache         map[string]string
 	itemRenderCache       map[uintptr]itemRenderCacheEntry
 }
 
@@ -229,7 +228,6 @@ func newModel(runner *agent.AgentRunner, modelName, agentName string, cfg config
 		spinner:         spin,
 		stopwatch:       sw,
 		State:           newState(state, modelName, in, workingDir),
-		markdownCache:   map[string]string{},
 		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
 	}
 	return m

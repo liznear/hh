@@ -15,7 +15,6 @@ func newTestModel() *model {
 		spinner:         spinner.New(spinner.WithSpinner(spinner.Dot)),
 		stopwatch:       stopwatch.New(stopwatch.WithInterval(time.Second)),
 		State:           newState(session.NewState("test-model"), "test-model", newTextareaInput(), ""),
-		markdownCache:   map[string]string{},
 		itemRenderCache: map[uintptr]itemRenderCacheEntry{},
 	}
 }
