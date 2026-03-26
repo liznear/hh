@@ -1153,10 +1153,13 @@ func getMarkdownRenderer(width int) *glamour.TermRenderer {
 		return renderer
 	}
 
+	style := glamour.DefaultStyles["light"]
+	*style.Document.Margin = 2
+
 	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("light"),
 		glamour.WithPreservedNewLines(),
 		glamour.WithWordWrap(wrapWidth),
+		glamour.WithStyles(*style),
 	)
 	if err != nil {
 		panic(err)
