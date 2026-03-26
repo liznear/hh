@@ -32,4 +32,4 @@
 - [ ] Review mode
 - [ ] Add path in grep tool line
 - [ ] Read line show start and limit
-- [ ] Context usage is not cleaned up on /new
+- [x] Context usage is not cleaned up on /new

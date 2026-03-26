@@ -78,6 +78,7 @@ func (m *model) startNewSession() {
 	m.markdownCache = map[string]string{}
 	m.itemRenderCache = map[uintptr]itemRenderCacheEntry{}
 	m.ephemeralItems = nil
+	m.contextWindowUsed = 0
 	m.persistState()
 }
 
