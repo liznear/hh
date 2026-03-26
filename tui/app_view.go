@@ -515,18 +515,10 @@ func (m *model) renderShellMessageWidget(item *session.ShellMessage, width int) 
 
 func (m *model) renderAssistantMessageWidget(item *session.AssistantMessage, width int) []string {
 	renderedMarkdown := renderMarkdown(item.Content, max(1, width-2))
-	assistantLines := strings.Split(renderedMarkdown, "\n")
-	for len(assistantLines) > 0 && strings.TrimSpace(ansi.Strip(assistantLines[0])) == "" {
-		assistantLines = assistantLines[1:]
+	if renderedMarkdown == "" {
+		return []string{""}
 	}
-	if len(assistantLines) == 0 {
-		assistantLines = []string{""}
-	}
-	lines := make([]string, 0, len(assistantLines))
-	for _, line := range assistantLines {
-		lines = append(lines, trimOneLeadingSpace(line))
-	}
-	return lines
+	return strings.Split(renderedMarkdown, "\n")
 }
 
 func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int) []string {
@@ -1135,7 +1127,7 @@ func renderMarkdown(content string, width int) string {
 		return strings.Join(wrapLine(content, width), "\n")
 	}
 
-	return strings.TrimRight(rendered, "\n")
+	return strings.Trim(rendered, "\n")
 }
 
 var (

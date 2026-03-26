@@ -484,17 +484,7 @@ func (m *model) renderBTWExchangeWidget(item *session.BTWExchange, width int) []
 
 	// Answer
 	if item.Answer != "" {
-		contentLines = append(contentLines, "")
-		renderedAnswer := renderMarkdown(item.Answer, innerWidth)
-		for line := range strings.SplitSeq(renderedAnswer, "\n") {
-			line = strings.TrimRight(line, "\r")
-			line = trimOneLeadingSpace(line)
-			if strings.TrimSpace(ansi.Strip(line)) == "" {
-				contentLines = append(contentLines, "")
-			} else {
-				contentLines = append(contentLines, line)
-			}
-		}
+		contentLines = append(contentLines, "", renderMarkdown(item.Answer, innerWidth))
 	} else if m.btwBusy {
 		// Show processing indicator
 		contentLines = append(contentLines, "")
@@ -540,11 +530,4 @@ func prefixedLines(lines []string, prefix string) []string {
 		out = append(out, prefix+line)
 	}
 	return out
-}
-
-func trimOneLeadingSpace(line string) string {
-	if strings.HasPrefix(line, " ") {
-		return line[1:]
-	}
-	return line
 }
