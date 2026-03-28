@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
+	glamouransi "github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/liznear/hh/tools"
@@ -522,7 +523,7 @@ func (m *model) renderAssistantMessageWidget(item *session.AssistantMessage, wid
 }
 
 func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int) []string {
-	renderedMarkdown := renderMarkdownMuted(item.Content, max(1, width-2))
+	renderedMarkdown := renderMarkdown(item.Content, max(1, width-2), ThinkingOption())
 	if renderedMarkdown == "" {
 		return []string{""}
 	}
@@ -1103,20 +1104,26 @@ func cloneStringSlice(in []string) []string {
 	return out
 }
 
-func renderMarkdown(content string, width int) string {
-	return renderMarkdownWithRenderer(content, width, false)
+type markdownRenderOption struct {
+	name  string
+	apply func(*glamouransi.StyleConfig)
 }
 
-func renderMarkdownMuted(content string, width int) string {
-	return renderMarkdownWithRenderer(content, width, true)
+func ThinkingOption() markdownRenderOption {
+	return markdownRenderOption{
+		name: "thinking",
+		apply: func(style *glamouransi.StyleConfig) {
+			*style = mutedStyleConfig(*style, 0.45)
+		},
+	}
 }
 
-func renderMarkdownWithRenderer(content string, width int, muted bool) string {
+func renderMarkdown(content string, width int, opts ...markdownRenderOption) string {
 	if strings.TrimSpace(content) == "" {
 		return ""
 	}
 
-	renderer := getMarkdownRenderer(width, muted)
+	renderer := getMarkdownRenderer(width, opts...)
 	rendered, err := renderer.Render(content)
 	if err != nil {
 		return strings.Join(wrapLine(content, width), "\n")
@@ -1131,13 +1138,13 @@ var (
 )
 
 type markdownRendererKey struct {
-	width int
-	muted bool
+	width      int
+	optionName string
 }
 
-func getMarkdownRenderer(width int, muted bool) *glamour.TermRenderer {
+func getMarkdownRenderer(width int, opts ...markdownRenderOption) *glamour.TermRenderer {
 	wrapWidth := max(20, width)
-	key := markdownRendererKey{width: wrapWidth, muted: muted}
+	key := markdownRendererKey{width: wrapWidth, optionName: markdownOptionKey(opts)}
 
 	markdownRenderersMu.Lock()
 	defer markdownRenderersMu.Unlock()
@@ -1150,8 +1157,11 @@ func getMarkdownRenderer(width int, muted bool) *glamour.TermRenderer {
 	if style.Document.Margin != nil {
 		*style.Document.Margin = 2
 	}
-	if muted {
-		style = mutedStyleConfig(style, 0.45)
+	for _, opt := range opts {
+		if opt.apply == nil {
+			continue
+		}
+		opt.apply(&style)
 	}
 
 	r, err := glamour.NewTermRenderer(
@@ -1164,4 +1174,20 @@ func getMarkdownRenderer(width int, muted bool) *glamour.TermRenderer {
 	}
 	markdownRenderers[key] = r
 	return r
+}
+
+func markdownOptionKey(opts []markdownRenderOption) string {
+	if len(opts) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(opts))
+	for i, opt := range opts {
+		name := strings.TrimSpace(opt.name)
+		if name == "" {
+			name = fmt.Sprintf("unnamed-%d", i)
+		}
+		parts = append(parts, name)
+	}
+	return strings.Join(parts, "|")
 }
