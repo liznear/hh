@@ -96,17 +96,19 @@ type runtimeState struct {
 	suppressRefreshUntil time.Time
 
 	questionDialog *questionDialogState
+	diffDialog     *diffDialogState
 
 	lastRenderLatency time.Duration
 	maxRenderLatency  time.Duration
 	lastScrollStats   scrollPerfStats
 	maxScrollStats    scrollPerfStats
 
-	workingDir        string
-	gitBranch         string
-	modifiedFiles     []modifiedFileStat
-	lastGitRefreshAt  time.Time
-	contextWindowUsed int
+	workingDir               string
+	gitBranch                string
+	modifiedFiles            []modifiedFileStat
+	sidebarModifiedFileLines []sidebarModifiedFileLine
+	lastGitRefreshAt         time.Time
+	contextWindowUsed        int
 
 	questionPromptedAt       time.Time
 	questionLastLatency      time.Duration
@@ -116,6 +118,11 @@ type runtimeState struct {
 	queuedSteering []queuedSteeringMessage
 
 	ephemeralItems []ephemeralItem
+}
+
+type sidebarModifiedFileLine struct {
+	Line int
+	Path string
 }
 
 type ephemeralItem struct {
@@ -268,6 +275,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseWheelMsg:
 		return m.handleMouseWheelMsg(msg, statusCmd, updateGap, timeSinceView)
+
+	case tea.MouseClickMsg:
+		return m.handleMouseClickMsg(msg, statusCmd)
 
 	case shellCommandDoneMsg:
 		return m.handleShellCommandDoneMsg(msg, statusCmd)
@@ -925,6 +935,13 @@ func (m *model) requestCancelRun() {
 }
 
 func (m *model) handleDialogKeyPress(msg tea.KeyPressMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd, bool) {
+	if m.diffDialog != nil {
+		if m.handleDiffDialogKey(msg) {
+			m.refreshViewport()
+			return m, statusCmd, true
+		}
+	}
+
 	if m.questionDialog != nil {
 		if m.handleQuestionDialogKey(msg) {
 			m.refreshViewport()
@@ -989,10 +1006,23 @@ func (m *model) switchToNextAgent() error {
 }
 
 func (m *model) handleMouseWheelMsg(msg tea.MouseWheelMsg, statusCmd tea.Cmd, updateGap time.Duration, timeSinceView time.Duration) (tea.Model, tea.Cmd) {
+	if m.handleDiffDialogWheel(msg) {
+		m.refreshViewport()
+		return m, statusCmd
+	}
+
 	scrollUpdateStart := time.Now()
 	deltaRows := m.handleMouseWheelScroll(msg)
 	if deltaRows != 0 {
 		m.recordScrollInteraction("mouse", scrollUpdateStart, deltaRows, updateGap, timeSinceView)
+		return m, statusCmd
+	}
+	return m, statusCmd
+}
+
+func (m *model) handleMouseClickMsg(msg tea.MouseClickMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if m.handleSidebarModifiedFileClick(msg.Mouse().X, msg.Mouse().Y) {
+		m.refreshViewport()
 		return m, statusCmd
 	}
 	return m, statusCmd

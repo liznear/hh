@@ -41,7 +41,7 @@ func TestEditTool(t *testing.T) {
 	if structured.AddedLines != 2 || structured.DeletedLines != 2 {
 		t.Fatalf("unexpected edit counts: %+v", structured)
 	}
-	if structured.UnifiedDiff == "" {
-		t.Fatalf("expected unified diff in edit result")
+	if structured.OldContent == "" || structured.NewContent == "" {
+		t.Fatalf("expected old and new content in edit result")
 	}
 }

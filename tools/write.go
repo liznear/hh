@@ -11,7 +11,8 @@ import (
 
 type WriteResult struct {
 	Path        string
-	UnifiedDiff string
+	OldContent  string
+	NewContent  string
 	AddedLines  int
 }
 
@@ -69,18 +70,16 @@ func handleWrite(_ context.Context, params map[string]any) agent.ToolResult {
 		return toolErr("failed to write file: %v", err)
 	}
 
-	unifiedDiff, err := buildUnifiedDiff(path, string(original), content)
-	if err != nil {
-		return toolErr("failed to generate unified diff: %v", err)
-	}
-	addedLines, _ := countUnifiedDiffChanges(unifiedDiff)
+	oldContent := string(original)
+	addedLines, _ := countDiffChanges(oldContent, content)
 
 	return agent.ToolResult{
 		Data: "ok",
 		Result: WriteResult{
-			Path:        path,
-			UnifiedDiff: unifiedDiff,
-			AddedLines:  addedLines,
+			Path:       path,
+			OldContent: oldContent,
+			NewContent: content,
+			AddedLines: addedLines,
 		},
 	}
 }

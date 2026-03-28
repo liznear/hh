@@ -74,6 +74,8 @@ func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
 	messageList := m.renderMessageList(layout.mainWidth, layout.messageHeight)
 	if m.questionDialog != nil {
 		messageList = m.renderQuestionDialog(layout.mainWidth, layout.messageHeight)
+	} else if m.diffDialog != nil {
+		messageList = m.renderDiffDialog(layout.mainWidth, layout.messageHeight)
 	} else if m.resumePicker != nil {
 		messageList = m.renderResumePickerDialog(layout.mainWidth, layout.messageHeight)
 	} else if m.modelPicker != nil {
@@ -200,6 +202,7 @@ func (m *model) buildSidebarLines(sidebarWidth int) []string {
 		"",
 		contextLine,
 	}
+	m.sidebarModifiedFileLines = nil
 
 	if m.questionSubmittedCount > 0 || m.questionValidationErrors > 0 {
 		questionLine := fmt.Sprintf("%s %d", bold.Render("Questions answered:"), m.questionSubmittedCount)
@@ -216,8 +219,11 @@ func (m *model) buildSidebarLines(sidebarWidth int) []string {
 	if len(m.modifiedFiles) > 0 {
 		sidebarLines = append(sidebarLines, "", bold.Render("Modified Files"))
 		for _, file := range m.modifiedFiles {
+			lineNumber := len(sidebarLines)
 			sidebarLines = append(sidebarLines, renderModifiedFileLine(contentWidth, file, success, errorStyle))
+			m.sidebarModifiedFileLines = append(m.sidebarModifiedFileLines, sidebarModifiedFileLine{Line: lineNumber, Path: file.Path})
 		}
+		sidebarLines = append(sidebarLines, warning.Render("click file to open diff"))
 	}
 
 	if len(m.session.TodoItems) > 0 {
@@ -613,6 +619,10 @@ func renderToolCallWidget(vm toolCallWidgetModel, theme Theme) []string {
 		out = append(out, "  "+styledLine)
 	}
 
+	if diffLines := renderEditToolCallDiff(vm, theme); len(diffLines) > 0 {
+		out = append(out, diffLines...)
+	}
+
 	return out
 }
 
@@ -629,6 +639,29 @@ func renderToolCallIcon(vm toolCallWidgetModel, theme Theme) string {
 	default:
 		return lipgloss.NewStyle().Foreground(theme.Color(ThemeColorToolCallIconErrorForeground)).Render("⨯")
 	}
+}
+
+func renderEditToolCallDiff(vm toolCallWidgetModel, theme Theme) []string {
+	item := vm.Item
+	if item == nil || item.Status != session.ToolCallStatusSuccess || strings.ToLower(item.Name) != "edit" || item.Result == nil {
+		return nil
+	}
+	editResult, ok := item.Result.Result.(tools.EditResult)
+	if !ok {
+		return nil
+	}
+	if editResult.OldContent == editResult.NewContent {
+		return nil
+	}
+
+	diffWidth := max(20, vm.Width-2)
+	diffLines := RenderSplitDiff(editResult.OldContent, editResult.NewContent, editResult.Path, diffWidth, theme)
+	out := make([]string, 0, len(diffLines)+1)
+	out = append(out, "")
+	for _, line := range diffLines {
+		out = append(out, "  "+line)
+	}
+	return out
 }
 
 func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []styledToken) {

@@ -102,6 +102,33 @@ func collectModifiedFiles(workingDir string) []modifiedFileStat {
 	return files
 }
 
+func gitDiffContentForPath(workingDir string, path string) (oldContent string, newContent string, err error) {
+	workingDir = strings.TrimSpace(workingDir)
+	path = strings.TrimSpace(path)
+	if workingDir == "" || path == "" {
+		return "", "", nil
+	}
+
+	fullPath := filepath.Join(workingDir, path)
+
+	// Get current file content (new content)
+	newBytes, readErr := os.ReadFile(fullPath)
+	if readErr != nil {
+		return "", "", readErr
+	}
+	newContent = string(newBytes)
+
+	// Get original content from git (old content)
+	out, gitErr := exec.Command("git", "-C", workingDir, "show", "HEAD:"+path).Output()
+	if gitErr == nil {
+		oldContent = string(out)
+		return oldContent, newContent, nil
+	}
+
+	// If git show fails (e.g., untracked file), old content is empty
+	return "", newContent, nil
+}
+
 func displayPath(path string) string {
 	return beautifySidebarPath(path, os.Getenv("HOME"))
 }

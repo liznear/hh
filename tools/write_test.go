@@ -36,7 +36,7 @@ func TestWriteTool_CreatesFile(t *testing.T) {
 	if structured.AddedLines != 2 {
 		t.Fatalf("unexpected added line count: %+v", structured)
 	}
-	if structured.UnifiedDiff == "" {
-		t.Fatalf("expected unified diff in write result")
+	if structured.NewContent == "" {
+		t.Fatalf("expected new content in write result")
 	}
 }

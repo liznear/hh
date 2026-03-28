@@ -19,7 +19,8 @@ var repeatedHyphens = regexp.MustCompile(`-+`)
 
 type EditPlanResult struct {
 	Path         string
-	UnifiedDiff  string
+	OldContent   string
+	NewContent   string
 	AddedLines   int
 	DeletedLines int
 }
@@ -84,17 +85,15 @@ func handleEditPlan(_ context.Context, params map[string]any) agent.ToolResult {
 		return toolErr("failed to write plan file: %v", err)
 	}
 
-	unifiedDiff, err := buildUnifiedDiff(planPath, string(original), content)
-	if err != nil {
-		return toolErr("failed to generate unified diff: %v", err)
-	}
-	addedLines, deletedLines := countUnifiedDiffChanges(unifiedDiff)
+	oldContent := string(original)
+	addedLines, deletedLines := countDiffChanges(oldContent, content)
 
 	return agent.ToolResult{
 		Data: "ok",
 		Result: EditPlanResult{
 			Path:         planPath,
-			UnifiedDiff:  unifiedDiff,
+			OldContent:   oldContent,
+			NewContent:   content,
 			AddedLines:   addedLines,
 			DeletedLines: deletedLines,
 		},

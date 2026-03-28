@@ -7,12 +7,12 @@ import (
 	"strings"
 
 	"github.com/liznear/hh/agent"
-	"github.com/pmezard/go-difflib/difflib"
 )
 
 type EditResult struct {
 	Path         string
-	UnifiedDiff  string
+	OldContent   string
+	NewContent   string
 	AddedLines   int
 	DeletedLines int
 }
@@ -78,54 +78,47 @@ func handleEdit(_ context.Context, params map[string]any) agent.ToolResult {
 		return toolErr("failed to write file: %v", err)
 	}
 
-	unifiedDiff, err := buildUnifiedDiff(path, content, updated)
-	if err != nil {
-		return toolErr("failed to generate unified diff: %v", err)
-	}
-	addedLines, deletedLines := countUnifiedDiffChanges(unifiedDiff)
+	addedLines, deletedLines := countDiffChanges(content, updated)
 
 	return agent.ToolResult{
 		Data: "ok",
 		Result: EditResult{
 			Path:         path,
-			UnifiedDiff:  unifiedDiff,
+			OldContent:   content,
+			NewContent:   updated,
 			AddedLines:   addedLines,
 			DeletedLines: deletedLines,
 		},
 	}
 }
 
-func buildUnifiedDiff(path string, original string, updated string) (string, error) {
-	text, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
-		A:        difflib.SplitLines(original),
-		B:        difflib.SplitLines(updated),
-		FromFile: path,
-		ToFile:   path,
-		Context:  3,
-	})
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimRight(text, "\n"), nil
-}
-
-func countUnifiedDiffChanges(diff string) (added int, deleted int) {
-	if strings.TrimSpace(diff) == "" {
+func countDiffChanges(oldContent, newContent string) (added int, deleted int) {
+	if oldContent == newContent {
 		return 0, 0
 	}
 
-	for _, line := range strings.Split(diff, "\n") {
-		switch {
-		case strings.HasPrefix(line, "+++"):
-			continue
-		case strings.HasPrefix(line, "---"):
-			continue
-		case strings.HasPrefix(line, "@@"):
-			continue
-		case strings.HasPrefix(line, "+"):
-			added++
-		case strings.HasPrefix(line, "-"):
-			deleted++
+	oldLines := strings.Split(oldContent, "\n")
+	newLines := strings.Split(newContent, "\n")
+
+	oldSet := make(map[string]int)
+	for _, line := range oldLines {
+		oldSet[line]++
+	}
+
+	newSet := make(map[string]int)
+	for _, line := range newLines {
+		newSet[line]++
+	}
+
+	for line, count := range newSet {
+		if oldCount := oldSet[line]; oldCount < count {
+			added += count - oldCount
+		}
+	}
+
+	for line, count := range oldSet {
+		if newCount := newSet[line]; newCount < count {
+			deleted += count - newCount
 		}
 	}
 
