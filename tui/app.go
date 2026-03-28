@@ -1310,7 +1310,7 @@ func waitForStreamCmd(ch <-chan tea.Msg) tea.Cmd {
 func newTextareaInput() textarea.Model {
 	in := textarea.New()
 	in.Prompt = ""
-	in.SetPromptFunc(2, func(info textarea.PromptInfo) string {
+	in.SetPromptFunc(4, func(info textarea.PromptInfo) string {
 		if info.LineNumber == 0 {
 			return "  > "
 		}
