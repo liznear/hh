@@ -515,7 +515,7 @@ func (m *model) renderShellMessageWidget(item *session.ShellMessage, width int) 
 }
 
 func (m *model) renderAssistantMessageWidget(item *session.AssistantMessage, width int) []string {
-	renderedMarkdown := renderMarkdown(item.Content, max(1, width-2))
+	renderedMarkdown := RenderMarkdown(item.Content, max(1, width-2))
 	if renderedMarkdown == "" {
 		return []string{""}
 	}
@@ -523,7 +523,7 @@ func (m *model) renderAssistantMessageWidget(item *session.AssistantMessage, wid
 }
 
 func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int) []string {
-	renderedMarkdown := renderMarkdown(item.Content, max(1, width-2), ThinkingOption())
+	renderedMarkdown := RenderMarkdown(item.Content, max(1, width-2), ThinkingOption())
 	if renderedMarkdown == "" {
 		return []string{""}
 	}
@@ -1114,6 +1114,8 @@ func ThinkingOption() markdownRenderOption {
 		name: "thinking",
 		apply: func(style *glamouransi.StyleConfig) {
 			*style = mutedStyleConfig(*style, 0.45)
+			docMargin := uint(4)
+			style.Document.Margin = &docMargin
 			registerCodeBlockTheme(thinkingCodeBlockThemeName, style.CodeBlock.Chroma)
 			style.CodeBlock.Theme = thinkingCodeBlockThemeName
 			style.CodeBlock.Chroma = nil
@@ -1121,7 +1123,7 @@ func ThinkingOption() markdownRenderOption {
 	}
 }
 
-func renderMarkdown(content string, width int, opts ...markdownRenderOption) string {
+func RenderMarkdown(content string, width int, opts ...markdownRenderOption) string {
 	if strings.TrimSpace(content) == "" {
 		return ""
 	}

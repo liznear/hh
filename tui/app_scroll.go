@@ -484,7 +484,7 @@ func (m *model) renderBTWExchangeWidget(item *session.BTWExchange, width int) []
 
 	// Answer
 	if item.Answer != "" {
-		contentLines = append(contentLines, "", renderMarkdown(item.Answer, innerWidth, ThinkingOption()))
+		contentLines = append(contentLines, "", RenderMarkdown(item.Answer, innerWidth, ThinkingOption()))
 	} else if m.btwBusy {
 		// Show processing indicator
 		contentLines = append(contentLines, "")

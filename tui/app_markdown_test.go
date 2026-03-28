@@ -10,7 +10,7 @@ import (
 
 func TestRenderMarkdown_RendersModeratelyLargeMarkdown(t *testing.T) {
 	content := strings.Repeat("- `item`\n", 3000)
-	rendered := renderMarkdown(content, 80)
+	rendered := RenderMarkdown(content, 80)
 
 	if strings.Contains(rendered, "`item`") {
 		t.Fatal("expected inline markdown to be rendered, got raw markdown markers")
@@ -18,7 +18,7 @@ func TestRenderMarkdown_RendersModeratelyLargeMarkdown(t *testing.T) {
 }
 
 func TestRenderMarkdown_EmptyContent(t *testing.T) {
-	rendered := renderMarkdown("   \n\t", 80)
+	rendered := RenderMarkdown("   \n\t", 80)
 
 	if rendered != "" {
 		t.Fatal("expected empty markdown content to render as empty string")
@@ -27,7 +27,7 @@ func TestRenderMarkdown_EmptyContent(t *testing.T) {
 
 func TestRenderMarkdownThinking_MutesCodeBlockSyntaxColors(t *testing.T) {
 	content := "```go\nfunc main() { return }\n```"
-	rendered := renderMarkdown(content, 80, ThinkingOption())
+	rendered := RenderMarkdown(content, 80, ThinkingOption())
 
 	if strings.Contains(rendered, "\x1b[38;5;39m") {
 		t.Fatalf("expected thinking markdown code block colors to be muted, got %q", rendered)
@@ -36,7 +36,7 @@ func TestRenderMarkdownThinking_MutesCodeBlockSyntaxColors(t *testing.T) {
 
 func TestRenderMarkdownThinking_PreservesSyntaxHighlightingInCodeBlock(t *testing.T) {
 	content := "```go\nfunc main() { return }\n```"
-	rendered := renderMarkdown(content, 80, ThinkingOption())
+	rendered := RenderMarkdown(content, 80, ThinkingOption())
 
 	re := regexp.MustCompile(`\x1b\[38;5;(\d+)m`)
 	matches := re.FindAllStringSubmatch(rendered, -1)
@@ -69,6 +69,9 @@ func TestThinkingOption_ReducesDefaultStyleColors(t *testing.T) {
 	}
 	if style.CodeBlock.Chroma != nil {
 		t.Fatal("expected thinking option to clear inline chroma config to force theme-based muted syntax highlighting")
+	}
+	if style.Document.Margin == nil || *style.Document.Margin != 2 {
+		t.Fatalf("expected thinking option to set document margin to 2, got %v", style.Document.Margin)
 	}
 }
 

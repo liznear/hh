@@ -59,10 +59,10 @@ func main() {
 			}
 
 			fmt.Printf("=== default (width=%d) ===\n", width)
-			fmt.Println(tui.RenderMarkdownDefault(content, width))
+			fmt.Println(tui.RenderMarkdown(content, width))
 			fmt.Println()
 			fmt.Printf("=== thinking (width=%d) ===\n", width)
-			fmt.Println(tui.RenderMarkdownThinking(content, width))
+			fmt.Println(tui.RenderMarkdown(content, width, tui.ThinkingOption()))
 			return nil
 		},
 	}
