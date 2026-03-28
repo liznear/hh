@@ -124,7 +124,32 @@ func TestLoadDefaultCatalog(t *testing.T) {
 	if buildAgent.SystemPrompt == "" {
 		t.Error("expected non-empty system prompt")
 	}
+
+	planAgent, ok := catalog.Get("Plan")
+	if !ok {
+		t.Fatal("expected Plan agent in catalog")
+	}
+
+	if planAgent.Name != "Plan" {
+		t.Errorf("expected name Plan, got %q", planAgent.Name)
+	}
+
+	if planAgent.SystemPrompt == "" {
+		t.Error("expected non-empty plan system prompt")
+	}
+
+	foundEditPlan := false
+	for _, tool := range planAgent.AllowedTools {
+		if tool == "edit_plan" {
+			foundEditPlan = true
+			break
+		}
+	}
+	if !foundEditPlan {
+		t.Error("expected Plan agent to allow edit_plan tool")
+	}
 }
+
 
 func TestCatalogGet_NotFound(t *testing.T) {
 	catalog, err := LoadDefaultCatalog()
