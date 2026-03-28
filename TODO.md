@@ -36,5 +36,5 @@
 - [ ] Auto memory
 - [ ] Auto dream
 - [ ] Support copy content
-- [ ] Wrong wrapping
+- [x] Wrong wrapping
 - [ ] @ to show files.
