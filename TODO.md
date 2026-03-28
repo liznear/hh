@@ -29,9 +29,12 @@
 - [x] Support btw
 - [x] Plan mode
 - [x] Resume
-- [ ] Review mode
+- [ ] Review command (call a review subagent with the uncommitted changes, clickable)
 - [ ] Add path in grep tool line
 - [ ] Read line show start and limit
 - [x] Context usage is not cleaned up on /new
 - [ ] Auto memory
 - [ ] Auto dream
+- [ ] Support copy content
+- [ ] Wrong wrapping
+- [ ] @ to show files.
