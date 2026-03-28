@@ -12,6 +12,14 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// DiffViewMode represents the diff display mode.
+type DiffViewMode int
+
+const (
+	DiffViewUnified DiffViewMode = iota
+	DiffViewSplit
+)
+
 // splitLine represents a line in a split diff view with optional before/after content.
 type splitLine struct {
 	before    udiff.Line
@@ -169,14 +177,14 @@ func RenderSplitDiff(oldContent, newContent, filePath string, width int, theme T
 		codeFg:    theme.Foreground(),
 	}
 
-	// Missing line style (for empty side - very light grey)
+	// Missing line style (for empty side - light grey background)
 	missingStyle := lineStyle{
-		lineNumBg: lipgloss.Color("#f5f5f5"), // very light grey
-		lineNumFg: lipgloss.Color("#bdbdbd"), // medium grey
-		symbolBg:  lipgloss.Color("#f5f5f5"),
-		symbolFg:  lipgloss.Color("#f5f5f5"),
-		codeBg:    lipgloss.Color("#f5f5f5"),
-		codeFg:    lipgloss.Color("#f5f5f5"),
+		lineNumBg: lipgloss.Color("#e0e0e0"), // light grey
+		lineNumFg: lipgloss.Color("#9e9e9e"), // medium grey
+		symbolBg:  lipgloss.Color("#e0e0e0"),
+		symbolFg:  lipgloss.Color("#9e9e9e"),
+		codeBg:    lipgloss.Color("#e0e0e0"),
+		codeFg:    lipgloss.Color("#9e9e9e"),
 	}
 
 	hunkStyle := lipgloss.NewStyle().Foreground(theme.Color(ThemeColorModelPickerMutedForeground)).Bold(true)
@@ -188,7 +196,7 @@ func RenderSplitDiff(oldContent, newContent, filePath string, width int, theme T
 
 	for _, sh := range splitHunks {
 		// Render hunk header
-		result = append(result, hunkStyle.Render(limitStringWidth(sh.header, width)))
+		result = append(result, hunkStyle.Render(shrinkStringWidth(sh.header, width)))
 
 		beforeLine := sh.fromLine
 		afterLine := sh.toLine
@@ -216,33 +224,226 @@ func RenderSplitDiff(oldContent, newContent, filePath string, width int, theme T
 				}
 			}
 
-			// Build left cell
-			leftCell := buildCell(sl.hasBefore, sl.before, beforeLine, numWidth, columnWidth, leftStyle, lexer, chromaStyle)
+			// Build left and right cells (may be multiple lines due to wrapping)
+			leftCells := buildCell(sl.hasBefore, sl.before, beforeLine, numWidth, columnWidth, leftStyle, lexer, chromaStyle)
 			if sl.hasBefore && sl.before.Kind != udiff.Insert {
 				beforeLine++
 			}
 
-			// Build right cell
-			rightCell := buildCell(sl.hasAfter, sl.after, afterLine, numWidth, columnWidth, rightStyle, lexer, chromaStyle)
+			rightCells := buildCell(sl.hasAfter, sl.after, afterLine, numWidth, columnWidth, rightStyle, lexer, chromaStyle)
 			if sl.hasAfter && sl.after.Kind != udiff.Delete {
 				afterLine++
 			}
 
-			// Build separator with background colors from each side
-			sep := buildSeparator(leftStyle.codeBg, rightStyle.codeBg)
-			result = append(result, leftCell+sep+rightCell)
+			// Pad shorter side to match
+			maxLines := max(len(leftCells), len(rightCells))
+			for len(leftCells) < maxLines {
+				emptyStyle := lipgloss.NewStyle().Background(leftStyle.codeBg)
+				leftCells = append(leftCells, emptyStyle.Render(strings.Repeat(" ", columnWidth)))
+			}
+			for len(rightCells) < maxLines {
+				emptyStyle := lipgloss.NewStyle().Background(rightStyle.codeBg)
+				rightCells = append(rightCells, emptyStyle.Render(strings.Repeat(" ", columnWidth)))
+			}
+
+			// Combine cells with separator
+			for i := 0; i < maxLines; i++ {
+				sep := buildSeparator(leftStyle.codeBg, rightStyle.codeBg)
+				result = append(result, leftCells[i]+sep+rightCells[i])
+			}
 		}
 	}
 
 	return result
 }
 
-func buildCell(hasContent bool, line udiff.Line, lineNum, numWidth, cellWidth int, ls lineStyle, lexer chroma.Lexer, chromaStyle *chroma.Style) string {
+// RenderUnifiedDiff renders a unified diff view.
+func RenderUnifiedDiff(oldContent, newContent, filePath string, width int, theme Theme) []string {
+	if oldContent == newContent {
+		return []string{"(no changes)"}
+	}
+
+	edits := udiff.Lines(oldContent, newContent)
+	unified, err := udiff.ToUnifiedDiff(filePath, filePath, oldContent, edits, 3)
+	if err != nil || len(unified.Hunks) == 0 {
+		return []string{"(no diff)"}
+	}
+
+	// Find max line number for padding
+	maxLine := 0
+	for _, h := range unified.Hunks {
+		for _, l := range h.Lines {
+			_ = l // Just count from hunk ranges
+		}
+		maxLine = max(maxLine, h.FromLine+len(h.Lines))
+		maxLine = max(maxLine, h.ToLine+len(h.Lines))
+	}
+	numWidth := max(2, len(strconv.Itoa(maxLine)))
+
+	// Styles
+	fg := lipgloss.Color("#1a1a1a")
+
+	deleteStyle := lineStyle{
+		lineNumBg: lipgloss.Color("#ffebee"),
+		lineNumFg: lipgloss.Color("#c62828"),
+		symbolBg:  lipgloss.Color("#ffebee"),
+		symbolFg:  lipgloss.Color("#c62828"),
+		codeBg:    lipgloss.Color("#ffebee"),
+		codeFg:    fg,
+	}
+
+	insertStyle := lineStyle{
+		lineNumBg: lipgloss.Color("#e8f5e9"),
+		lineNumFg: lipgloss.Color("#2e7d32"),
+		symbolBg:  lipgloss.Color("#e8f5e9"),
+		symbolFg:  lipgloss.Color("#2e7d32"),
+		codeBg:    lipgloss.Color("#e8f5e9"),
+		codeFg:    fg,
+	}
+
+	equalStyle := lineStyle{
+		lineNumBg: lipgloss.Color(""),
+		lineNumFg: lipgloss.Color("8"),
+		symbolBg:  lipgloss.Color(""),
+		symbolFg:  lipgloss.Color(""),
+		codeBg:    lipgloss.Color(""),
+		codeFg:    theme.Foreground(),
+	}
+
+	hunkStyle := lipgloss.NewStyle().Foreground(theme.Color(ThemeColorModelPickerMutedForeground)).Bold(true)
+
+	lexer := getLexer(filePath)
+	chromaStyle := getChromaStyle()
+
+	var result []string
+
+	for _, h := range unified.Hunks {
+		// Render hunk header
+		header := formatHunkHeader(h)
+		result = append(result, hunkStyle.Render(shrinkStringWidth(header, width)))
+
+		oldLine := h.FromLine
+		newLine := h.ToLine
+
+		for _, l := range h.Lines {
+			var ls lineStyle
+			switch l.Kind {
+			case udiff.Delete:
+				ls = deleteStyle
+			case udiff.Insert:
+				ls = insertStyle
+			default:
+				ls = equalStyle
+			}
+
+			// Build unified line
+			lines := buildUnifiedLine(l, oldLine, newLine, numWidth, width, ls, lexer, chromaStyle)
+			result = append(result, lines...)
+
+			// Update line numbers
+			switch l.Kind {
+			case udiff.Delete:
+				oldLine++
+			case udiff.Insert:
+				newLine++
+			default:
+				oldLine++
+				newLine++
+			}
+		}
+	}
+
+	return result
+}
+
+func buildUnifiedLine(line udiff.Line, oldLineNum, newLineNum, numWidth, width int, ls lineStyle, lexer chroma.Lexer, chromaStyle *chroma.Style) []string {
+	content := strings.TrimSuffix(line.Content, "\n")
+
+	// Symbol
+	var symbol string
+	var symbolStyle lipgloss.Style
+	switch line.Kind {
+	case udiff.Delete:
+		symbol = "-"
+		symbolStyle = lipgloss.NewStyle().Background(ls.symbolBg).Foreground(ls.symbolFg).Bold(true)
+	case udiff.Insert:
+		symbol = "+"
+		symbolStyle = lipgloss.NewStyle().Background(ls.symbolBg).Foreground(ls.symbolFg).Bold(true)
+	default:
+		symbol = " "
+		symbolStyle = lipgloss.NewStyle().Background(ls.codeBg)
+	}
+	renderedSymbol := symbolStyle.Render(symbol)
+
+	// Line numbers (old new format for unified)
+	var numStr string
+	switch line.Kind {
+	case udiff.Delete:
+		numStr = fmt.Sprintf("%*d   ", numWidth, oldLineNum)
+	case udiff.Insert:
+		numStr = fmt.Sprintf("   %*d", numWidth, newLineNum)
+	default:
+		numStr = fmt.Sprintf("%*d %*d", numWidth, oldLineNum, numWidth, newLineNum)
+	}
+	numStyle := lipgloss.NewStyle().Background(ls.lineNumBg).Foreground(ls.lineNumFg)
+	renderedNum := numStyle.Render(numStr)
+
+	// Code content with syntax highlighting
+	highlighted := highlightCode(content, lexer, chromaStyle, ls.codeBg)
+	codeStyle := lipgloss.NewStyle().Background(ls.codeBg)
+	renderedCode := codeStyle.Render(highlighted)
+
+	// Space
+	spaceStyle := lipgloss.NewStyle().Background(ls.codeBg)
+	renderedSpace := spaceStyle.Render(" ")
+
+	// Prefix width (line numbers + space + symbol + space)
+	prefix := renderedNum + renderedSpace + renderedSymbol + renderedSpace
+	prefixWidth := ansi.StringWidth(prefix)
+
+	// Calculate available width for code
+	codeWidth := width - prefixWidth
+	if codeWidth < 10 {
+		codeWidth = 10
+	}
+
+	// Wrap code if needed
+	codeLines := wrapString(renderedCode, codeWidth, ls.codeBg)
+
+	var result []string
+	for i, codeLine := range codeLines {
+		if i == 0 {
+			// First line: show prefix
+			fullLine := prefix + codeLine
+			// Pad to width
+			if ansi.StringWidth(fullLine) < width {
+				padding := strings.Repeat(" ", width-ansi.StringWidth(fullLine))
+				fullLine += spaceStyle.Render(padding)
+			}
+			result = append(result, fullLine)
+		} else {
+			// Wrapped lines: show continuation prefix
+			contPrefix := numStyle.Render(strings.Repeat(" ", ansi.StringWidth(renderedNum))) +
+				spaceStyle.Render(" ") +
+				spaceStyle.Render(" ")
+			fullLine := contPrefix + codeLine
+			if ansi.StringWidth(fullLine) < width {
+				padding := strings.Repeat(" ", width-ansi.StringWidth(fullLine))
+				fullLine += spaceStyle.Render(padding)
+			}
+			result = append(result, fullLine)
+		}
+	}
+
+	return result
+}
+
+func buildCell(hasContent bool, line udiff.Line, lineNum, numWidth, cellWidth int, ls lineStyle, lexer chroma.Lexer, chromaStyle *chroma.Style) []string {
 	if !hasContent {
 		// Empty cell
 		style := lipgloss.NewStyle().Background(ls.codeBg).Foreground(ls.codeFg)
 		content := strings.Repeat(" ", cellWidth)
-		return style.Render(content)
+		return []string{style.Render(content)}
 	}
 
 	content := strings.TrimSuffix(line.Content, "\n")
@@ -273,23 +474,45 @@ func buildCell(hasContent bool, line udiff.Line, lineNum, numWidth, cellWidth in
 	codeStyle := lipgloss.NewStyle().Background(ls.codeBg)
 	renderedCode := codeStyle.Render(highlighted)
 
-	// Space between symbol and code - needs same background
+	// Space between symbol and code
 	spaceStyle := lipgloss.NewStyle().Background(ls.codeBg)
 	renderedSpace := spaceStyle.Render(" ")
 
-	// Combine and pad - no space between line number and symbol
-	fullContent := renderedNum + renderedSymbol + renderedSpace + renderedCode
-	contentWidth := ansi.StringWidth(fullContent)
+	// Prefix width (line number + symbol + space)
+	prefix := renderedNum + renderedSymbol + renderedSpace
+	prefixWidth := ansi.StringWidth(prefix)
 
-	if contentWidth < cellWidth {
-		padding := strings.Repeat(" ", cellWidth-contentWidth)
-		paddingStyle := lipgloss.NewStyle().Background(ls.codeBg)
-		fullContent += paddingStyle.Render(padding)
-	} else if contentWidth > cellWidth {
-		fullContent = ansi.Truncate(fullContent, cellWidth, "…")
+	// Calculate available width for code
+	codeWidth := cellWidth - prefixWidth
+	if codeWidth < 10 {
+		codeWidth = 10
 	}
 
-	return fullContent
+	// Wrap code if needed
+	codeLines := wrapString(renderedCode, codeWidth, ls.codeBg)
+
+	var result []string
+	for i, codeLine := range codeLines {
+		var fullLine string
+		if i == 0 {
+			// First line: show full prefix
+			fullLine = prefix + codeLine
+		} else {
+			// Wrapped lines: show continuation prefix (empty line number area + empty symbol + space)
+			contPrefix := numStyle.Render(strings.Repeat(" ", ansi.StringWidth(renderedNum))) +
+				symbolStyle.Render(" ") +
+				spaceStyle.Render(" ")
+			fullLine = contPrefix + codeLine
+		}
+		// Pad to cellWidth
+		if ansi.StringWidth(fullLine) < cellWidth {
+			padding := strings.Repeat(" ", cellWidth-ansi.StringWidth(fullLine))
+			fullLine += spaceStyle.Render(padding)
+		}
+		result = append(result, fullLine)
+	}
+
+	return result
 }
 
 // buildSeparator creates a separator with background colors from each side
@@ -370,4 +593,91 @@ func limitStringWidth(s string, width int) string {
 		return s
 	}
 	return ansi.Truncate(s, width, "…")
+}
+
+// shrinkStringWidth truncates a string to fit within width
+func shrinkStringWidth(s string, width int) string {
+	if ansi.StringWidth(s) <= width {
+		return s
+	}
+	return ansi.Truncate(s, width, "…")
+}
+
+// wrapString wraps a string to fit within the given width, returning multiple lines
+func wrapString(s string, width int, bg lipgloss.Color) []string {
+	if width <= 0 {
+		return []string{s}
+	}
+
+	totalWidth := ansi.StringWidth(s)
+	if totalWidth <= width {
+		return []string{s}
+	}
+
+	var lines []string
+	remaining := s
+
+	for len(remaining) > 0 {
+		remWidth := ansi.StringWidth(remaining)
+		if remWidth <= width {
+			lines = append(lines, remaining)
+			break
+		}
+
+		// Find truncation point - we need to handle ANSI codes carefully
+		truncated := ansi.Truncate(remaining, width, "")
+		lines = append(lines, truncated)
+
+		// Calculate how many visible chars we took
+		tookWidth := ansi.StringWidth(truncated)
+
+		// Skip past the taken characters in the original string
+		// We need to strip ANSI codes to count properly
+		remaining = skipVisibleChars(remaining, tookWidth)
+	}
+
+	if len(lines) == 0 {
+		return []string{s}
+	}
+
+	return lines
+}
+
+// skipVisibleChars skips n visible characters in a string with ANSI codes
+func skipVisibleChars(s string, n int) string {
+	// Use ansi.Truncate to get first n chars, then strip them
+	first := ansi.Truncate(s, n, "")
+	if len(first) >= len(s) {
+		return ""
+	}
+
+	// Strip ANSI sequences from first part to count raw bytes
+	// We need to find where the nth visible character ends
+	inEscape := false
+	visibleCount := 0
+	bytePos := 0
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if c == 'm' || c == 'K' || c == 'J' || c == 'H' || c == 'f' {
+				inEscape = false
+			}
+			continue
+		}
+		visibleCount++
+		bytePos = i + 1
+		if visibleCount > n {
+			// Check if this is a multi-byte UTF-8 character
+			for bytePos < len(s) && s[bytePos]&0xC0 == 0x80 {
+				bytePos++
+			}
+			return s[bytePos:]
+		}
+	}
+	return ""
 }

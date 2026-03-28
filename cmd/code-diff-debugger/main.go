@@ -10,15 +10,17 @@ import (
 )
 
 type model struct {
-	width     int
-	height    int
-	scrollY   int
-	diffLines []string
-	maxScroll int
-	theme     tui.Theme
-	// Pre-computed parts
-	header    string
-	help      string
+	width       int
+	height      int
+	scrollY     int
+	diffLines   []string
+	maxScroll   int
+	theme       tui.Theme
+	viewMode    tui.DiffViewMode
+	oldContent  string
+	newContent  string
+	filePath    string
+	cachedWidth int
 }
 
 func main() {
@@ -89,17 +91,13 @@ const (
 `
 
 	theme := tui.DefaultTheme()
-	diffLines := tui.RenderSplitDiff(oldContent, newContent, "sample.go", 120, theme)
-
-	// Pre-compute static parts
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 
 	p := tea.NewProgram(&model{
-		diffLines: diffLines,
-		theme:     theme,
-		header:    headerStyle.Render("Code Diff Debugger") + "\n",
-		help:      helpStyle.Render("j/k: scroll ↓↑ | J/K: fast scroll | g/G: top/bottom | q: quit") + "\n\n",
+		theme:      theme,
+		viewMode:   tui.DiffViewUnified,
+		oldContent: oldContent,
+		newContent: newContent,
+		filePath:   "sample.go",
 	})
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error: %v\n", err)
@@ -115,6 +113,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.updateDiff()
 		m.updateMaxScroll()
 
 	case tea.KeyPressMsg:
@@ -137,14 +136,41 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollY = 0
 		case "G":
 			m.scrollY = m.maxScroll
+		case "tab":
+			// Toggle view mode
+			if m.viewMode == tui.DiffViewUnified {
+				m.viewMode = tui.DiffViewSplit
+			} else {
+				m.viewMode = tui.DiffViewUnified
+			}
+			m.scrollY = 0
+			m.updateDiff()
+			m.updateMaxScroll()
 		}
 	}
 
 	return m, nil
 }
 
+func (m *model) updateDiff() {
+	if m.width == 0 {
+		return
+	}
+	// Auto-switch to unified if width < 100
+	effectiveMode := m.viewMode
+	if m.width < 100 {
+		effectiveMode = tui.DiffViewUnified
+	}
+	if effectiveMode == tui.DiffViewUnified {
+		m.diffLines = tui.RenderUnifiedDiff(m.oldContent, m.newContent, m.filePath, m.width, m.theme)
+	} else {
+		m.diffLines = tui.RenderSplitDiff(m.oldContent, m.newContent, m.filePath, m.width, m.theme)
+	}
+	m.cachedWidth = m.width
+}
+
 func (m *model) updateMaxScroll() {
-	visibleLines := m.height - 4 // Reserve space for header and help
+	visibleLines := m.height - 5 // Reserve space for header and help
 	if visibleLines < 1 {
 		visibleLines = 1
 	}
@@ -156,20 +182,27 @@ func (m *model) View() tea.View {
 		return tea.NewView("Loading...")
 	}
 
-	// Pre-allocate builder with estimated size
-	visibleHeight := m.height - 4
+	visibleHeight := m.height - 5
 	if visibleHeight < 1 {
 		visibleHeight = 1
 	}
 
 	var b strings.Builder
-	b.Grow(visibleHeight * 150) // Estimate ~150 chars per line
+	b.Grow(visibleHeight * 150)
 
 	// Header
-	b.WriteString(m.header)
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	b.WriteString(headerStyle.Render("Code Diff Debugger"))
+	b.WriteByte('\n')
 
 	// Help line
-	b.WriteString(m.help)
+	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	modeStr := "unified"
+	if m.viewMode == tui.DiffViewSplit && m.width >= 100 {
+		modeStr = "split"
+	}
+	b.WriteString(helpStyle.Render(fmt.Sprintf("j/k: scroll ↓↑ | J/K: fast scroll | g/G: top/bottom | Tab: switch view (%s) | q: quit", modeStr)))
+	b.WriteString("\n\n")
 
 	// Calculate visible lines
 	start := m.scrollY
@@ -183,8 +216,8 @@ func (m *model) View() tea.View {
 
 	// Scroll indicator
 	if len(m.diffLines) > visibleHeight {
-		helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-		fmt.Fprintf(&b, "\n%s", helpStyle.Render(fmt.Sprintf("Lines %d-%d / %d", start+1, end, len(m.diffLines))))
+		b.WriteByte('\n')
+		b.WriteString(helpStyle.Render(fmt.Sprintf("Lines %d-%d / %d", start+1, end, len(m.diffLines))))
 	}
 
 	return tea.NewView(b.String())

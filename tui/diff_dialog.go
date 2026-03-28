@@ -14,9 +14,11 @@ type diffDialogState struct {
 	NewContent   string
 	FilePath     string
 	ScrollOffset int
-	// Cached rendered lines (re-render only when width changes)
+	ViewMode     DiffViewMode
+	// Cached rendered lines (re-render only when width/mode changes)
 	renderedLines []string
 	lastWidth     int
+	lastMode      DiffViewMode
 }
 
 func (m *model) openDiffDialog(title string, oldContent, newContent, filePath string) {
@@ -30,6 +32,7 @@ func (m *model) openDiffDialog(title string, oldContent, newContent, filePath st
 		NewContent:   newContent,
 		FilePath:     strings.TrimSpace(filePath),
 		ScrollOffset: 0,
+		ViewMode:     DiffViewUnified, // Default to unified
 	}
 }
 
@@ -62,6 +65,15 @@ func (m *model) handleDiffDialogKey(msg tea.KeyPressMsg) bool {
 	case tea.KeyHome:
 		dlg.ScrollOffset = 0
 		return true
+	case tea.KeyTab:
+		// Toggle between unified and split view
+		if dlg.ViewMode == DiffViewUnified {
+			dlg.ViewMode = DiffViewSplit
+		} else {
+			dlg.ViewMode = DiffViewUnified
+		}
+		dlg.ScrollOffset = 0 // Reset scroll when switching modes
+		return true
 	}
 
 	switch strings.ToLower(msg.String()) {
@@ -91,13 +103,24 @@ func (m *model) renderDiffDialog(width, height int) string {
 	bodyWidth := max(1, boxWidth-4)
 	maxBodyRows := max(1, height-10)
 
-	// Only re-render diff if width changed
-	if dlg.renderedLines == nil || dlg.lastWidth != bodyWidth {
-		dlg.renderedLines = RenderSplitDiff(dlg.OldContent, dlg.NewContent, dlg.FilePath, bodyWidth, m.theme)
+	// Auto-switch to unified view if width < 100
+	effectiveMode := dlg.ViewMode
+	if bodyWidth < 100 {
+		effectiveMode = DiffViewUnified
+	}
+
+	// Only re-render diff if width or mode changed
+	if dlg.renderedLines == nil || dlg.lastWidth != bodyWidth || dlg.lastMode != effectiveMode {
+		if effectiveMode == DiffViewUnified {
+			dlg.renderedLines = RenderUnifiedDiff(dlg.OldContent, dlg.NewContent, dlg.FilePath, bodyWidth, m.theme)
+		} else {
+			dlg.renderedLines = RenderSplitDiff(dlg.OldContent, dlg.NewContent, dlg.FilePath, bodyWidth, m.theme)
+		}
 		if len(dlg.renderedLines) == 0 {
 			dlg.renderedLines = []string{"(no diff)"}
 		}
 		dlg.lastWidth = bodyWidth
+		dlg.lastMode = effectiveMode
 	}
 
 	maxOffset := max(0, len(dlg.renderedLines)-maxBodyRows)
@@ -117,11 +140,19 @@ func (m *model) renderDiffDialog(width, height int) string {
 		scrollLine = muted.Render(fmt.Sprintf("Lines %d-%d / %d", dlg.ScrollOffset+1, end, len(dlg.renderedLines)))
 	}
 
-	lines := make([]string, 0, 5+len(visibleDiff))
+	// View mode indicator
+	modeStr := "unified"
+	if effectiveMode == DiffViewSplit {
+		modeStr = "split"
+	}
+	modeLine := muted.Render(fmt.Sprintf("View: %s (Tab to switch)", modeStr))
+
+	lines := make([]string, 0, 6+len(visibleDiff))
 	lines = append(lines,
 		lipgloss.NewStyle().Bold(true).Render(dlg.Title),
 		muted.Render("Scroll: j/k, up/down, pgup/pgdown, home"),
 		muted.Render("Close: Esc/Enter/q"),
+		modeLine,
 	)
 	if scrollLine != "" {
 		lines = append(lines, scrollLine)
