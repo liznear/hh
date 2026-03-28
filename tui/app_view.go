@@ -1114,6 +1114,9 @@ func ThinkingOption() markdownRenderOption {
 		name: "thinking",
 		apply: func(style *glamouransi.StyleConfig) {
 			*style = mutedStyleConfig(*style, 0.45)
+			registerCodeBlockTheme(thinkingCodeBlockThemeName, style.CodeBlock.Chroma)
+			style.CodeBlock.Theme = thinkingCodeBlockThemeName
+			style.CodeBlock.Chroma = nil
 		},
 	}
 }

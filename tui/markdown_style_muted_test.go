@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	glamouransi "github.com/charmbracelet/glamour/ansi"
@@ -38,6 +39,21 @@ func TestMutedStyleConfig_MutesColorFieldsAndPreservesOriginal(t *testing.T) {
 	}
 	if style.CodeBlock.Chroma == nil || style.CodeBlock.Chroma.Keyword.Color == nil || *style.CodeBlock.Chroma.Keyword.Color != "#ff0000" {
 		t.Fatalf("expected original nested chroma color preserved, got %+v", style.CodeBlock.Chroma)
+	}
+}
+
+func TestMutedStyleConfig_BlendsTowardBackground(t *testing.T) {
+	style := glamouransi.StyleConfig{
+		Document: glamouransi.StyleBlock{StylePrimitive: glamouransi.StylePrimitive{BackgroundColor: strPtr("#ffffff")}},
+		Text:     glamouransi.StylePrimitive{Color: strPtr("#000000")},
+	}
+
+	muted := mutedStyleConfig(style, 0.2)
+	if muted.Text.Color == nil {
+		t.Fatal("expected muted text color")
+	}
+	if got := strings.ToLower(*muted.Text.Color); got != "#333333" {
+		t.Fatalf("expected blended color #333333, got %s", got)
 	}
 }
 

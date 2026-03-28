@@ -10,8 +10,16 @@ import (
 	glamouransi "github.com/charmbracelet/glamour/ansi"
 )
 
-// mutedStyleConfig returns a copy of style with muted foreground/background colors.
-// amount controls muting strength in [0,1].
+type rgbColor struct {
+	r int
+	g int
+	b int
+}
+
+var defaultMutedBackground = rgbColor{r: 255, g: 255, b: 255}
+
+// mutedStyleConfig returns a copy of style with foreground/background colors blended toward background.
+// amount controls blending strength in [0,1].
 func mutedStyleConfig(style glamouransi.StyleConfig, amount float64) glamouransi.StyleConfig {
 	amount = clamp01(amount)
 	if amount == 0 {
@@ -19,7 +27,8 @@ func mutedStyleConfig(style glamouransi.StyleConfig, amount float64) glamouransi
 	}
 
 	out := deepCopyStyleConfig(style)
-	muteStyleConfigColors(reflect.ValueOf(&out).Elem(), amount)
+	baseBackground := styleConfigBackground(out)
+	muteStyleConfigColors(reflect.ValueOf(&out).Elem(), amount, baseBackground)
 	return out
 }
 
@@ -35,14 +44,24 @@ func deepCopyStyleConfig(style glamouransi.StyleConfig) glamouransi.StyleConfig 
 	return out
 }
 
-func muteStyleConfigColors(v reflect.Value, amount float64) {
+func styleConfigBackground(style glamouransi.StyleConfig) rgbColor {
+	if style.Document.BackgroundColor != nil {
+		if bg, ok := parseColor(*style.Document.BackgroundColor); ok {
+			return bg
+		}
+	}
+	return defaultMutedBackground
+}
+
+func muteStyleConfigColors(v reflect.Value, amount float64, inheritedBackground rgbColor) {
 	if !v.IsValid() {
 		return
 	}
 
-	t := v.Type()
 	switch v.Kind() {
 	case reflect.Struct:
+		t := v.Type()
+		currentBackground := structBackground(v, inheritedBackground)
 		for i := 0; i < v.NumField(); i++ {
 			field := v.Field(i)
 			fieldType := t.Field(i)
@@ -50,37 +69,72 @@ func muteStyleConfigColors(v reflect.Value, amount float64) {
 				continue
 			}
 
-			if (fieldType.Name == "Color" || fieldType.Name == "BackgroundColor") && field.Kind() == reflect.Ptr && field.Type().Elem().Kind() == reflect.String {
-				if field.IsNil() {
-					continue
-				}
+			if isColorPointerField(fieldType.Name, field) {
 				orig := field.Elem().String()
-				muted, ok := muteColorString(orig, amount)
+				color, ok := parseColor(orig)
 				if !ok {
 					continue
 				}
-				copy := muted
-				field.Set(reflect.ValueOf(&copy))
+
+				target := currentBackground
+				if fieldType.Name == "BackgroundColor" {
+					target = inheritedBackground
+				}
+				muted := blendColor(color, target, amount)
+				mutedHex := fmt.Sprintf("#%02x%02x%02x", muted.r, muted.g, muted.b)
+				field.Set(reflect.ValueOf(&mutedHex))
 				continue
 			}
 
-			muteStyleConfigColors(field, amount)
+			muteStyleConfigColors(field, amount, currentBackground)
 		}
 	case reflect.Ptr:
 		if v.IsNil() {
 			return
 		}
-		muteStyleConfigColors(v.Elem(), amount)
+		muteStyleConfigColors(v.Elem(), amount, inheritedBackground)
 	}
 }
 
-func muteColorString(s string, amount float64) (string, bool) {
+func structBackground(v reflect.Value, fallback rgbColor) rgbColor {
+	backgroundField := v.FieldByName("BackgroundColor")
+	if !backgroundField.IsValid() || backgroundField.Kind() != reflect.Ptr || backgroundField.IsNil() {
+		return fallback
+	}
+	if backgroundField.Type().Elem().Kind() != reflect.String {
+		return fallback
+	}
+	bg, ok := parseColor(backgroundField.Elem().String())
+	if !ok {
+		return fallback
+	}
+	return bg
+}
+
+func isColorPointerField(name string, field reflect.Value) bool {
+	if name != "Color" && name != "BackgroundColor" {
+		return false
+	}
+	if field.Kind() != reflect.Ptr || field.IsNil() {
+		return false
+	}
+	return field.Type().Elem().Kind() == reflect.String
+}
+
+func blendColor(color rgbColor, background rgbColor, amount float64) rgbColor {
+	return rgbColor{
+		r: clamp255(lerp(float64(color.r), float64(background.r), amount)),
+		g: clamp255(lerp(float64(color.g), float64(background.g), amount)),
+		b: clamp255(lerp(float64(color.b), float64(background.b), amount)),
+	}
+}
+
+func parseColor(s string) (rgbColor, bool) {
 	r, g, b, ok := parseStyleColor(s)
 	if !ok {
-		return "", false
+		return rgbColor{}, false
 	}
-	r, g, b = muteRGB(r, g, b, amount)
-	return fmt.Sprintf("#%02x%02x%02x", r, g, b), true
+	return rgbColor{r: r, g: g, b: b}, true
 }
 
 func parseStyleColor(s string) (int, int, int, bool) {
@@ -142,21 +196,6 @@ func xterm256ToRGB(idx int) (int, int, int, bool) {
 	}
 	gray := 8 + (idx-232)*10
 	return gray, gray, gray, true
-}
-
-func muteRGB(r, g, b int, amount float64) (int, int, int) {
-	gray := 0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)
-
-	rf := lerp(float64(r), gray, amount)
-	gf := lerp(float64(g), gray, amount)
-	bf := lerp(float64(b), gray, amount)
-
-	lighten := 0.18 * amount
-	rf = lerp(rf, 255, lighten)
-	gf = lerp(gf, 255, lighten)
-	bf = lerp(bf, 255, lighten)
-
-	return clamp255(rf), clamp255(gf), clamp255(bf)
 }
 
 func lerp(a, b, t float64) float64 {
