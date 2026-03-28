@@ -470,10 +470,17 @@ func (m *model) renderUserMessageWidget(item *session.UserMessage, width int) []
 			Render("Queued")
 		content = badge + " " + content
 	}
-	userLines := wrapLine(content, max(1, width-3))
+
+	// Split by newlines first, then wrap each line individually
+	wrapWidth := max(1, width-3)
+	var userLines []string
+	for _, line := range strings.Split(content, "\n") {
+		userLines = append(userLines, wrapLine(line, wrapWidth)...)
+	}
 	if len(userLines) == 0 {
 		userLines = []string{""}
 	}
+
 	prefix := lipgloss.
 		NewStyle().
 		Border(lipgloss.NormalBorder(), false).
