@@ -4,3 +4,4 @@ target
 result
 hh
 .envrc
+.tmp*
