@@ -52,7 +52,7 @@ func TestRenderMarkdownThinking_PreservesSyntaxHighlightingInCodeBlock(t *testin
 	}
 }
 
-func TestThinkingOption_ReducesDefaultStyleColors(t *testing.T) {
+func TestThinkingOption(t *testing.T) {
 	original := *glamour.DefaultStyles["light"]
 	style := original
 	opt := ThinkingOption()
@@ -70,8 +70,8 @@ func TestThinkingOption_ReducesDefaultStyleColors(t *testing.T) {
 	if style.CodeBlock.Chroma != nil {
 		t.Fatal("expected thinking option to clear inline chroma config to force theme-based muted syntax highlighting")
 	}
-	if style.Document.Margin == nil || *style.Document.Margin != 2 {
-		t.Fatalf("expected thinking option to set document margin to 2, got %v", style.Document.Margin)
+	if style.Document.Margin == nil || *style.Document.Margin != 4 {
+		t.Fatalf("expected thinking option to set document margin to 4, got %v", style.Document.Margin)
 	}
 }
 
