@@ -21,6 +21,26 @@ type State struct {
 	activeRun    *activeRun
 }
 
+func (a *AgentRunner) Update(opts ...Opt) error {
+	if a == nil || a.state == nil {
+		return fmt.Errorf("runner unavailable")
+	}
+
+	a.state.runMu.Lock()
+	defer a.state.runMu.Unlock()
+	if a.state.activeRun != nil {
+		return fmt.Errorf("cannot update runner during active run")
+	}
+
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(a.state)
+	}
+	return nil
+}
+
 type activeRun struct {
 	runID        string
 	interactions *InteractionManager

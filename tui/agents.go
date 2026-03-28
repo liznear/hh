@@ -13,7 +13,37 @@ import (
 	"github.com/liznear/hh/tui/agents"
 )
 
+var listAvailableAgents = func() ([]string, error) {
+	catalog, err := agents.LoadDefaultCatalog()
+	if err != nil {
+		return nil, fmt.Errorf("load agent catalog: %w", err)
+	}
+
+	all := catalog.All()
+	names := make([]string, 0, len(all))
+	for _, agentConfig := range all {
+		names = append(names, agentConfig.Name)
+	}
+	return names, nil
+}
+
+var updateRunnerForAgent = func(runner *agent.AgentRunner, agentName string, cfg config.Config, workingDir string) error {
+	opts, err := buildAgentOpts(agentName, cfg, workingDir)
+	if err != nil {
+		return err
+	}
+	return runner.Update(opts...)
+}
+
 func newAgentRunner(modelName string, provider agent.Provider, agentName string, cfg config.Config, workingDir string) (*agent.AgentRunner, error) {
+	opts, err := buildAgentOpts(agentName, cfg, workingDir)
+	if err != nil {
+		return nil, err
+	}
+	return agent.NewAgentRunner(modelName, provider, opts...), nil
+}
+
+func buildAgentOpts(agentName string, cfg config.Config, workingDir string) ([]agent.Opt, error) {
 	agentConfig, err := getAgent(agentName)
 	if err != nil {
 		return nil, err
@@ -31,13 +61,11 @@ func newAgentRunner(modelName string, provider agent.Provider, agentName string,
 	tools.SetSkillCatalog(skillCatalog)
 	systemPrompt := buildSystemPrompt(agentConfig.SystemPrompt, skillCatalog, workingDir)
 
-	return agent.NewAgentRunner(
-		modelName,
-		provider,
+	return []agent.Opt{
 		agent.WithSystemPrompt(systemPrompt),
 		agent.WithTools(resolveTools(agentConfig)),
 		agent.WithToolApprover(approver),
-	), nil
+	}, nil
 }
 
 func buildSystemPrompt(base string, skillCatalog skills.Catalog, workingDir string) string {

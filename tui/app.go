@@ -605,6 +605,14 @@ func (m *model) handleKeyPressMsg(msg tea.KeyPressMsg, statusCmd tea.Cmd, update
 		return updated, cmd
 	}
 
+	key := msg.Key()
+	if key.Code == tea.KeyTab && !m.busy {
+		if err := m.switchToNextAgent(); err != nil {
+			m.addItem(&session.ErrorItem{Message: err.Error()})
+		}
+		return m, statusCmd
+	}
+
 	prevOffset := m.currentListOffset(m.messageWidth)
 	scrollUpdateStart := time.Now()
 	scrolled, deltaRows := m.handleScrollKey(msg)
@@ -616,7 +624,6 @@ func (m *model) handleKeyPressMsg(msg tea.KeyPressMsg, statusCmd tea.Cmd, update
 		return m, statusCmd
 	}
 
-	key := msg.Key()
 	if key.Code == tea.KeyEscape && m.busy {
 		m.requestCancelRun()
 		return m, statusCmd
@@ -942,6 +949,43 @@ func (m *model) handleDialogKeyPress(msg tea.KeyPressMsg, statusCmd tea.Cmd) (te
 	}
 
 	return m, nil, false
+}
+
+func (m *model) switchToNextAgent() error {
+	if m == nil {
+		return nil
+	}
+	if m.runner == nil {
+		return fmt.Errorf("runner unavailable")
+	}
+
+	agentNames, err := listAvailableAgents()
+	if err != nil {
+		return err
+	}
+	if len(agentNames) == 0 {
+		return fmt.Errorf("no agents available")
+	}
+
+	current := strings.TrimSpace(m.agentName)
+	nextIdx := 0
+	for i, name := range agentNames {
+		if name == current {
+			nextIdx = (i + 1) % len(agentNames)
+			break
+		}
+	}
+	nextAgentName := agentNames[nextIdx]
+
+	if err := updateRunnerForAgent(m.runner, nextAgentName, m.config, m.workingDir); err != nil {
+		return fmt.Errorf("switch agent to %q: %w", nextAgentName, err)
+	}
+
+	m.agentName = nextAgentName
+	m.showRunResult = false
+	m.escPending = false
+	m.refreshViewport()
+	return nil
 }
 
 func (m *model) handleMouseWheelMsg(msg tea.MouseWheelMsg, statusCmd tea.Cmd, updateGap time.Duration, timeSinceView time.Duration) (tea.Model, tea.Cmd) {

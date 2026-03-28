@@ -1,12 +1,21 @@
 package tui
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/liznear/hh/agent"
+	"github.com/liznear/hh/config"
 	"github.com/liznear/hh/tui/session"
 )
+
+type stubProvider struct{}
+
+func (stubProvider) ChatCompletionStream(_ context.Context, _ agent.ProviderRequest, _ func(agent.ProviderStreamEvent) error) (agent.ProviderResponse, error) {
+	return agent.ProviderResponse{}, nil
+}
 
 func newInputTestModel() *model {
 	return newTestModel()
@@ -117,5 +126,63 @@ func TestHandleAgentEvent_TurnEndClearsQueuedSteering(t *testing.T) {
 
 	if len(m.queuedSteering) != 0 {
 		t.Fatalf("expected queued steering to be cleared on turn end, got %d", len(m.queuedSteering))
+	}
+}
+
+func TestUpdate_TabSwitchesAgentAndStatusReflectsSelection(t *testing.T) {
+	m := newInputTestModel()
+	m.modelName = "test-model"
+	m.agentName = "Build"
+	m.config = config.Config{}
+	m.runner = agent.NewAgentRunner("test-model", stubProvider{})
+
+	originalList := listAvailableAgents
+	originalUpdate := updateRunnerForAgent
+	defer func() {
+		listAvailableAgents = originalList
+		updateRunnerForAgent = originalUpdate
+	}()
+
+	listAvailableAgents = func() ([]string, error) {
+		return []string{"Build", "Plan"}, nil
+	}
+	updateRunnerForAgent = func(runner *agent.AgentRunner, agentName string, cfg config.Config, workingDir string) error {
+		return nil
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	after := updated.(*model)
+
+	if after.agentName != "Plan" {
+		t.Fatalf("agentName = %q, want %q", after.agentName, "Plan")
+	}
+
+	status := renderStatusWidget(statusWidgetModel{AgentName: after.agentName, ModelName: after.modelName}, DefaultTheme())
+	if !strings.Contains(status, "Plan") {
+		t.Fatalf("expected status line to include switched agent, got %q", status)
+	}
+}
+
+func TestUpdate_TabDoesNotSwitchWhileBusy(t *testing.T) {
+	m := newInputTestModel()
+	m.modelName = "test-model"
+	m.agentName = "Build"
+	m.config = config.Config{}
+	m.runner = agent.NewAgentRunner("test-model", stubProvider{})
+	m.busy = true
+
+	originalList := listAvailableAgents
+	defer func() {
+		listAvailableAgents = originalList
+	}()
+	listAvailableAgents = func() ([]string, error) {
+		return []string{"Build", "Plan"}, nil
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	after := updated.(*model)
+
+	if after.agentName != "Build" {
+		t.Fatalf("agentName = %q, want unchanged %q", after.agentName, "Build")
 	}
 }

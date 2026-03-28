@@ -27,7 +27,7 @@
 - [ ] Shell mode during busy
 - [ ] Support sub-agent
 - [x] Support btw
-- [ ] Plan mode
+- [x] Plan mode
 - [x] Resume
 - [ ] Review mode
 - [ ] Add path in grep tool line

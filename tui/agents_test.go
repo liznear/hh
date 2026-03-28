@@ -19,6 +19,16 @@ func TestGetAgent_DefaultBuild(t *testing.T) {
 	}
 }
 
+func TestGetAgent_Plan(t *testing.T) {
+	agentConfig, err := getAgent("Plan")
+	if err != nil {
+		t.Fatalf("expected plan agent, got error: %v", err)
+	}
+	if agentConfig.Name != "Plan" {
+		t.Fatalf("expected Plan agent, got %q", agentConfig.Name)
+	}
+}
+
 func TestGetAgent_NotFound(t *testing.T) {
 	_, err := getAgent("missing")
 	if err == nil {
