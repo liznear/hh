@@ -141,6 +141,52 @@ func TestFormatToolCallWidgetBody_Question(t *testing.T) {
 	}
 }
 
+func TestFormatToolCallWidgetBody_TaskSingle(t *testing.T) {
+	item := &session.ToolCallItem{
+		Name:      "task",
+		Status:    session.ToolCallStatusPending,
+		Arguments: `{"tasks":[{"sub_agent_name":"Explorer","task":"Inspect architecture"}]}`,
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80}, DefaultTheme())
+	if body != "• Task Explorer: Inspect architecture" {
+		t.Fatalf("body = %q, want %q", body, "• Task Explorer: Inspect architecture")
+	}
+}
+
+func TestFormatToolCallWidgetBody_TaskMultiple(t *testing.T) {
+	item := &session.ToolCallItem{
+		Name:      "task",
+		Status:    session.ToolCallStatusPending,
+		Arguments: `{"tasks":[{"sub_agent_name":"Explorer","task":"Inspect architecture"},{"sub_agent_name":"Explorer","task":"Find tests"}]}`,
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80}, DefaultTheme())
+	want := "• Task Explorer: Inspect architecture\n• Task Explorer: Find tests"
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
+func TestFormatToolCallWidgetBody_TaskMultiple_WithErrorDetail(t *testing.T) {
+	item := &session.ToolCallItem{
+		Name:   "task",
+		Status: session.ToolCallStatusSuccess,
+		Result: &session.ToolCallResult{
+			Result: tools.TaskResult{Tasks: []tools.TaskTaskResult{
+				{SubAgentName: "Explorer", Task: "Inspect architecture", Status: tools.TaskTaskStatusSuccess},
+				{SubAgentName: "Explorer", Task: "Find tests", Status: tools.TaskTaskStatusError, Error: "failed to run sub-agent"},
+			}},
+		},
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 100}, DefaultTheme())
+	want := "✓ Task Explorer: Inspect architecture\n⨯ Task Explorer: Find tests\n  |- failed to run sub-agent"
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
 func TestRenderUserMessageWidget_QueuedBadge(t *testing.T) {
 	m := newInputTestModel()
 	lines := m.renderUserMessageWidget(&session.UserMessage{Content: "steer", Queued: true}, 80)

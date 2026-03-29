@@ -611,7 +611,15 @@ func renderToolCallWidget(vm toolCallWidgetModel, theme Theme) []string {
 
 	body, tokens := formatToolCallWidgetBody(vm, theme)
 	bodyWidth := max(1, vm.Width-2)
-	bodyLines := wrapLine(body, bodyWidth)
+	bodyLines := make([]string, 0)
+	for _, paragraph := range strings.Split(body, "\n") {
+		wrapped := wrapLine(paragraph, bodyWidth)
+		if len(wrapped) == 0 {
+			bodyLines = append(bodyLines, "")
+			continue
+		}
+		bodyLines = append(bodyLines, wrapped...)
+	}
 	if len(bodyLines) == 0 {
 		return []string{renderToolCallIcon(vm, theme)}
 	}
@@ -771,6 +779,12 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 		body := fmt.Sprintf("Bash %q", displayCommand)
 		return body, []styledToken{{raw: displayCommand, style: pathStyle}}
 
+	case "task":
+		if lines, tokens := formatTaskToolCallLines(item, args, pathStyle); len(lines) > 0 {
+			return strings.Join(lines, "\n"), tokens
+		}
+		return "Task", nil
+
 	case "todo_write":
 		done, total, ok := todoProgress(item, args)
 		if ok {
@@ -800,6 +814,93 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 	default:
 		return formatGenericToolCallWidgetBody(item)
 	}
+}
+
+func formatTaskToolCallLines(item *session.ToolCallItem, args map[string]any, style lipgloss.Style) ([]string, []styledToken) {
+	requests := make([]taskLineRequest, 0)
+
+	if item != nil && item.Result != nil {
+		if result, ok := item.Result.Result.(tools.TaskResult); ok {
+			for _, task := range result.Tasks {
+				requests = append(requests, taskLineRequest{
+					SubAgentName: task.SubAgentName,
+					Task:         task.Task,
+					Status:       string(task.Status),
+					Error:        task.Error,
+				})
+			}
+		}
+	}
+
+	if len(requests) == 0 {
+		if rawTasks, ok := args["tasks"]; ok && rawTasks != nil {
+			if items, ok := rawTasks.([]any); ok {
+				for _, raw := range items {
+					item, ok := raw.(map[string]any)
+					if !ok {
+						continue
+					}
+					if req, ok := parseTaskLineRequest(item); ok {
+						requests = append(requests, req)
+					}
+				}
+			}
+		}
+	}
+
+	if len(requests) == 0 {
+		return nil, nil
+	}
+
+	lines := make([]string, 0, len(requests))
+	tokens := make([]styledToken, 0, len(requests)*4)
+	for _, req := range requests {
+		statusPrefix := "•"
+		switch req.Status {
+		case "success":
+			statusPrefix = "✓"
+		case "error":
+			statusPrefix = "⨯"
+		}
+		line := fmt.Sprintf("%s Task %s: %s", statusPrefix, req.SubAgentName, req.Task)
+		lines = append(lines, line)
+		tokens = append(tokens,
+			styledToken{raw: statusPrefix, style: style},
+			styledToken{raw: req.SubAgentName, style: style},
+			styledToken{raw: req.Task, style: style},
+		)
+		if req.Status == "error" && req.Error != "" {
+			lines = append(lines, "  |- "+req.Error)
+			tokens = append(tokens, styledToken{raw: req.Error, style: style})
+		}
+	}
+	return lines, tokens
+}
+
+type taskLineRequest struct {
+	SubAgentName string
+	Task         string
+	Status       string
+	Error        string
+}
+
+func parseTaskLineRequest(raw map[string]any) (taskLineRequest, bool) {
+	subAgent, ok := raw["sub_agent_name"].(string)
+	if !ok || strings.TrimSpace(subAgent) == "" {
+		return taskLineRequest{}, false
+	}
+	task, ok := raw["task"].(string)
+	if !ok || strings.TrimSpace(task) == "" {
+		return taskLineRequest{}, false
+	}
+	status, _ := raw["status"].(string)
+	errMessage, _ := raw["error"].(string)
+	return taskLineRequest{
+		SubAgentName: strings.TrimSpace(subAgent),
+		Task:         strings.TrimSpace(task),
+		Status:       strings.TrimSpace(status),
+		Error:        strings.TrimSpace(errMessage),
+	}, true
 }
 
 func questionTitleArg(args map[string]any) string {

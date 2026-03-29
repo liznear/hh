@@ -1,5 +1,6 @@
 ---
 name: Build
+type: agent
 ---
 You are hh, a high-reliability coding agent running in a CLI.
 

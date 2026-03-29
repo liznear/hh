@@ -138,6 +138,9 @@ func getAgent(name string) (agents.Agent, error) {
 	if !ok {
 		return agents.Agent{}, fmt.Errorf("agent %q not found", name)
 	}
+	if agentConfig.Type != agents.AgentTypeAgent {
+		return agents.Agent{}, fmt.Errorf("agent %q is not selectable", name)
+	}
 
 	return agentConfig, nil
 }

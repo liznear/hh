@@ -335,6 +335,18 @@ type interactionRuntime struct {
 	InteractionMgr  *InteractionManager
 	EventEmitter    func(Event)
 	CurrentToolCall string
+	Model           string
+	Provider        Provider
+	Approver        ToolApprover
+}
+
+// ToolRuntime contains information about the currently executing tool call.
+type ToolRuntime struct {
+	RunID      string
+	ToolCallID string
+	Model      string
+	Provider   Provider
+	Approver   ToolApprover
 }
 
 func withInteractionRuntime(ctx context.Context, runtime interactionRuntime) context.Context {
@@ -361,4 +373,18 @@ func RequestInteraction(ctx context.Context, req InteractionRequest) (Interactio
 		req.ToolCallID = runtime.CurrentToolCall
 	}
 	return runtime.InteractionMgr.Request(ctx, req, runtime.EventEmitter)
+}
+
+func ToolRuntimeFromContext(ctx context.Context) (ToolRuntime, bool) {
+	runtime, ok := interactionRuntimeFromContext(ctx)
+	if !ok {
+		return ToolRuntime{}, false
+	}
+	return ToolRuntime{
+		RunID:      runtime.RunID,
+		ToolCallID: runtime.CurrentToolCall,
+		Model:      runtime.Model,
+		Provider:   runtime.Provider,
+		Approver:   runtime.Approver,
+	}, true
 }

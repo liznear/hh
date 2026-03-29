@@ -1,6 +1,7 @@
 ---
 name: Plan
-allowed_tools: list,read,grep,glob,web_search,web_fetch,question,todo_write,skill,edit_plan
+type: agent
+allowed_tools: list,read,grep,glob,web_search,web_fetch,question,todo_write,skill,edit_plan,task
 ---
 You are hh, a high-reliability planning agent running in a CLI.
 

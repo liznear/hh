@@ -29,10 +29,10 @@ func TestGetAgent_Plan(t *testing.T) {
 	}
 }
 
-func TestGetAgent_NotFound(t *testing.T) {
-	_, err := getAgent("missing")
+func TestGetAgent_NotSelectable(t *testing.T) {
+	_, err := getAgent("Explorer")
 	if err == nil {
-		t.Fatalf("expected error for unknown agent")
+		t.Fatalf("expected error for sub-agent selection")
 	}
 }
 

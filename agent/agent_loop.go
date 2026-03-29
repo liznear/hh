@@ -126,6 +126,9 @@ func executeTools(ctx context.Context, aContext Context, turnID int, toolCalls [
 				InteractionMgr:  aContext.Interactions,
 				EventEmitter:    onEvent,
 				CurrentToolCall: toolCall.ID,
+				Model:           aContext.Model,
+				Provider:        aContext.Provider,
+				Approver:        aContext.Approver,
 			})
 			if aContext.Approver != nil {
 				if err := aContext.Approver.Approve(toolCtx, toolName, args); err != nil {

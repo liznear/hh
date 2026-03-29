@@ -13,9 +13,15 @@ var agentFiles embed.FS
 
 type Agent struct {
 	Name         string
+	Type         string
 	SystemPrompt string
 	AllowedTools []string
 }
+
+const (
+	AgentTypeAgent    = "agent"
+	AgentTypeSubAgent = "sub-agent"
+)
 
 type Catalog struct {
 	agents map[string]Agent
@@ -29,6 +35,23 @@ func (c Catalog) Get(name string) (Agent, bool) {
 func (c Catalog) All() []Agent {
 	result := make([]Agent, 0, len(c.agents))
 	for _, agent := range c.agents {
+		if agent.Type != AgentTypeAgent {
+			continue
+		}
+		result = append(result, agent)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+	return result
+}
+
+func (c Catalog) SubAgents() []Agent {
+	result := make([]Agent, 0, len(c.agents))
+	for _, agent := range c.agents {
+		if agent.Type != AgentTypeSubAgent {
+			continue
+		}
 		result = append(result, agent)
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -91,6 +114,11 @@ func parseAgentMarkdown(content string) (Agent, error) {
 		return Agent{}, fmt.Errorf("missing required field: name")
 	}
 
+	typeName := strings.TrimSpace(fields["type"])
+	if typeName == "" {
+		typeName = AgentTypeAgent
+	}
+
 	var allowedTools []string
 	if toolsStr := strings.TrimSpace(fields["allowed_tools"]); toolsStr != "" {
 		// Parse as comma-separated list
@@ -104,6 +132,7 @@ func parseAgentMarkdown(content string) (Agent, error) {
 
 	return Agent{
 		Name:         name,
+		Type:         typeName,
 		SystemPrompt: strings.TrimSpace(body),
 		AllowedTools: allowedTools,
 	}, nil
