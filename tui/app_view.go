@@ -14,6 +14,7 @@ import (
 	glamouransi "github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/liznear/hh/agent"
 	"github.com/liznear/hh/tools"
 	"github.com/liznear/hh/tui/session"
 )
@@ -72,7 +73,9 @@ func (m *model) View() tea.View {
 
 func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
 	messageList := m.renderMessageList(layout.mainWidth, layout.messageHeight)
-	if m.questionDialog != nil {
+	if m.taskSessionView != nil {
+		messageList = m.renderTaskSessionMessageList(layout.mainWidth, layout.messageHeight)
+	} else if m.questionDialog != nil {
 		messageList = m.renderQuestionDialog(layout.mainWidth, layout.messageHeight)
 	} else if m.diffDialog != nil {
 		messageList = m.renderDiffDialog(layout.mainWidth, layout.messageHeight)
@@ -124,12 +127,21 @@ func (m *model) renderMessagePane(layout layoutState, messageList string) string
 func (m *model) renderInputPane(layout layoutState, status statusWidgetModel) string {
 	statusLine := renderStatusWidget(status, m.theme)
 	statusBlock := lipgloss.JoinVertical(lipgloss.Left, "", "", statusLine)
-	inputBox := lipgloss.NewStyle().
+
+	inputContent := m.input.View()
+	inputBoxStyle := lipgloss.NewStyle().
 		Width(layout.inputBoxWidth).
 		Border(lipgloss.NormalBorder(), true, false, false, false).
 		BorderForeground(m.theme.Color(ThemeColorInputBorder)).
-		Height(inputInnerLines).
-		Render(m.input.View())
+		Height(inputInnerLines)
+
+	if m.taskSessionView != nil {
+		msg := "Task session view (read-only). Press Esc to return."
+		inputContent = strings.Join(wrapLine(msg, max(1, layout.inputTextWidth-2)), "\n")
+		inputBoxStyle = inputBoxStyle.Foreground(m.theme.Color(ThemeColorModelPickerMutedForeground))
+	}
+
+	inputBox := inputBoxStyle.Render(inputContent)
 
 	inputBlock := lipgloss.JoinVertical(lipgloss.Left, statusBlock, inputBox)
 	return lipgloss.NewStyle().
@@ -824,37 +836,7 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 }
 
 func formatTaskToolCallLines(item *session.ToolCallItem, args map[string]any, pathStyle lipgloss.Style, successStyle lipgloss.Style, errorStyle lipgloss.Style, width int) ([]string, []styledToken) {
-	requests := make([]taskLineRequest, 0)
-
-	if item != nil && item.Result != nil {
-		if result, ok := item.Result.Result.(tools.TaskResult); ok {
-			for _, task := range result.Tasks {
-				requests = append(requests, taskLineRequest{
-					SubAgentName: task.SubAgentName,
-					Task:         task.Task,
-					Status:       string(task.Status),
-					Error:        task.Error,
-				})
-			}
-		}
-	}
-
-	if len(requests) == 0 {
-		if rawTasks, ok := args["tasks"]; ok && rawTasks != nil {
-			if items, ok := rawTasks.([]any); ok {
-				for _, raw := range items {
-					item, ok := raw.(map[string]any)
-					if !ok {
-						continue
-					}
-					if req, ok := parseTaskLineRequest(item); ok {
-						requests = append(requests, req)
-					}
-				}
-			}
-		}
-	}
-
+	requests := taskLineRequests(item, args)
 	if len(requests) == 0 {
 		return nil, nil
 	}
@@ -890,11 +872,56 @@ func formatTaskToolCallLines(item *session.ToolCallItem, args map[string]any, pa
 	return lines, tokens
 }
 
+func taskLineRequests(item *session.ToolCallItem, args map[string]any) []taskLineRequest {
+	requests := make([]taskLineRequest, 0)
+
+	if item != nil && item.Result != nil {
+		if result, ok := item.Result.Result.(tools.TaskResult); ok {
+			for idx, task := range result.Tasks {
+				requests = append(requests, taskLineRequest{
+					ParentToolCallID: strings.TrimSpace(item.ID),
+					TaskIndex:        idx,
+					SubAgentName:     task.SubAgentName,
+					Task:             task.Task,
+					Status:           string(task.Status),
+					Error:            task.Error,
+					AgentMessages:    append([]agent.Message(nil), task.Messages...),
+				})
+			}
+		}
+	}
+
+	if len(requests) == 0 {
+		if rawTasks, ok := args["tasks"]; ok && rawTasks != nil {
+			if items, ok := rawTasks.([]any); ok {
+				for idx, raw := range items {
+					itemMap, ok := raw.(map[string]any)
+					if !ok {
+						continue
+					}
+					if req, ok := parseTaskLineRequest(itemMap); ok {
+						req.TaskIndex = idx
+						if item != nil {
+							req.ParentToolCallID = strings.TrimSpace(item.ID)
+						}
+						requests = append(requests, req)
+					}
+				}
+			}
+		}
+	}
+
+	return requests
+}
+
 type taskLineRequest struct {
-	SubAgentName string
-	Task         string
-	Status       string
-	Error        string
+	ParentToolCallID string
+	TaskIndex        int
+	SubAgentName     string
+	Task             string
+	Status           string
+	Error            string
+	AgentMessages    []agent.Message
 }
 
 func parseTaskLineRequest(raw map[string]any) (taskLineRequest, bool) {

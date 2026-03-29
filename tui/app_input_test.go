@@ -163,6 +163,35 @@ func TestUpdate_TabSwitchesAgentAndStatusReflectsSelection(t *testing.T) {
 	}
 }
 
+func TestUpdate_TaskSessionViewDisablesInputEditing(t *testing.T) {
+	m := newInputTestModel()
+	m.input.SetValue("")
+	m.taskSessionView = &taskSessionViewState{Session: session.NewState("task-session")}
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Text: "a"}))
+	after := updated.(*model)
+
+	if got := after.input.Value(); got != "" {
+		t.Fatalf("input = %q, want empty while task session view active", got)
+	}
+}
+
+func TestUpdate_EscClosesTaskSessionViewBeforeBusyCancel(t *testing.T) {
+	m := newInputTestModel()
+	m.busy = true
+	m.taskSessionView = &taskSessionViewState{Session: session.NewState("task-session")}
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	after := updated.(*model)
+
+	if after.taskSessionView != nil {
+		t.Fatal("expected task session view to close on Esc")
+	}
+	if after.escPending {
+		t.Fatal("expected escPending to remain false when closing task session view")
+	}
+}
+
 func TestUpdate_TabDoesNotSwitchWhileBusy(t *testing.T) {
 	m := newInputTestModel()
 	m.modelName = "test-model"

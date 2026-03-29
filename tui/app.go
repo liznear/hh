@@ -69,6 +69,8 @@ type uiState struct {
 	stream       <-chan tea.Msg
 	btwStream    <-chan tea.Msg
 	btwStreamCmd tea.Cmd
+
+	taskSessionPlaybackCmd tea.Cmd
 }
 
 // runtimeState holds ephemeral TUI runtime fields that should not be persisted
@@ -95,8 +97,9 @@ type runtimeState struct {
 	lastRefreshAt        time.Time
 	suppressRefreshUntil time.Time
 
-	questionDialog *questionDialogState
-	diffDialog     *diffDialogState
+	questionDialog  *questionDialogState
+	diffDialog      *diffDialogState
+	taskSessionView *taskSessionViewState
 
 	lastRenderLatency time.Duration
 	maxRenderLatency  time.Duration
@@ -107,6 +110,8 @@ type runtimeState struct {
 	gitBranch                string
 	modifiedFiles            []modifiedFileStat
 	sidebarModifiedFileLines []sidebarModifiedFileLine
+	taskLineClickTargets     []taskLineClickTarget
+	taskLiveSessions         map[string]map[int]*taskSessionLiveState
 	lastGitRefreshAt         time.Time
 	contextWindowUsed        int
 
@@ -123,6 +128,25 @@ type runtimeState struct {
 type sidebarModifiedFileLine struct {
 	Line int
 	Path string
+}
+
+type taskLineClickTarget struct {
+	ViewLine         int
+	ParentToolCallID string
+	TaskIndex        int
+	SubAgentName     string
+	Task             string
+	Status           string
+	Error            string
+	AgentMessages    []agent.Message
+}
+
+type taskSessionLiveState struct {
+	SubAgentName string
+	Task         string
+	Session      *session.State
+	PendingTools map[string]*session.ToolCallItem
+	Running      bool
 }
 
 type ephemeralItem struct {
@@ -305,6 +329,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case btwStreamStartedMsg:
 		return m.handleBTWStreamStartedMsg(msg, statusCmd)
+
+	case taskSessionPlaybackTickMsg:
+		return m.handleTaskSessionPlaybackTickMsg(statusCmd)
 	}
 
 	var cmd tea.Cmd
@@ -410,6 +437,10 @@ func (m *model) handleAgentEvent(e agent.Event) {
 				m.closeQuestionDialog()
 				m.addItem(&session.ErrorItem{Message: "interaction timed out"})
 			}
+		}
+	case agent.EventTypeTaskProgress:
+		if data, ok := e.Data.(agent.EventDataTaskProgress); ok {
+			m.handleTaskProgressEvent(data)
 		}
 	}
 }
@@ -843,6 +874,10 @@ func (m *model) handleBTWStreamBatchMsg(msg btwStreamBatchMsg, statusCmd tea.Cmd
 	return m, tea.Batch(statusCmd, waitForBTWStreamCmd(m.btwStream))
 }
 
+func (m *model) handleTaskSessionPlaybackTickMsg(statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	return m, statusCmd
+}
+
 func waitForBTWStreamCmd(ch <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		if ch == nil {
@@ -935,6 +970,13 @@ func (m *model) requestCancelRun() {
 }
 
 func (m *model) handleDialogKeyPress(msg tea.KeyPressMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd, bool) {
+	if m.taskSessionView != nil {
+		if m.handleTaskSessionViewKey(msg) {
+			m.refreshViewport()
+			return m, statusCmd, true
+		}
+	}
+
 	if m.diffDialog != nil {
 		if m.handleDiffDialogKey(msg) {
 			m.refreshViewport()
@@ -1006,6 +1048,10 @@ func (m *model) switchToNextAgent() error {
 }
 
 func (m *model) handleMouseWheelMsg(msg tea.MouseWheelMsg, statusCmd tea.Cmd, updateGap time.Duration, timeSinceView time.Duration) (tea.Model, tea.Cmd) {
+	if m.handleTaskSessionViewWheel(msg) {
+		m.refreshViewport()
+		return m, statusCmd
+	}
 	if m.handleDiffDialogWheel(msg) {
 		m.refreshViewport()
 		return m, statusCmd
@@ -1021,6 +1067,12 @@ func (m *model) handleMouseWheelMsg(msg tea.MouseWheelMsg, statusCmd tea.Cmd, up
 }
 
 func (m *model) handleMouseClickMsg(msg tea.MouseClickMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if m.handleTaskLineClick(msg.Mouse().X, msg.Mouse().Y) {
+		m.refreshViewport()
+		cmd := m.taskSessionPlaybackCmd
+		m.taskSessionPlaybackCmd = nil
+		return m, tea.Batch(statusCmd, cmd)
+	}
 	if m.handleSidebarModifiedFileClick(msg.Mouse().X, msg.Mouse().Y) {
 		m.refreshViewport()
 		return m, statusCmd
@@ -1236,6 +1288,8 @@ type btwStreamBatchMsg struct {
 	done    bool
 	doneErr error
 }
+
+type taskSessionPlaybackTickMsg struct{}
 
 type agentRunDoneMsg struct {
 	err error

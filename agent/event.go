@@ -22,6 +22,7 @@ const (
 	EventTypeInteractionExpired   EventType = "interaction_expired"
 	EventTypeTokenUsage           EventType = "token_usage"
 	EventTypeSessionTitle         EventType = "session_title"
+	EventTypeTaskProgress         EventType = "task_progress"
 	EventTypeDone                 EventType = "done"
 )
 
@@ -96,6 +97,14 @@ type EventDataTokenUsage struct {
 
 type EventDataSessionTitle struct {
 	Title string
+}
+
+type EventDataTaskProgress struct {
+	ParentToolCallID string
+	TaskIndex        int
+	SubAgentName     string
+	Task             string
+	SubEvent         Event
 }
 
 type EventDataDone struct {

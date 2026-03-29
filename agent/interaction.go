@@ -375,6 +375,15 @@ func RequestInteraction(ctx context.Context, req InteractionRequest) (Interactio
 	return runtime.InteractionMgr.Request(ctx, req, runtime.EventEmitter)
 }
 
+func EmitRuntimeEvent(ctx context.Context, event Event) bool {
+	runtime, ok := interactionRuntimeFromContext(ctx)
+	if !ok || runtime.EventEmitter == nil {
+		return false
+	}
+	runtime.EventEmitter(event)
+	return true
+}
+
 func ToolRuntimeFromContext(ctx context.Context) (ToolRuntime, bool) {
 	runtime, ok := interactionRuntimeFromContext(ctx)
 	if !ok {

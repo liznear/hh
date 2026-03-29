@@ -3,14 +3,15 @@
 - [x] Update tool call rendering: don't mute.
 - [ ] Make "Modified Files" / "TODO" items foldable.
 - [x] Highlight the current WIP todo item.
-- [ ] Make subagent clickable.
+- [x] Make subagent clickable.
 - [ ] Show the current running skill.
 - [x] Support loading AGENT.md
 - [ ] Support custom slash commands.
 - [ ] Support allowed tools for skills.
+- [x] Sub-agents.
 - [ ] Support rendering memaid graph.
-- [ ] Subagent doesn't have question tool, but LLM still try. Fix prompt injection.
-- [ ] Subagent failure is not rendered in the main session.
+- [x] Subagent doesn't have question tool, but LLM still try. Fix prompt injection.
+- [x] Subagent failure is not rendered in the main session.
 - [ ] Know current date.
 - [x] Error message is not wrapped
 - [x] Table style
@@ -25,7 +26,7 @@
 - [x] Internal state is leaked and shown in UI
 - [x] Cancel bash tool.
 - [ ] Shell mode during busy
-- [ ] Support sub-agent
+- [x] Support sub-agent
 - [x] Support btw
 - [x] Plan mode
 - [x] Resume
@@ -38,3 +39,4 @@
 - [ ] Support copy content
 - [x] Wrong wrapping
 - [ ] @ to show files.
+- [ ] Compact

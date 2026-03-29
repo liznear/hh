@@ -504,6 +504,8 @@ func decodeToolResult(name string, raw any) any {
 		return decodeMappedResult[tools.TodoWriteResult](mapped, raw)
 	case "skill":
 		return decodeMappedResult[tools.SkillResult](mapped, raw)
+	case "task":
+		return decodeMappedResult[tools.TaskResult](mapped, raw)
 	case "web_fetch":
 		return decodeMappedResult[tools.WebFetchResult](mapped, raw)
 	case "web_search":

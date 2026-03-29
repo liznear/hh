@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/liznear/hh/agent"
 	"github.com/liznear/hh/tui/session"
 )
 
@@ -46,16 +47,19 @@ func (m *model) refreshViewport() {
 
 func (m *model) renderMessageList(width, height int) string {
 	if width <= 0 || height <= 0 {
+		m.taskLineClickTargets = nil
 		return ""
 	}
 	items := m.displayItems()
 	if len(items) == 0 {
+		m.taskLineClickTargets = nil
 		return ""
 	}
 
 	m.clampListOffset(width, height)
 
 	visible := make([]string, 0, height)
+	targets := make([]taskLineClickTarget, 0)
 	idx := m.listOffsetIdx
 	offset := m.listOffsetLine
 
@@ -64,22 +68,77 @@ func (m *model) renderMessageList(width, height int) string {
 		if len(lines) == 0 {
 			lines = []string{""}
 		}
+		itemTargets := m.taskClickTargetsFromRenderedLines(items[idx], lines)
+		targetsByLine := make(map[int]taskLineClickTarget, len(itemTargets))
+		for _, target := range itemTargets {
+			targetsByLine[target.ViewLine] = target
+		}
 		if offset < len(lines) {
-			visible = append(visible, lines[offset:]...)
+			for lineIdx := offset; lineIdx < len(lines) && len(visible) < height; lineIdx++ {
+				visible = append(visible, lines[lineIdx])
+				if target, ok := targetsByLine[lineIdx]; ok {
+					target.ViewLine = len(visible) - 1
+					targets = append(targets, target)
+				}
+			}
 		}
 		idx++
 		offset = 0
 	}
 
-	if len(visible) > height {
+	for len(visible) > height {
 		visible = visible[:height]
 	}
 
 	for len(visible) < height {
 		visible = append(visible, "")
 	}
+	m.taskLineClickTargets = targets
 
 	return strings.Join(visible, "\n")
+}
+
+func (m *model) taskClickTargetsFromRenderedLines(item session.Item, renderedLines []string) []taskLineClickTarget {
+	toolCall, ok := item.(*session.ToolCallItem)
+	if !ok || strings.ToLower(strings.TrimSpace(toolCall.Name)) != "task" {
+		return nil
+	}
+
+	requests := taskLineRequests(toolCall, parseToolCallArgs(toolCall.Arguments))
+	if len(requests) == 0 {
+		return nil
+	}
+
+	targets := make([]taskLineClickTarget, 0, len(requests))
+	reqIdx := 0
+	for lineIdx, line := range renderedLines {
+		if reqIdx >= len(requests) {
+			break
+		}
+		if !taskLineClickableMarker(line) {
+			continue
+		}
+		req := requests[reqIdx]
+		if req.ParentToolCallID == "" {
+			req.ParentToolCallID = strings.TrimSpace(toolCall.ID)
+		}
+		if live := m.getTaskLiveSession(req.ParentToolCallID, req.TaskIndex); live != nil && live.Session != nil {
+			requests[reqIdx].AgentMessages = taskSessionMessagesFromState(live.Session)
+			req.AgentMessages = requests[reqIdx].AgentMessages
+		}
+		targets = append(targets, taskLineClickTarget{
+			ViewLine:         lineIdx,
+			ParentToolCallID: req.ParentToolCallID,
+			TaskIndex:        req.TaskIndex,
+			SubAgentName:     req.SubAgentName,
+			Task:             req.Task,
+			Status:           req.Status,
+			Error:            req.Error,
+			AgentMessages:    append([]agent.Message(nil), req.AgentMessages...),
+		})
+		reqIdx++
+	}
+	return targets
 }
 
 func (m *model) displayItems() []session.Item {

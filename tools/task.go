@@ -24,11 +24,12 @@ const (
 )
 
 type TaskTaskResult struct {
-	SubAgentName string         `json:"sub_agent_name"`
-	Task         string         `json:"task"`
-	Status       TaskTaskStatus `json:"status"`
-	Output       string         `json:"output,omitempty"`
-	Error        string         `json:"error,omitempty"`
+	SubAgentName string          `json:"sub_agent_name"`
+	Task         string          `json:"task"`
+	Status       TaskTaskStatus  `json:"status"`
+	Output       string          `json:"output,omitempty"`
+	Error        string          `json:"error,omitempty"`
+	Messages     []agent.Message `json:"messages,omitempty"`
 }
 
 func (r TaskResult) Summary() string {
@@ -195,7 +196,7 @@ func runTaskRequests(ctx context.Context, runtime agent.ToolRuntime, requests []
 		i := i
 		go func() {
 			defer wg.Done()
-			results[i] = runSingleTaskRequest(ctx, runtime, catalog, requests[i], i)
+			results[i] = runSingleTaskRequest(ctx, runtime, catalog, requests[i], i, runtime.ToolCallID)
 		}()
 	}
 
@@ -203,7 +204,7 @@ func runTaskRequests(ctx context.Context, runtime agent.ToolRuntime, requests []
 	return results
 }
 
-func runSingleTaskRequest(ctx context.Context, runtime agent.ToolRuntime, catalog agents.Catalog, req taskRequest, idx int) TaskTaskResult {
+func runSingleTaskRequest(ctx context.Context, runtime agent.ToolRuntime, catalog agents.Catalog, req taskRequest, idx int, parentToolCallID string) TaskTaskResult {
 	ret := TaskTaskResult{
 		SubAgentName: req.SubAgentName,
 		Task:         req.Task,
@@ -238,12 +239,19 @@ func runSingleTaskRequest(ctx context.Context, runtime agent.ToolRuntime, catalo
 
 	var messages []agent.Message
 	var runErr error
+	emitTaskProgressEvent(ctx, parentToolCallID, idx, req.SubAgentName, req.Task, agent.Event{Type: agent.EventTypeMessage, Data: agent.EventDataMessage{Message: agent.Message{Role: agent.RoleUser, Content: req.Task}}}, agent.Message{})
 	agent.RunAgentLoop(ctx, subCtx, func(event agent.Event) {
 		switch event.Type {
 		case agent.EventTypeAgentEnd:
 			if data, ok := event.Data.(agent.EventDataAgentEnd); ok {
 				messages = data.Messages
 			}
+		case agent.EventTypeMessage:
+			if data, ok := event.Data.(agent.EventDataMessage); ok {
+				emitTaskProgressEvent(ctx, parentToolCallID, idx, req.SubAgentName, req.Task, event, data.Message)
+			}
+		case agent.EventTypeToolCallStart, agent.EventTypeToolCallEnd, agent.EventTypeMessageDelta, agent.EventTypeThinkingDelta:
+			emitTaskProgressEvent(ctx, parentToolCallID, idx, req.SubAgentName, req.Task, event, agent.Message{})
 		case agent.EventTypeError:
 			switch data := event.Data.(type) {
 			case error:
@@ -253,6 +261,9 @@ func runSingleTaskRequest(ctx context.Context, runtime agent.ToolRuntime, catalo
 			}
 		}
 	})
+	if len(messages) > 0 {
+		ret.Messages = append([]agent.Message(nil), messages...)
+	}
 	if runErr != nil {
 		ret.Status = TaskTaskStatusError
 		ret.Error = fmt.Sprintf("run sub-agent %q: %v", req.SubAgentName, runErr)
@@ -262,6 +273,30 @@ func runSingleTaskRequest(ctx context.Context, runtime agent.ToolRuntime, catalo
 	ret.Status = TaskTaskStatusSuccess
 	ret.Output = extractFinalAssistantOutput(messages)
 	return ret
+}
+
+func emitTaskProgressEvent(ctx context.Context, parentToolCallID string, taskIndex int, subAgentName, task string, subEvent agent.Event, fallbackMessage agent.Message) {
+	if strings.TrimSpace(parentToolCallID) == "" {
+		return
+	}
+	if subEvent.Type == "" && fallbackMessage.Role == "" {
+		return
+	}
+	if subEvent.Type == "" {
+		subEvent = agent.Event{Type: agent.EventTypeMessage, Data: agent.EventDataMessage{Message: fallbackMessage}}
+	}
+	emit := agent.Event{
+		Type:       agent.EventTypeTaskProgress,
+		ToolCallID: parentToolCallID,
+		Data: agent.EventDataTaskProgress{
+			ParentToolCallID: parentToolCallID,
+			TaskIndex:        taskIndex,
+			SubAgentName:     strings.TrimSpace(subAgentName),
+			Task:             strings.TrimSpace(task),
+			SubEvent:         subEvent,
+		},
+	}
+	agent.EmitRuntimeEvent(ctx, emit)
 }
 
 func extractFinalAssistantOutput(messages []agent.Message) string {
