@@ -65,8 +65,50 @@ func TestFormatToolCallWidgetBody_Read_UsesBeautifiedPath(t *testing.T) {
 	}
 
 	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80, WorkingDir: "/work/repo"}, DefaultTheme())
-	if body != "Read a/b/c/d/file.txt" {
-		t.Fatalf("body = %q, want %q", body, "Read a/b/c/d/file.txt")
+	if body != "Read a/b/c/d/file.txt [start=0, limit=0]" {
+		t.Fatalf("body = %q, want %q", body, "Read a/b/c/d/file.txt [start=0, limit=0]")
+	}
+}
+
+func TestFormatToolCallWidgetBody_Read_UsesExplicitStartAndLimit(t *testing.T) {
+	item := &session.ToolCallItem{
+		Name:      "read",
+		Status:    session.ToolCallStatusPending,
+		Arguments: `{"path":"file.txt","start":12,"limit":34}`,
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80}, DefaultTheme())
+	if body != "Read file.txt [start=12, limit=34]" {
+		t.Fatalf("body = %q, want %q", body, "Read file.txt [start=12, limit=34]")
+	}
+}
+
+func TestFormatToolCallWidgetBody_Grep(t *testing.T) {
+	item := &session.ToolCallItem{
+		Name:      "grep",
+		Status:    session.ToolCallStatusPending,
+		Arguments: `{"pattern":"TODO","path":"src"}`,
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80}, DefaultTheme())
+	if body != "Grep TODO in src" {
+		t.Fatalf("body = %q, want %q", body, "Grep TODO in src")
+	}
+}
+
+func TestFormatToolCallWidgetBody_Grep_ShowsMatchCountOnSuccess(t *testing.T) {
+	item := &session.ToolCallItem{
+		Name:      "grep",
+		Status:    session.ToolCallStatusSuccess,
+		Arguments: `{"pattern":"TODO","path":"src"}`,
+		Result: &session.ToolCallResult{
+			Result: tools.GrepResult{MatchCount: 3},
+		},
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80}, DefaultTheme())
+	if body != "Grep TODO in src (3 matches)" {
+		t.Fatalf("body = %q, want %q", body, "Grep TODO in src (3 matches)")
 	}
 }
 

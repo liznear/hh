@@ -40,7 +40,7 @@ func TestRenderMessageList_InsertsSingleBlankLineBetweenMessageBlocks(t *testing
 
 	userIdx := lineIndexContaining(lines, "user message")
 	thinkingIdx := lineIndexContaining(lines, "thinking message")
-	readIdx := lineIndexContaining(lines, "Read a.txt")
+	readIdx := lineIndexContaining(lines, "Read a.txt [start=0, limit=0]")
 	listIdx := lineIndexContaining(lines, "List .")
 	assistantIdx := lineIndexContaining(lines, "assistant message")
 

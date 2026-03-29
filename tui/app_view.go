@@ -735,18 +735,21 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 
 	case "read":
 		path := beautifyToolPath(toolArgString(args, "path", "."), vm.WorkingDir)
-		body := fmt.Sprintf("Read %s", path)
+		start := toolArgInt(args, "start", 0)
+		limit := toolArgInt(args, "limit", 0)
+		body := fmt.Sprintf("Read %s [start=%d, limit=%d]", path, start, limit)
 		return body, []styledToken{{raw: path, style: pathStyle}}
 
 	case "grep":
+		pattern := toolArgString(args, "pattern", "")
 		path := beautifyToolPath(toolArgString(args, "path", "."), vm.WorkingDir)
-		body := fmt.Sprintf("Grep %s", path)
+		body := fmt.Sprintf("Grep %s in %s", pattern, path)
 		if item.Status == session.ToolCallStatusSuccess {
 			if matches, ok := grepMatchCount(item); ok {
 				body = fmt.Sprintf("%s (%d matches)", body, matches)
 			}
 		}
-		return body, []styledToken{{raw: path, style: pathStyle}}
+		return body, []styledToken{{raw: pattern, style: pathStyle}, {raw: path, style: pathStyle}}
 
 	case "edit":
 		path := beautifyToolPath(toolArgString(args, "path", "."), vm.WorkingDir)
@@ -1012,6 +1015,21 @@ func toolArgString(args map[string]any, key string, fallback string) string {
 		return fallback
 	}
 	return s
+}
+
+func toolArgInt(args map[string]any, key string, fallback int) int {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return fallback
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	default:
+		return fallback
+	}
 }
 
 func listFileCount(item *session.ToolCallItem) (int, bool) {

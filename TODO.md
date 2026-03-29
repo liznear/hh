@@ -5,12 +5,12 @@
 - [ ] Support rendering memaid graph.
 - [ ] Support mcp
 - [ ] Shell mode during busy
-- [ ] Add path in grep tool line
-- [ ] Read line show start and limit
 - [ ] Auto memory
 - [ ] Auto dream
 - [ ] Support copy content
 - [ ] Compact
+- [x] Add path in grep tool line
+- [x] Read line show start and limit
 - [x] Support fine-grained bash permissions like claude.
 - [x] Support permission spec like .claude/settings.local.json.
 - [x] Update tool call rendering: don't mute.
