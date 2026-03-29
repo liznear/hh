@@ -608,6 +608,7 @@ func renderToolCallWidget(vm toolCallWidgetModel, theme Theme) []string {
 	if vm.Item == nil {
 		return nil
 	}
+	isTaskTool := strings.ToLower(vm.Item.Name) == "task"
 
 	body, tokens := formatToolCallWidgetBody(vm, theme)
 	bodyWidth := max(1, vm.Width-2)
@@ -627,6 +628,10 @@ func renderToolCallWidget(vm toolCallWidgetModel, theme Theme) []string {
 	out := make([]string, 0, len(bodyLines))
 	for i, line := range bodyLines {
 		styledLine := styleToolCallLine(line, tokens)
+		if isTaskTool {
+			out = append(out, styledLine)
+			continue
+		}
 		if i == 0 {
 			out = append(out, fmt.Sprintf("%s %s", renderToolCallIcon(vm, theme), styledLine))
 			continue
@@ -780,7 +785,9 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 		return body, []styledToken{{raw: displayCommand, style: pathStyle}}
 
 	case "task":
-		if lines, tokens := formatTaskToolCallLines(item, args, pathStyle); len(lines) > 0 {
+		successStyle := lipgloss.NewStyle().Foreground(theme.Color(ThemeColorToolCallIconSuccessForeground))
+		errorStyle := lipgloss.NewStyle().Foreground(theme.Color(ThemeColorToolCallIconErrorForeground))
+		if lines, tokens := formatTaskToolCallLines(item, args, pathStyle, successStyle, errorStyle, vm.Width); len(lines) > 0 {
 			return strings.Join(lines, "\n"), tokens
 		}
 		return "Task", nil
@@ -816,7 +823,7 @@ func formatToolCallWidgetBody(vm toolCallWidgetModel, theme Theme) (string, []st
 	}
 }
 
-func formatTaskToolCallLines(item *session.ToolCallItem, args map[string]any, style lipgloss.Style) ([]string, []styledToken) {
+func formatTaskToolCallLines(item *session.ToolCallItem, args map[string]any, pathStyle lipgloss.Style, successStyle lipgloss.Style, errorStyle lipgloss.Style, width int) ([]string, []styledToken) {
 	requests := make([]taskLineRequest, 0)
 
 	if item != nil && item.Result != nil {
@@ -852,26 +859,32 @@ func formatTaskToolCallLines(item *session.ToolCallItem, args map[string]any, st
 		return nil, nil
 	}
 
+	maxTaskLen := max(20, width-30)
 	lines := make([]string, 0, len(requests))
 	tokens := make([]styledToken, 0, len(requests)*4)
 	for _, req := range requests {
 		statusPrefix := "•"
+		statusStyle := pathStyle
 		switch req.Status {
 		case "success":
 			statusPrefix = "✓"
+			statusStyle = successStyle
 		case "error":
 			statusPrefix = "⨯"
+			statusStyle = errorStyle
 		}
-		line := fmt.Sprintf("%s Task %s: %s", statusPrefix, req.SubAgentName, req.Task)
+
+		displayTask := truncateToolCommand(req.Task, maxTaskLen)
+		line := fmt.Sprintf("%s Task %s: %s", statusPrefix, req.SubAgentName, displayTask)
 		lines = append(lines, line)
 		tokens = append(tokens,
-			styledToken{raw: statusPrefix, style: style},
-			styledToken{raw: req.SubAgentName, style: style},
-			styledToken{raw: req.Task, style: style},
+			styledToken{raw: statusPrefix, style: statusStyle},
+			styledToken{raw: req.SubAgentName, style: pathStyle},
+			styledToken{raw: displayTask, style: pathStyle},
 		)
 		if req.Status == "error" && req.Error != "" {
 			lines = append(lines, "  |- "+req.Error)
-			tokens = append(tokens, styledToken{raw: req.Error, style: style})
+			tokens = append(tokens, styledToken{raw: req.Error, style: errorStyle})
 		}
 	}
 	return lines, tokens

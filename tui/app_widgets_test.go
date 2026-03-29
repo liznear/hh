@@ -141,6 +141,23 @@ func TestFormatToolCallWidgetBody_Question(t *testing.T) {
 	}
 }
 
+func TestRenderToolCallWidget_TaskOmitsGlobalArrow(t *testing.T) {
+	theme := DefaultTheme()
+	item := &session.ToolCallItem{
+		Name:      "task",
+		Status:    session.ToolCallStatusPending,
+		Arguments: `{"tasks":[{"sub_agent_name":"Explorer","task":"Inspect architecture"}]}`,
+	}
+
+	lines := renderToolCallWidget(toolCallWidgetModel{Item: item, Width: 80}, theme)
+	if len(lines) == 0 {
+		t.Fatal("expected rendered lines")
+	}
+	if strings.HasPrefix(lines[0], "→ ") {
+		t.Fatalf("unexpected global arrow prefix: %q", lines[0])
+	}
+}
+
 func TestFormatToolCallWidgetBody_TaskSingle(t *testing.T) {
 	item := &session.ToolCallItem{
 		Name:      "task",
@@ -151,6 +168,19 @@ func TestFormatToolCallWidgetBody_TaskSingle(t *testing.T) {
 	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 80}, DefaultTheme())
 	if body != "• Task Explorer: Inspect architecture" {
 		t.Fatalf("body = %q, want %q", body, "• Task Explorer: Inspect architecture")
+	}
+}
+
+func TestFormatToolCallWidgetBody_TaskSingle_TruncatesLongTask(t *testing.T) {
+	item := &session.ToolCallItem{
+		Name:      "task",
+		Status:    session.ToolCallStatusPending,
+		Arguments: `{"tasks":[{"sub_agent_name":"Explorer","task":"This is a very very very very very very very long task description"}]}`,
+	}
+
+	body, _ := formatToolCallWidgetBody(toolCallWidgetModel{Item: item, Width: 50}, DefaultTheme())
+	if !strings.Contains(body, "...") {
+		t.Fatalf("expected truncated task with ellipsis, got %q", body)
 	}
 }
 
