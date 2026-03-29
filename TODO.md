@@ -1,22 +1,29 @@
+- [ ] Make "Modified Files" / "TODO" items foldable.
+- [ ] Show the current running skill.
+- [ ] Support custom slash commands.
+- [ ] Support allowed tools for skills.
+- [ ] Support rendering memaid graph.
+- [ ] Support mcp
+- [ ] Shell mode during busy
+- [ ] Add path in grep tool line
+- [ ] Read line show start and limit
+- [ ] Auto memory
+- [ ] Auto dream
+- [ ] Support copy content
+- [ ] Compact
 - [x] Support fine-grained bash permissions like claude.
 - [x] Support permission spec like .claude/settings.local.json.
 - [x] Update tool call rendering: don't mute.
-- [ ] Make "Modified Files" / "TODO" items foldable.
 - [x] Highlight the current WIP todo item.
 - [x] Make subagent clickable.
-- [ ] Show the current running skill.
 - [x] Support loading AGENT.md
-- [ ] Support custom slash commands.
-- [ ] Support allowed tools for skills.
 - [x] Sub-agents.
-- [ ] Support rendering memaid graph.
 - [x] Subagent doesn't have question tool, but LLM still try. Fix prompt injection.
 - [x] Subagent failure is not rendered in the main session.
 - [x] Know current date.
 - [x] Error message is not wrapped
 - [x] Table style
 - [x] Don't make the line changes number bold
-- [ ] Support mcp
 - [x] Bash pattern too specific
 - [x] Bash pattern match not correct. Allow `git diff --short` in the session would allow `git diff*` in the session temporarily.
 - [x] Queue message
@@ -25,19 +32,12 @@
 - [x] Make read tool's start/offset parameter optional
 - [x] Internal state is leaked and shown in UI
 - [x] Cancel bash tool.
-- [ ] Shell mode during busy
 - [x] Support sub-agent
 - [x] Support btw
 - [x] Plan mode
 - [x] Resume
 - [x] Review command (call a review subagent with the uncommitted changes, clickable)
-- [ ] Add path in grep tool line
-- [ ] Read line show start and limit
 - [x] Context usage is not cleaned up on /new
-- [ ] Auto memory
-- [ ] Auto dream
-- [ ] Support copy content
 - [x] Wrong wrapping
 - [x] @ to show files.
 - [x] @ to call subagents
-- [ ] Compact
