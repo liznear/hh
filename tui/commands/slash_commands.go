@@ -18,6 +18,7 @@ const ActionNewSession = "new_session"
 const ActionModelPicker = "model_picker"
 const ActionResumeSession = "resume_session"
 const ActionBTW = "btw"
+const ActionCompact = "compact"
 
 func BuiltIn() map[string]Command {
 	commands := []Command{
@@ -40,6 +41,11 @@ func BuiltIn() map[string]Command {
 			Name:    "btw",
 			Summary: "ask a quick question about current context",
 			Action:  ActionBTW,
+		},
+		{
+			Name:    "compact",
+			Summary: "summarize context, progress, and next steps",
+			Action:  ActionCompact,
 		},
 	}
 

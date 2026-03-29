@@ -84,7 +84,11 @@ type runtimeState struct {
 	escPending   bool
 	cancelledRun bool
 
+	currentRunKind runKind
+
 	btwBusy bool
+
+	hideNextUserMessage bool
 
 	showRunResult        bool
 	viewportDirty        bool
@@ -182,6 +186,13 @@ type scrollPerfStats struct {
 type modelPickerState struct {
 	index int
 }
+
+type runKind string
+
+const (
+	runKindNormal  runKind = "normal"
+	runKindCompact runKind = "compact"
+)
 
 func newDomainState(state *session.State, modelName string) domainState {
 	if state == nil {
@@ -378,7 +389,10 @@ func (m *model) handleAgentEvent(e agent.Event) {
 			return
 		}
 		if data.Message.Role == agent.RoleUser {
-			m.addItem(&session.UserMessage{Content: data.Message.Content})
+			if !m.hideNextUserMessage {
+				m.addItem(&session.UserMessage{Content: data.Message.Content})
+			}
+			m.hideNextUserMessage = false
 		}
 
 	case agent.EventTypeToolCallStart:
@@ -722,23 +736,40 @@ func (m *model) handleEnterKey(_ tea.KeyPressMsg, statusCmd tea.Cmd) (tea.Model,
 		return m, statusCmd
 	}
 
-	// Check for /btw command even when busy
-	if inv, ok := commands.ParseInvocation(prompt); ok && inv.Name == "btw" {
-		if inv.ArgsRaw == "" {
-			m.addItem(&session.ErrorItem{Message: "/btw requires a prompt"})
+	// Handle slash commands that need custom runtime behavior.
+	if inv, ok := commands.ParseInvocation(prompt); ok {
+		switch inv.Name {
+		case "btw":
+			if inv.ArgsRaw == "" {
+				m.addItem(&session.ErrorItem{Message: "/btw requires a prompt"})
+				m.input.SetValue("")
+				m.refreshViewport()
+				return m, statusCmd
+			}
+			if err := m.startBTWRun(inv.ArgsRaw); err != nil {
+				m.addItem(&session.ErrorItem{Message: err.Error()})
+				m.refreshViewport()
+				return m, statusCmd
+			}
 			m.input.SetValue("")
-			m.refreshViewport()
-			return m, statusCmd
+			cmd := m.btwStreamCmd
+			m.btwStreamCmd = nil
+			return m, tea.Batch(statusCmd, cmd)
+		case "compact":
+			if inv.ArgsRaw != "" {
+				m.addItem(&session.ErrorItem{Message: "/compact does not accept arguments"})
+				m.input.SetValue("")
+				m.refreshViewport()
+				return m, statusCmd
+			}
+			if m.busy {
+				m.addItem(&session.ErrorItem{Message: "cannot run /compact while another run is active"})
+				m.input.SetValue("")
+				m.refreshViewport()
+				return m, statusCmd
+			}
+			return m.beginAgentRunWithKind(compactPrompt(), runKindCompact)
 		}
-		if err := m.startBTWRun(inv.ArgsRaw); err != nil {
-			m.addItem(&session.ErrorItem{Message: err.Error()})
-			m.refreshViewport()
-			return m, statusCmd
-		}
-		m.input.SetValue("")
-		cmd := m.btwStreamCmd
-		m.btwStreamCmd = nil
-		return m, tea.Batch(statusCmd, cmd)
 	}
 
 	if m.busy {
@@ -784,6 +815,51 @@ func (m *model) handleEnterKey(_ tea.KeyPressMsg, statusCmd tea.Cmd) (tea.Model,
 	}
 
 	return m.beginAgentRun(prompt)
+}
+
+func compactPrompt() string {
+	return strings.TrimSpace(`Please compact the entire conversation context into a concise, actionable summary.
+
+Structure your response with exactly these sections:
+1. Goal
+2. Overall plan and current progress
+3. Remaining work and next step
+4. Lessons learned in previous work which should be remembered and applied for following work
+
+Requirements:
+- Use only information from the current session context.
+- Be specific and concrete.
+- Keep it brief but complete enough to continue work without losing context.`)
+}
+
+func (m *model) applyCompactedContext(turn *session.Turn) {
+	if m.runner == nil || turn == nil {
+		return
+	}
+
+	summary := latestAssistantMessage(turn.Items)
+	if summary == "" {
+		return
+	}
+
+	messages := []agent.Message{{Role: agent.RoleAssistant, Content: summary}}
+	if err := m.runner.Update(agent.WithMessages(messages)); err != nil {
+		m.addItem(&session.ErrorItem{Message: fmt.Sprintf("failed to apply compacted context: %v", err)})
+	}
+}
+
+func latestAssistantMessage(items []session.Item) string {
+	for i := len(items) - 1; i >= 0; i-- {
+		msg, ok := items[i].(*session.AssistantMessage)
+		if !ok {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content != "" {
+			return content
+		}
+	}
+	return ""
 }
 
 func (m *model) handleShellCommandDoneMsg(msg shellCommandDoneMsg, statusCmd tea.Cmd) (tea.Model, tea.Cmd) {
@@ -942,6 +1018,7 @@ func (m *model) beginRun() context.Context {
 	m.escPending = false
 	m.cancelledRun = false
 	m.showRunResult = false
+	m.currentRunKind = runKindNormal
 	runCtx, cancel := context.WithCancel(context.Background())
 	m.runCancel = cancel
 	m.refreshViewport()
@@ -949,13 +1026,22 @@ func (m *model) beginRun() context.Context {
 }
 
 func (m *model) beginAgentRun(prompt string) (tea.Model, tea.Cmd) {
+	return m.beginAgentRunWithKind(prompt, runKindNormal)
+}
+
+func (m *model) beginAgentRunWithKind(prompt string, kind runKind) (tea.Model, tea.Cmd) {
 	turn := m.session.StartTurn()
 	m.persistTurnStart(turn)
+	if kind == runKindCompact {
+		m.addItemToTurn(turn, &session.CompactionMarker{})
+		m.hideNextUserMessage = true
+	}
 	mentionedFiles := m.collectMentionedFileContents(prompt)
 	internalState := buildInternalState(m.session.TodoItems, mentionedFiles)
 	m.input.SetValue("")
 	m.updateMentionAutocomplete()
 	runCtx := m.beginRun()
+	m.currentRunKind = kind
 
 	return m, tea.Batch(startAgentStreamCmdWithContext(runCtx, m.runner, prompt, internalState), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
 		return m.spinner.Tick()
@@ -1182,6 +1268,9 @@ func (m *model) finalizeRun(runErr error) {
 		m.addItem(&session.ErrorItem{Message: runErr.Error()})
 	}
 	if turn := m.session.CurrentTurn(); turn != nil {
+		if runErr == nil && m.currentRunKind == runKindCompact {
+			m.applyCompactedContext(turn)
+		}
 		if m.cancelledRun {
 			turn.EndWithStatus("cancelled")
 		} else {
@@ -1190,6 +1279,8 @@ func (m *model) finalizeRun(runErr error) {
 		m.persistTurnEnd(turn)
 	}
 	m.cancelledRun = false
+	m.hideNextUserMessage = false
+	m.currentRunKind = runKindNormal
 	m.stream = nil
 	m.refreshViewport()
 	m.lastRefreshAt = time.Now()

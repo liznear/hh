@@ -372,3 +372,15 @@ func WithToolApprover(approver ToolApprover) Opt {
 		s.Approver = approver
 	}
 }
+
+func WithMessages(messages []Message) Opt {
+	return func(s *State) {
+		if len(messages) == 0 {
+			s.Messages = nil
+			return
+		}
+		cloned := make([]Message, len(messages))
+		copy(cloned, messages)
+		s.Messages = cloned
+	}
+}

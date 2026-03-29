@@ -380,6 +380,9 @@ func marshalItemToRaw(item Item) json.RawMessage {
 	case *ErrorItem:
 		typeStr = "error"
 		data = v
+	case *CompactionMarker:
+		typeStr = "compaction_marker"
+		data = v
 	case *End:
 		typeStr = "end"
 		data = v
@@ -463,6 +466,14 @@ func unmarshalItemFromRaw(raw json.RawMessage) (Item, error) {
 			return nil, err
 		}
 		return &errItem, nil
+	case "compaction_marker":
+		var marker CompactionMarker
+		if err := json.Unmarshal(raw, &struct {
+			Data *CompactionMarker `json:"data"`
+		}{Data: &marker}); err != nil {
+			return nil, err
+		}
+		return &marker, nil
 	case "end":
 		var end End
 		if err := json.Unmarshal(raw, &struct {

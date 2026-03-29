@@ -463,7 +463,8 @@ func isMessageBlock(item session.Item) bool {
 		session.ItemTypeThinkingBlock,
 		session.ItemTypeToolCall,
 		session.ItemTypeError,
-		session.ItemTypeBTWExchange:
+		session.ItemTypeBTWExchange,
+		session.ItemTypeCompactionMarker:
 		return true
 	default:
 		return false
@@ -499,6 +500,9 @@ func (m *model) renderItemLines(item session.Item, width int) []string {
 
 	case *session.BTWExchange:
 		lines = m.renderBTWExchangeWidget(v, width)
+
+	case *session.CompactionMarker:
+		lines = m.renderCompactionMarkerWidget(width)
 
 	default:
 		lines = []string{""}
@@ -561,6 +565,21 @@ func (m *model) renderBTWExchangeWidget(item *session.BTWExchange, width int) []
 		Render(strings.Join(contentLines, "\n"))
 
 	return strings.Split(box, "\n")
+}
+
+func (m *model) renderCompactionMarkerWidget(width int) []string {
+	innerWidth := max(10, width-2)
+	label := " Compaction "
+	labelWidth := ansi.StringWidth(label)
+	if labelWidth >= innerWidth {
+		return []string{lipgloss.NewStyle().Foreground(m.theme.Muted()).Render("-- Compaction --")}
+	}
+
+	ruleWidth := innerWidth - labelWidth
+	left := ruleWidth / 2
+	right := ruleWidth - left
+	line := strings.Repeat("─", left) + label + strings.Repeat("─", right)
+	return []string{lipgloss.NewStyle().Foreground(m.theme.Muted()).Render(line)}
 }
 
 func normalizeLinesForWidth(lines []string, width int) []string {

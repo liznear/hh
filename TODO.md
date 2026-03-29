@@ -8,7 +8,12 @@
 - [ ] Auto memory
 - [ ] Auto dream
 - [ ] Support copy content
-- [ ] Compact
+- [ ] Support copy image
+- [x] Compact
+- [ ] Fix resume
+- [ ] Move status line below the input area.
+- [ ] Add agent name in the run separator.
+- [ ] Fix queued badge not removed.
 - [x] Add path in grep tool line
 - [x] Read line show start and limit
 - [x] Support fine-grained bash permissions like claude.

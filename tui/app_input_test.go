@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -10,6 +11,31 @@ import (
 	"github.com/liznear/hh/config"
 	"github.com/liznear/hh/tui/session"
 )
+
+type captureProvider struct {
+	mu       sync.Mutex
+	requests []agent.ProviderRequest
+	response agent.ProviderResponse
+}
+
+func (p *captureProvider) ChatCompletionStream(_ context.Context, req agent.ProviderRequest, _ func(agent.ProviderStreamEvent) error) (agent.ProviderResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.requests = append(p.requests, req)
+	if p.response.Message.Role == "" {
+		p.response.Message.Role = agent.RoleAssistant
+	}
+	return p.response, nil
+}
+
+func (p *captureProvider) lastRequest() (agent.ProviderRequest, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.requests) == 0 {
+		return agent.ProviderRequest{}, false
+	}
+	return p.requests[len(p.requests)-1], true
+}
 
 type stubProvider struct{}
 
@@ -70,6 +96,26 @@ func TestHandleAgentEvent_MessageUserAppendsUserMessage(t *testing.T) {
 	}
 	if msg.Content != "from event" {
 		t.Fatalf("user message content = %q, want %q", msg.Content, "from event")
+	}
+}
+
+func TestHandleAgentEvent_MessageUserSkippedDuringCompactRun(t *testing.T) {
+	m := newInputTestModel()
+	m.hideNextUserMessage = true
+	turn := m.session.StartTurn()
+	before := len(turn.Items)
+
+	m.handleAgentEvent(agent.Event{
+		Type: agent.EventTypeMessage,
+		Data: agent.EventDataMessage{Message: agent.Message{Role: agent.RoleUser, Content: "hidden compact prompt"}},
+	})
+
+	after := len(turn.Items)
+	if after != before {
+		t.Fatalf("item count = %d, want %d", after, before)
+	}
+	if m.hideNextUserMessage {
+		t.Fatal("expected hideNextUserMessage to reset after skipping one user message")
 	}
 }
 

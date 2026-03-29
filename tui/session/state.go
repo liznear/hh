@@ -217,6 +217,7 @@ const (
 	ItemTypeError
 	ItemTypeEnd
 	ItemTypeBTWExchange
+	ItemTypeCompactionMarker
 )
 
 type Item interface {
@@ -357,6 +358,12 @@ func (b *BTWExchange) Type() ItemType { return ItemTypeBTWExchange }
 func (b *BTWExchange) AppendAnswer(delta string) {
 	b.Answer += delta
 }
+
+type CompactionMarker struct {
+	baseItem
+}
+
+func (c *CompactionMarker) Type() ItemType { return ItemTypeCompactionMarker }
 
 func generateID() string {
 	return time.Now().Format("20060102-150405")

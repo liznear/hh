@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/liznear/hh/agent"
 	"github.com/liznear/hh/config"
 	"github.com/liznear/hh/tui/commands"
 	"github.com/liznear/hh/tui/session"
@@ -273,5 +275,141 @@ func TestUpdate_ModelSlashCommandOpensPickerAndSwitchesModel(t *testing.T) {
 	}
 	if afterSelect.session.CurrentModel != "proxy/gpt-5.3-codex" {
 		t.Fatalf("session current model = %q, want %q", afterSelect.session.CurrentModel, "proxy/gpt-5.3-codex")
+	}
+}
+
+func TestBuiltInSlashCommands_IncludeCompact(t *testing.T) {
+	builtIn := commands.BuiltIn()
+	compact, ok := builtIn["compact"]
+	if !ok {
+		t.Fatal("expected /compact to be registered")
+	}
+	if compact.Action != commands.ActionCompact {
+		t.Fatalf("action = %q, want %q", compact.Action, commands.ActionCompact)
+	}
+}
+
+func TestUpdate_CompactSlashCommandStartsAgentRun(t *testing.T) {
+	m := newTestModel()
+	m.input.SetValue("/compact")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	after := updated.(*model)
+
+	if !after.busy {
+		t.Fatal("expected /compact to start an agent run")
+	}
+	if got := after.input.Value(); got != "" {
+		t.Fatalf("input = %q, want empty", got)
+	}
+	if got := len(after.session.Turns); got != 1 {
+		t.Fatalf("turn count = %d, want 1", got)
+	}
+}
+
+func TestUpdate_CompactSlashCommandRejectsArguments(t *testing.T) {
+	m := newTestModel()
+	m.input.SetValue("/compact now")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	after := updated.(*model)
+
+	last := after.session.LastItem()
+	errItem, ok := last.(*session.ErrorItem)
+	if !ok {
+		t.Fatalf("expected error item, got %T", last)
+	}
+	if errItem.Message != "/compact does not accept arguments" {
+		t.Fatalf("message = %q", errItem.Message)
+	}
+	if after.busy {
+		t.Fatal("expected /compact with args to not start run")
+	}
+}
+
+func TestCompactPromptIncludesRequiredSections(t *testing.T) {
+	prompt := compactPrompt()
+	required := []string{
+		"1. Goal",
+		"2. Overall plan and current progress",
+		"3. Remaining work and next step",
+		"4. Lessons learned in previous work which should be remembered and applied for following work",
+	}
+
+	for _, section := range required {
+		if !strings.Contains(prompt, section) {
+			t.Fatalf("missing section %q in compact prompt", section)
+		}
+	}
+}
+
+func TestUpdate_CompactSlashCommandAddsCompactionMarker(t *testing.T) {
+	m := newTestModel()
+	m.input.SetValue("/compact")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	after := updated.(*model)
+
+	turn := after.session.CurrentTurn()
+	if turn == nil {
+		t.Fatal("expected turn to exist")
+	}
+
+	found := false
+	for _, item := range turn.Items {
+		if _, ok := item.(*session.CompactionMarker); ok {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected compaction marker in compact run turn")
+	}
+}
+
+func TestHandleEnterKey_CompactRunResetsRunnerHistoryToSummary(t *testing.T) {
+	provider := &captureProvider{}
+	runner := agent.NewAgentRunner("test-model", provider)
+
+	if err := runner.Update(agent.WithMessages([]agent.Message{
+		{Role: agent.RoleUser, Content: "old user"},
+		{Role: agent.RoleAssistant, Content: "old assistant"},
+	})); err != nil {
+		t.Fatalf("seed runner history: %v", err)
+	}
+
+	m := newInputTestModel()
+	m.runner = runner
+	turn := m.session.StartTurn()
+	turn.AddItem(&session.CompactionMarker{})
+	turn.AddItem(&session.AssistantMessage{Content: "Compacted summary"})
+
+	m.applyCompactedContext(turn)
+
+	err := runner.Run(context.Background(), agent.Input{Content: "after compact", Type: "text"}, func(agent.Event) {})
+	if err != nil {
+		t.Fatalf("runner run: %v", err)
+	}
+
+	lastReq, ok := provider.lastRequest()
+	if !ok {
+		t.Fatal("expected captured provider request")
+	}
+
+	if len(lastReq.Messages) < 3 {
+		t.Fatalf("message count = %d, want >= 3", len(lastReq.Messages))
+	}
+
+	if got := lastReq.Messages[len(lastReq.Messages)-2]; got.Role != agent.RoleAssistant || !strings.Contains(got.Content, "Compacted summary") {
+		t.Fatalf("expected compact summary in history, got %+v", got)
+	}
+	if got := lastReq.Messages[len(lastReq.Messages)-1]; got.Role != agent.RoleUser || got.Content != "after compact" {
+		t.Fatalf("expected final user message 'after compact', got %+v", got)
+	}
+
+	for _, message := range lastReq.Messages {
+		if strings.Contains(message.Content, "old user") || strings.Contains(message.Content, "old assistant") {
+			t.Fatalf("found stale pre-compact history in request: %+v", message)
+		}
 	}
 }

@@ -1306,6 +1306,8 @@ func itemCacheSignature(item session.Item) (string, bool) {
 		return "error:" + v.Message, true
 	case *session.BTWExchange:
 		return "btw:" + v.Question + "\n" + v.Answer, true
+	case *session.CompactionMarker:
+		return "compaction-marker", true
 	default:
 		return "", false
 	}

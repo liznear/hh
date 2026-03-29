@@ -108,6 +108,21 @@ func TestRenderMessageList_ShowsCancelledTurnFooter(t *testing.T) {
 	}
 }
 
+func TestRenderMessageList_ShowsCompactionMarkerSeparator(t *testing.T) {
+	m := newTestModel()
+
+	turn := m.session.StartTurn()
+	turn.AddItem(&session.CompactionMarker{})
+
+	frame := ansi.Strip(m.renderMessageList(80, 10))
+	if !strings.Contains(frame, "Compaction") {
+		t.Fatalf("expected compaction marker in frame, got %q", frame)
+	}
+	if !strings.Contains(frame, "─") {
+		t.Fatalf("expected separator rule in compaction marker, got %q", frame)
+	}
+}
+
 func assertRenderedFrameFits(t *testing.T, frame string, width int, height int) {
 	t.Helper()
 
