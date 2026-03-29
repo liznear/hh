@@ -175,6 +175,14 @@ func TestLoadDefaultCatalog_IncludesSubAgentByGet(t *testing.T) {
 	if explorer.Type != AgentTypeSubAgent {
 		t.Fatalf("Explorer type = %q, want %q", explorer.Type, AgentTypeSubAgent)
 	}
+
+	reviewer, ok := catalog.Get("Reviewer")
+	if !ok {
+		t.Fatal("expected Reviewer sub-agent in catalog")
+	}
+	if reviewer.Type != AgentTypeSubAgent {
+		t.Fatalf("Reviewer type = %q, want %q", reviewer.Type, AgentTypeSubAgent)
+	}
 }
 
 func TestLoadDefaultCatalog_SubAgents(t *testing.T) {

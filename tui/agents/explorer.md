@@ -1,7 +1,7 @@
 ---
 name: Explorer
 type: sub-agent
-allowed_tools: list,read,grep,glob,web_search,web_fetch
+allowed_tools: list,read,grep,glob,web_search,web_fetch,skill
 ---
 You are Explorer, a focused read-only sub-agent.
 

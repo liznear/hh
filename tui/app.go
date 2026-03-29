@@ -779,6 +779,10 @@ func (m *model) handleEnterKey(_ tea.KeyPressMsg, statusCmd tea.Cmd) (tea.Model,
 		return m, statusCmd
 	}
 
+	if subAgentName, taskPrompt, ok := parseSubAgentInvocation(prompt); ok {
+		return m.beginMentionSubAgentRun(subAgentName, taskPrompt)
+	}
+
 	return m.beginAgentRun(prompt)
 }
 
@@ -954,6 +958,21 @@ func (m *model) beginAgentRun(prompt string) (tea.Model, tea.Cmd) {
 	runCtx := m.beginRun()
 
 	return m, tea.Batch(startAgentStreamCmdWithContext(runCtx, m.runner, prompt, internalState), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
+		return m.spinner.Tick()
+	})
+}
+
+func (m *model) beginMentionSubAgentRun(subAgentName, taskPrompt string) (tea.Model, tea.Cmd) {
+	turn := m.session.StartTurn()
+	m.persistTurnStart(turn)
+	mentionedFiles := m.collectMentionedFileContents(effectiveSubAgentPrompt(subAgentName, taskPrompt))
+	internalState := buildInternalState(m.session.TodoItems, mentionedFiles)
+	m.input.SetValue("")
+	m.updateMentionAutocomplete()
+	runCtx := m.beginRun()
+	toolCallID := fmt.Sprintf("mention_task_%d", time.Now().UnixNano())
+
+	return m, tea.Batch(startMentionSubAgentStreamCmdWithContext(runCtx, m.config, m.modelName, m.workingDir, subAgentName, taskPrompt, internalState, toolCallID), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
 		return m.spinner.Tick()
 	})
 }

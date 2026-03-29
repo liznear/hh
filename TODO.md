@@ -30,7 +30,7 @@
 - [x] Support btw
 - [x] Plan mode
 - [x] Resume
-- [ ] Review command (call a review subagent with the uncommitted changes, clickable)
+- [x] Review command (call a review subagent with the uncommitted changes, clickable)
 - [ ] Add path in grep tool line
 - [ ] Read line show start and limit
 - [x] Context usage is not cleaned up on /new
@@ -38,5 +38,6 @@
 - [ ] Auto dream
 - [ ] Support copy content
 - [x] Wrong wrapping
-- [ ] @ to show files.
+- [x] @ to show files.
+- [x] @ to call subagents
 - [ ] Compact
