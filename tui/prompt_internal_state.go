@@ -7,7 +7,7 @@ import (
 	"github.com/liznear/hh/tui/session"
 )
 
-func buildInternalState(todoItems []session.TodoItem) string {
+func buildInternalState(todoItems []session.TodoItem, mentionedFiles []mentionedFileContent) string {
 	timestamp := time.Now().UTC().Format(time.RFC3339)
 
 	b := strings.Builder{}
@@ -31,6 +31,19 @@ func buildInternalState(todoItems []session.TodoItem) string {
 		}
 
 		b.WriteString("</todo-items>\n")
+	}
+
+	for _, file := range mentionedFiles {
+		if strings.TrimSpace(file.Path) == "" {
+			continue
+		}
+		b.WriteString("<file-contents@")
+		b.WriteString(xmlEscape(file.Path))
+		b.WriteString(">\n")
+		b.WriteString(xmlEscape(file.Content))
+		b.WriteString("\n</file-contents@")
+		b.WriteString(xmlEscape(file.Path))
+		b.WriteString(">\n")
 	}
 
 	b.WriteString("</internal-state>")

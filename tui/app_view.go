@@ -141,9 +141,14 @@ func (m *model) renderInputPane(layout layoutState, status statusWidgetModel) st
 		inputBoxStyle = inputBoxStyle.Foreground(m.theme.Color(ThemeColorModelPickerMutedForeground))
 	}
 
+	popup := m.renderMentionAutocomplete(layout.inputBoxWidth)
 	inputBox := inputBoxStyle.Render(inputContent)
 
-	inputBlock := lipgloss.JoinVertical(lipgloss.Left, statusBlock, inputBox)
+	inputBlock := statusBlock
+	if popup != "" {
+		inputBlock = lipgloss.JoinVertical(lipgloss.Left, inputBlock, popup)
+	}
+	inputBlock = lipgloss.JoinVertical(lipgloss.Left, inputBlock, inputBox)
 	return lipgloss.NewStyle().
 		Width(layout.mainWidth).
 		Height(layout.inputHeight).
@@ -387,6 +392,15 @@ func (m *model) computeLayout(width, height int) layoutState {
 	}
 
 	messageH, inputH := computePaneHeights(innerH)
+	requiredInput := defaultInputLines + m.mentionAutocompleteHeight()
+	if requiredInput > inputH {
+		maxInput := max(1, innerH-1)
+		if requiredInput > maxInput {
+			requiredInput = maxInput
+		}
+		inputH = requiredInput
+		messageH = max(1, innerH-inputH)
+	}
 
 	return layoutState{
 		valid:          true,

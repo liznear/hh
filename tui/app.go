@@ -122,6 +122,9 @@ type runtimeState struct {
 
 	queuedSteering []queuedSteeringMessage
 
+	mentionSuggestions    []mentionSuggestion
+	mentionSelectionIndex int
+
 	ephemeralItems []ephemeralItem
 }
 
@@ -336,6 +339,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	m.updateMentionAutocomplete()
 	return m, tea.Batch(statusCmd, cmd)
 }
 
@@ -647,10 +651,18 @@ func (m *model) handleKeyPressMsg(msg tea.KeyPressMsg, statusCmd tea.Cmd, update
 	}
 
 	key := msg.Key()
-	if key.Code == tea.KeyTab && !m.busy {
-		if err := m.switchToNextAgent(); err != nil {
-			m.addItem(&session.ErrorItem{Message: err.Error()})
+	if key.Code == tea.KeyTab {
+		if m.applyMentionAutocomplete() {
+			return m, statusCmd
 		}
+		if !m.busy {
+			if err := m.switchToNextAgent(); err != nil {
+				m.addItem(&session.ErrorItem{Message: err.Error()})
+			}
+			return m, statusCmd
+		}
+	}
+	if m.handleMentionSelectionKey(msg) {
 		return m, statusCmd
 	}
 
@@ -699,6 +711,7 @@ func (m *model) handleKeyPressMsg(msg tea.KeyPressMsg, statusCmd tea.Cmd, update
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	m.updateMentionAutocomplete()
 	return m, tea.Batch(statusCmd, cmd)
 }
 
@@ -934,8 +947,10 @@ func (m *model) beginRun() context.Context {
 func (m *model) beginAgentRun(prompt string) (tea.Model, tea.Cmd) {
 	turn := m.session.StartTurn()
 	m.persistTurnStart(turn)
-	internalState := buildInternalState(m.session.TodoItems)
+	mentionedFiles := m.collectMentionedFileContents(prompt)
+	internalState := buildInternalState(m.session.TodoItems, mentionedFiles)
 	m.input.SetValue("")
+	m.updateMentionAutocomplete()
 	runCtx := m.beginRun()
 
 	return m, tea.Batch(startAgentStreamCmdWithContext(runCtx, m.runner, prompt, internalState), m.stopwatch.Reset(), m.stopwatch.Start(), func() tea.Msg {
