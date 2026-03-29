@@ -59,8 +59,11 @@ func TestBuildSystemPrompt_AppendsSkillsFrontmatter(t *testing.T) {
 	if !strings.Contains(got, "<available_skills>") {
 		t.Fatalf("expected available_skills block in result: %q", got)
 	}
-	if !strings.Contains(got, "<name>cleanup</name>") {
-		t.Fatalf("expected cleanup skill in result: %q", got)
+	if !strings.Contains(got, "Session context: this session started at ") {
+		t.Fatalf("expected session start timestamp context in result: %q", got)
+	}
+	if !strings.Contains(got, "T") || !strings.Contains(got, "Z") {
+		t.Fatalf("expected RFC3339 timestamp in result: %q", got)
 	}
 }
 

@@ -9,8 +9,17 @@ import (
 
 func TestBuildInternalState_NoTodos(t *testing.T) {
 	got := buildInternalState(nil)
-	if got != "" {
-		t.Fatalf("internal state mismatch: got %q, want empty", got)
+	for _, want := range []string{
+		"<internal-state>",
+		"<timestamp>",
+		"</internal-state>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected internal state to contain %q, got %q", want, got)
+		}
+	}
+	if strings.Contains(got, "<todo-items>") {
+		t.Fatalf("expected no todo-items block, got %q", got)
 	}
 }
 
@@ -24,6 +33,7 @@ func TestBuildInternalState_WithTodos(t *testing.T) {
 
 	for _, want := range []string{
 		"<internal-state>",
+		"<timestamp>",
 		"<todo-items>",
 		"<todo-item>",
 		"<content>Write tests</content>",

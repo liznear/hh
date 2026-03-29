@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/liznear/hh/agent"
 	"github.com/liznear/hh/config"
@@ -75,6 +76,9 @@ func buildSystemPrompt(base string, skillCatalog skills.Catalog, workingDir stri
 	if base != "" {
 		parts = append(parts, base)
 	}
+
+	timestamp := time.Now().UTC().Format(time.RFC3339)
+	parts = append(parts, fmt.Sprintf("Session context: this session started at %s.", timestamp))
 
 	skillBlock := strings.TrimSpace(skillCatalog.PromptFrontmatterBlock())
 	if skillBlock != "" {
