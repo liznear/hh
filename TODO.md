@@ -12,7 +12,7 @@
 - [ ] Support rendering memaid graph.
 - [x] Subagent doesn't have question tool, but LLM still try. Fix prompt injection.
 - [x] Subagent failure is not rendered in the main session.
-- [ ] Know current date.
+- [x] Know current date.
 - [x] Error message is not wrapped
 - [x] Table style
 - [x] Don't make the line changes number bold
