@@ -41,3 +41,33 @@ func TestFormatSessionForViewport_ReusesAndUpdatesItemRenderCache(t *testing.T) 
 		t.Fatalf("expected cache size to stay 1 after update, got %d", got)
 	}
 }
+
+func TestItemCacheSignature_UserMessageIncludesQueuedFlag(t *testing.T) {
+	queuedSig, ok := itemCacheSignature(&session.UserMessage{Content: "same", Queued: true})
+	if !ok {
+		t.Fatal("expected queued user message signature")
+	}
+
+	normalSig, ok := itemCacheSignature(&session.UserMessage{Content: "same", Queued: false})
+	if !ok {
+		t.Fatal("expected normal user message signature")
+	}
+
+	if queuedSig == normalSig {
+		t.Fatalf("expected different signatures for queued vs non-queued user messages, got %q", queuedSig)
+	}
+}
+
+func TestSetCachedRenderedItem_DoesNotCacheQueuedUserMessage(t *testing.T) {
+	m := newTestModel()
+
+	m.setCachedRenderedItem(&session.UserMessage{Content: "steer", Queued: true}, 80, []string{"Queued steer"})
+	if got := len(m.itemRenderCache); got != 0 {
+		t.Fatalf("expected queued user message not to be cached, got %d entries", got)
+	}
+
+	m.setCachedRenderedItem(&session.UserMessage{Content: "steer", Queued: false}, 80, []string{"steer"})
+	if got := len(m.itemRenderCache); got != 1 {
+		t.Fatalf("expected normal user message to be cached, got %d entries", got)
+	}
+}

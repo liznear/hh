@@ -1250,6 +1250,9 @@ func (m *model) getCachedRenderedItem(item session.Item, width int) ([]string, b
 	if item == nil {
 		return nil, false
 	}
+	if msg, ok := item.(*session.UserMessage); ok && msg.Queued {
+		return nil, false
+	}
 	if tc, ok := item.(*session.ToolCallItem); ok && tc.Status == session.ToolCallStatusPending {
 		return nil, false
 	}
@@ -1277,6 +1280,9 @@ func (m *model) setCachedRenderedItem(item session.Item, width int, lines []stri
 		return
 	}
 	if item == nil {
+		return
+	}
+	if msg, ok := item.(*session.UserMessage); ok && msg.Queued {
 		return
 	}
 	if tc, ok := item.(*session.ToolCallItem); ok && tc.Status == session.ToolCallStatusPending {
@@ -1312,7 +1318,7 @@ func itemCacheKey(item session.Item) uintptr {
 func itemCacheSignature(item session.Item) (string, bool) {
 	switch v := item.(type) {
 	case *session.UserMessage:
-		return "user:" + v.Content, true
+		return fmt.Sprintf("user:%t:%s", v.Queued, v.Content), true
 	case *session.ShellMessage:
 		return "shell:" + v.Command + "\n" + v.Output, true
 	case *session.AssistantMessage:
