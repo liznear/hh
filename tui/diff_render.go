@@ -2,13 +2,14 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"strconv"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/aymanbagabas/go-udiff"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -106,12 +107,12 @@ func countHunkLines(h *udiff.Hunk) (before, after int) {
 
 // lineStyle defines colors for a line type in the diff view.
 type lineStyle struct {
-	lineNumBg lipgloss.Color
-	lineNumFg lipgloss.Color
-	symbolBg  lipgloss.Color
-	symbolFg  lipgloss.Color
-	codeBg    lipgloss.Color
-	codeFg    lipgloss.Color
+	lineNumBg color.Color
+	lineNumFg color.Color
+	symbolBg  color.Color
+	symbolFg  color.Color
+	codeBg    color.Color
+	codeFg    color.Color
 }
 
 // RenderSplitDiff renders a split (side-by-side) diff view.
@@ -169,11 +170,11 @@ func RenderSplitDiff(oldContent, newContent, filePath string, width int, theme T
 
 	// Equal/context line style (no special background)
 	equalStyle := lineStyle{
-		lineNumBg: lipgloss.Color(""),
+		lineNumBg: nil,
 		lineNumFg: lipgloss.Color("8"), // muted
-		symbolBg:  lipgloss.Color(""),
-		symbolFg:  lipgloss.Color(""),
-		codeBg:    lipgloss.Color(""),
+		symbolBg:  nil,
+		symbolFg:  nil,
+		codeBg:    nil,
 		codeFg:    theme.Foreground(),
 	}
 
@@ -302,11 +303,11 @@ func RenderUnifiedDiff(oldContent, newContent, filePath string, width int, theme
 	}
 
 	equalStyle := lineStyle{
-		lineNumBg: lipgloss.Color(""),
+		lineNumBg: nil,
 		lineNumFg: lipgloss.Color("8"),
-		symbolBg:  lipgloss.Color(""),
-		symbolFg:  lipgloss.Color(""),
-		codeBg:    lipgloss.Color(""),
+		symbolBg:  nil,
+		symbolFg:  nil,
+		codeBg:    nil,
 		codeFg:    theme.Foreground(),
 	}
 
@@ -516,7 +517,7 @@ func buildCell(hasContent bool, line udiff.Line, lineNum, numWidth, cellWidth in
 }
 
 // buildSeparator creates a separator with background colors from each side
-func buildSeparator(leftBg, rightBg lipgloss.Color) string {
+func buildSeparator(leftBg, rightBg color.Color) string {
 	// Left space with left background
 	leftSpace := lipgloss.NewStyle().Background(leftBg).Render(" ")
 	// Vertical bar (no background)
@@ -554,7 +555,7 @@ func getChromaStyle() *chroma.Style {
 	})
 }
 
-func highlightCode(source string, lexer chroma.Lexer, style *chroma.Style, bgColor lipgloss.Color) string {
+func highlightCode(source string, lexer chroma.Lexer, style *chroma.Style, bgColor color.Color) string {
 	if strings.TrimSpace(source) == "" {
 		return source
 	}
@@ -569,7 +570,7 @@ func highlightCode(source string, lexer chroma.Lexer, style *chroma.Style, bgCol
 		entry := style.Get(token.Type)
 
 		s := lipgloss.NewStyle()
-		if bgColor != "" {
+		if bgColor != nil {
 			s = s.Background(bgColor)
 		}
 
@@ -604,7 +605,7 @@ func shrinkStringWidth(s string, width int) string {
 }
 
 // wrapString wraps a string to fit within the given width, returning multiple lines
-func wrapString(s string, width int, bg lipgloss.Color) []string {
+func wrapString(s string, width int, bg color.Color) []string {
 	if width <= 0 {
 		return []string{s}
 	}

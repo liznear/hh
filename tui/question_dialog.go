@@ -1,12 +1,12 @@
 package tui
 
 import (
+	"charm.land/lipgloss/v2"
 	"fmt"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/liznear/hh/agent"
 )
 

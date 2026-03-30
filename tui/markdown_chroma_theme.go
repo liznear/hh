@@ -3,9 +3,9 @@ package tui
 import (
 	"sync"
 
+	glamouransi "charm.land/glamour/v2/ansi"
 	"github.com/alecthomas/chroma"
 	"github.com/alecthomas/chroma/styles"
-	glamouransi "github.com/charmbracelet/glamour/ansi"
 )
 
 const thinkingCodeBlockThemeName = "hh-thinking-muted"

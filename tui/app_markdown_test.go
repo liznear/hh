@@ -1,11 +1,10 @@
 package tui
 
 import (
+	"charm.land/glamour/v2/styles"
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/charmbracelet/glamour"
 )
 
 func TestRenderMarkdown_RendersModeratelyLargeMarkdown(t *testing.T) {
@@ -38,14 +37,19 @@ func TestRenderMarkdownThinking_PreservesSyntaxHighlightingInCodeBlock(t *testin
 	content := "```go\nfunc main() { return }\n```"
 	rendered := RenderMarkdown(content, 80, ThinkingOption())
 
-	re := regexp.MustCompile(`\x1b\[38;5;(\d+)m`)
+	re := regexp.MustCompile(`\x1b\[38;(?:5;(\d+)|2;(\d+;\d+;\d+))m`)
 	matches := re.FindAllStringSubmatch(rendered, -1)
 	seen := map[string]struct{}{}
 	for _, m := range matches {
-		if len(m) != 2 {
+		if len(m) != 3 {
 			continue
 		}
-		seen[m[1]] = struct{}{}
+		if m[1] != "" {
+			seen["idx:"+m[1]] = struct{}{}
+		}
+		if m[2] != "" {
+			seen["rgb:"+m[2]] = struct{}{}
+		}
 	}
 	if len(seen) < 3 {
 		t.Fatalf("expected multiple muted syntax colors in code block, got %q", rendered)
@@ -53,7 +57,7 @@ func TestRenderMarkdownThinking_PreservesSyntaxHighlightingInCodeBlock(t *testin
 }
 
 func TestThinkingOption(t *testing.T) {
-	original := *glamour.DefaultStyles["light"]
+	original := *styles.DefaultStyles[styles.LightStyle]
 	style := original
 	opt := ThinkingOption()
 	opt.apply(&style)

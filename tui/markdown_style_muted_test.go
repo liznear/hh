@@ -1,10 +1,9 @@
 package tui
 
 import (
+	glamouransi "charm.land/glamour/v2/ansi"
 	"strings"
 	"testing"
-
-	glamouransi "github.com/charmbracelet/glamour/ansi"
 )
 
 func TestMutedStyleConfig_MutesColorFieldsAndPreservesOriginal(t *testing.T) {

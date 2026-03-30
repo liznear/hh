@@ -1,6 +1,9 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"charm.land/lipgloss/v2"
+	"image/color"
+)
 
 const (
 	ThemeColorShellMessageBackground        = "shell_message_background"
@@ -28,22 +31,22 @@ const (
 )
 
 type Base16Palette struct {
-	Base00 lipgloss.Color
-	Base01 lipgloss.Color
-	Base02 lipgloss.Color
-	Base03 lipgloss.Color
-	Base04 lipgloss.Color
-	Base05 lipgloss.Color
-	Base06 lipgloss.Color
-	Base07 lipgloss.Color
-	Base08 lipgloss.Color
-	Base09 lipgloss.Color
-	Base0A lipgloss.Color
-	Base0B lipgloss.Color
-	Base0C lipgloss.Color
-	Base0D lipgloss.Color
-	Base0E lipgloss.Color
-	Base0F lipgloss.Color
+	Base00 color.Color
+	Base01 color.Color
+	Base02 color.Color
+	Base03 color.Color
+	Base04 color.Color
+	Base05 color.Color
+	Base06 color.Color
+	Base07 color.Color
+	Base08 color.Color
+	Base09 color.Color
+	Base0A color.Color
+	Base0B color.Color
+	Base0C color.Color
+	Base0D color.Color
+	Base0E color.Color
+	Base0F color.Color
 }
 
 func TerminalBase16Palette() Base16Palette {
@@ -106,47 +109,47 @@ func DefaultTheme() Theme {
 	return NewTheme(TerminalBase16Palette())
 }
 
-func (t Theme) Background() lipgloss.Color {
+func (t Theme) Background() color.Color {
 	return t.palette.Base00
 }
 
-func (t Theme) Surface() lipgloss.Color {
+func (t Theme) Surface() color.Color {
 	return t.palette.Base01
 }
 
-func (t Theme) Foreground() lipgloss.Color {
+func (t Theme) Foreground() color.Color {
 	return t.palette.Base05
 }
 
-func (t Theme) Emphasis() lipgloss.Color {
+func (t Theme) Emphasis() color.Color {
 	return t.palette.Base06
 }
 
-func (t Theme) Muted() lipgloss.Color {
+func (t Theme) Muted() color.Color {
 	return t.palette.Base03
 }
 
-func (t Theme) Error() lipgloss.Color {
+func (t Theme) Error() color.Color {
 	return t.palette.Base08
 }
 
-func (t Theme) Warning() lipgloss.Color {
+func (t Theme) Warning() color.Color {
 	return t.palette.Base09
 }
 
-func (t Theme) Success() lipgloss.Color {
+func (t Theme) Success() color.Color {
 	return t.palette.Base0B
 }
 
-func (t Theme) Info() lipgloss.Color {
+func (t Theme) Info() color.Color {
 	return t.palette.Base0D
 }
 
-func (t Theme) Accent() lipgloss.Color {
+func (t Theme) Accent() color.Color {
 	return t.palette.Base0E
 }
 
-func (t Theme) Color(usage string) lipgloss.Color {
+func (t Theme) Color(usage string) color.Color {
 	baseName, ok := t.usageToBase[usage]
 	if !ok {
 		return t.Foreground()
@@ -159,7 +162,7 @@ func (t Theme) Color(usage string) lipgloss.Color {
 	return color
 }
 
-func (t Theme) colorByBaseName(baseName string) (lipgloss.Color, bool) {
+func (t Theme) colorByBaseName(baseName string) (color.Color, bool) {
 	switch baseName {
 	case "Base00":
 		return t.palette.Base00, true
@@ -194,6 +197,6 @@ func (t Theme) colorByBaseName(baseName string) (lipgloss.Color, bool) {
 	case "Base0F":
 		return t.palette.Base0F, true
 	default:
-		return "", false
+		return nil, false
 	}
 }

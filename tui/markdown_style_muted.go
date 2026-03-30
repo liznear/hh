@@ -1,13 +1,12 @@
 package tui
 
 import (
+	glamouransi "charm.land/glamour/v2/ansi"
 	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
-
-	glamouransi "github.com/charmbracelet/glamour/ansi"
 )
 
 type rgbColor struct {

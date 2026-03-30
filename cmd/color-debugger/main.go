@@ -1,9 +1,10 @@
 package main
 
 import (
+	"charm.land/lipgloss/v2"
 	"fmt"
+	"image/color"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/liznear/hh/tui"
 )
 
@@ -13,7 +14,7 @@ func main() {
 	palette := tui.TerminalBase16Palette()
 	entries := []struct {
 		name  string
-		color lipgloss.Color
+		color color.Color
 	}{
 		{name: "Base00", color: palette.Base00},
 		{name: "Base01", color: palette.Base01},

@@ -10,12 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/liznear/hh/agent"
 	"github.com/liznear/hh/config"
 	"github.com/liznear/hh/tools"
 	"github.com/liznear/hh/tui/commands"
 	"github.com/liznear/hh/tui/session"
+	"image/color"
 	"os"
 	"os/exec"
 	"strconv"
@@ -1504,7 +1504,7 @@ func newTextareaInput() textarea.Model {
 	return in
 }
 
-func applyTextareaPromptColor(in *textarea.Model, promptColor lipgloss.Color) {
+func applyTextareaPromptColor(in *textarea.Model, promptColor color.Color) {
 	styles := textarea.DefaultStyles(false)
 	styles.Focused.Base = styles.Focused.Base.UnsetBackground()
 	styles.Focused.Text = styles.Focused.Text.UnsetBackground()

@@ -1,6 +1,10 @@
 package tui
 
 import (
+	"charm.land/glamour/v2"
+	glamouransi "charm.land/glamour/v2/ansi"
+	"charm.land/glamour/v2/styles"
+	"charm.land/lipgloss/v2"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,9 +14,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/glamour"
-	glamouransi "github.com/charmbracelet/glamour/ansi"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/liznear/hh/agent"
 	"github.com/liznear/hh/tools"
@@ -238,7 +239,6 @@ func (m *model) buildSidebarLines(sidebarWidth int) []string {
 			sidebarLines = append(sidebarLines, renderModifiedFileLine(contentWidth, file, success, errorStyle))
 			m.sidebarModifiedFileLines = append(m.sidebarModifiedFileLines, sidebarModifiedFileLine{Line: lineNumber, Path: file.Path})
 		}
-		sidebarLines = append(sidebarLines, warning.Render("click file to open diff"))
 	}
 
 	if len(m.session.TodoItems) > 0 {
@@ -1371,7 +1371,7 @@ func getMarkdownRenderer(width int, opts ...markdownRenderOption) *glamour.TermR
 		return renderer
 	}
 
-	style := *glamour.DefaultStyles["light"]
+	style := *styles.DefaultStyles[styles.LightStyle]
 	if style.Document.Margin != nil {
 		*style.Document.Margin = 2
 	}
