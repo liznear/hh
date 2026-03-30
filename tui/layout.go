@@ -7,6 +7,6 @@ const (
 	mainSidebarGap    = 3
 	inputStatusLines  = 2
 	inputInnerLines   = 3
-	inputBorderLines  = 2
+	inputBorderLines  = 0
 	defaultInputLines = inputStatusLines + inputInnerLines + inputBorderLines
 )

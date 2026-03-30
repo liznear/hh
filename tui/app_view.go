@@ -125,14 +125,9 @@ func (m *model) renderMessagePane(layout layoutState, messageList string) string
 }
 
 func (m *model) renderInputPane(layout layoutState, status statusWidgetModel) string {
-	statusLine := renderStatusWidget(status, m.theme)
-	statusBlock := lipgloss.JoinVertical(lipgloss.Left, "", "", statusLine)
-
 	inputContent := m.input.View()
 	inputBoxStyle := lipgloss.NewStyle().
 		Width(layout.inputBoxWidth).
-		Border(lipgloss.NormalBorder(), true, false, false, false).
-		BorderForeground(m.theme.Color(ThemeColorInputBorder)).
 		Height(inputInnerLines)
 
 	if m.taskSessionView != nil {
@@ -141,14 +136,17 @@ func (m *model) renderInputPane(layout layoutState, status statusWidgetModel) st
 		inputBoxStyle = inputBoxStyle.Foreground(m.theme.Color(ThemeColorModelPickerMutedForeground))
 	}
 
-	popup := m.renderMentionAutocomplete(layout.inputBoxWidth)
 	inputBox := inputBoxStyle.Render(inputContent)
 
-	inputBlock := statusBlock
+	statusLine := renderStatusWidget(status, m.theme)
+	statusBlock := lipgloss.JoinVertical(lipgloss.Left, "", statusLine)
+
+	inputBlock := inputBox
+	popup := m.renderMentionAutocomplete(layout.inputBoxWidth)
 	if popup != "" {
 		inputBlock = lipgloss.JoinVertical(lipgloss.Left, inputBlock, popup)
 	}
-	inputBlock = lipgloss.JoinVertical(lipgloss.Left, inputBlock, inputBox)
+	inputBlock = lipgloss.JoinVertical(lipgloss.Left, inputBlock, statusBlock)
 	return lipgloss.NewStyle().
 		Width(layout.mainWidth).
 		Height(layout.inputHeight).
