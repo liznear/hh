@@ -73,7 +73,7 @@ func TestRenderMessageList_ShowsMutedTurnFooterAfterAssistantOnTurnEnd(t *testin
 	lines := strings.Split(frame, "\n")
 
 	assistantIdx := lineIndexContaining(lines, "assistant message")
-	footerIdx := lineIndexContaining(lines, "◆ test-model 0s")
+	footerIdx := lineIndexContaining(lines, "◆ Build · test-model 0s")
 
 	if assistantIdx < 0 || footerIdx < 0 {
 		t.Fatalf("missing assistant or footer in frame: %q", frame)
@@ -84,7 +84,7 @@ func TestRenderMessageList_ShowsMutedTurnFooterAfterAssistantOnTurnEnd(t *testin
 	if footerIdx != assistantIdx+2 {
 		t.Fatalf("expected exactly one blank line before footer, got assistant=%d footer=%d", assistantIdx, footerIdx)
 	}
-	if !strings.Contains(lines[footerIdx], "◆ test-model 0s") || !strings.Contains(lines[footerIdx], "─") {
+	if !strings.Contains(lines[footerIdx], "◆ Build · test-model 0s") || !strings.Contains(lines[footerIdx], "─") {
 		t.Fatalf("expected footer metadata and separator on same line, got %q", lines[footerIdx])
 	}
 }
@@ -99,11 +99,11 @@ func TestRenderMessageList_ShowsCancelledTurnFooter(t *testing.T) {
 	frame := ansi.Strip(m.renderMessageList(120, 40))
 	lines := strings.Split(frame, "\n")
 
-	footerIdx := lineIndexContaining(lines, "◆ test-model 0s Cancelled")
+	footerIdx := lineIndexContaining(lines, "◆ Build · test-model 0s Cancelled")
 	if footerIdx < 0 {
 		t.Fatalf("missing cancelled footer in frame: %q", frame)
 	}
-	if !strings.Contains(lines[footerIdx], "◆ test-model 0s Cancelled") || !strings.Contains(lines[footerIdx], "─") {
+	if !strings.Contains(lines[footerIdx], "◆ Build · test-model 0s Cancelled") || !strings.Contains(lines[footerIdx], "─") {
 		t.Fatalf("expected cancelled footer metadata and separator on same line, got %q", lines[footerIdx])
 	}
 }

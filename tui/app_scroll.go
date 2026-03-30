@@ -389,7 +389,7 @@ func (m *model) renderItemLinesAt(items []session.Item, idx int, width int) []st
 
 	if _, ok := items[idx].(*session.End); ok {
 		modelName, duration, status := turnFooterMeta(items, idx, m.modelName)
-		footer := m.renderTurnFooterWidget(modelName, duration, status, width)
+		footer := m.renderTurnFooterWidget(m.agentName, modelName, duration, status, width)
 		return append([]string{""}, footer...)
 	}
 

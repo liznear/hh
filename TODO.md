@@ -9,11 +9,11 @@
 - [ ] Auto dream
 - [ ] Support copy content
 - [ ] Support copy image
+- [ ] Fix queued badge not removed.
 - [x] Compact
 - [x] Fix resume
 - [x] Move status line below the input area.
-- [ ] Add agent name in the run separator.
-- [ ] Fix queued badge not removed.
+- [x] Add agent name in the run separator.
 - [x] Add path in grep tool line
 - [x] Read line show start and limit
 - [x] Support fine-grained bash permissions like claude.

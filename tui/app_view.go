@@ -584,15 +584,23 @@ func (m *model) renderThinkingWidget(item *session.ThinkingBlock, width int) []s
 	return strings.Split(renderedMarkdown, "\n")
 }
 
-func (m *model) renderTurnFooterWidget(modelName string, duration time.Duration, status string, width int) []string {
+func (m *model) renderTurnFooterWidget(agentName string, modelName string, duration time.Duration, status string, width int) []string {
 	bodyWidth := max(1, width-2)
 	muted := lipgloss.NewStyle().Foreground(m.theme.Color(ThemeColorTurnFooterForeground))
+
+	base := strings.TrimSpace(agentName)
+	if base == "" {
+		base = "Build"
+	}
+	if strings.TrimSpace(modelName) != "" {
+		base = fmt.Sprintf("%s · %s", base, modelName)
+	}
 
 	statusLabel := ""
 	if strings.EqualFold(status, "cancelled") {
 		statusLabel = " Cancelled"
 	}
-	meta := strings.TrimSpace(fmt.Sprintf("◆ %s %s%s", modelName, formatElapsedSeconds(duration), statusLabel))
+	meta := strings.TrimSpace(fmt.Sprintf("◆ %s %s%s", base, formatElapsedSeconds(duration), statusLabel))
 	if ansi.StringWidth(meta) >= bodyWidth {
 		return []string{"  " + muted.Render(truncateToWidth(meta, bodyWidth))}
 	}
