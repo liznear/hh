@@ -155,10 +155,17 @@ func (m *model) renderInputPane(layout layoutState, status statusWidgetModel) st
 }
 
 func (m *model) renderMainPane(layout layoutState, messagePane string, inputPane string) string {
+	if !layout.showInputSeparator {
+		return lipgloss.NewStyle().
+			Width(layout.mainWidth).
+			Height(layout.innerHeight).
+			Render(lipgloss.JoinVertical(lipgloss.Left, messagePane, inputPane))
+	}
+
 	return lipgloss.NewStyle().
 		Width(layout.mainWidth).
 		Height(layout.innerHeight).
-		Render(lipgloss.JoinVertical(lipgloss.Left, messagePane, inputPane))
+		Render(lipgloss.JoinVertical(lipgloss.Left, messagePane, "", inputPane))
 }
 
 func (m *model) buildSidebarLines(sidebarWidth int) []string {
@@ -353,6 +360,8 @@ func (m *model) newAppView(content string) tea.View {
 const (
 	inputBoxWidthOffset  = 0
 	inputTextWidthOffset = 0
+	inputSeparatorHeight = 1
+	minimumHeightWithSep = 3
 )
 
 type layoutState struct {
@@ -364,9 +373,10 @@ type layoutState struct {
 	innerWidth  int
 	innerHeight int
 
-	showSidebar  bool
-	mainWidth    int
-	sidebarWidth int
+	showSidebar        bool
+	showInputSeparator bool
+	mainWidth          int
+	sidebarWidth       int
 
 	messageHeight int
 	inputHeight   int
@@ -383,36 +393,43 @@ func (m *model) computeLayout(width, height int) layoutState {
 	innerW := max(1, width-(appPadding*2))
 	innerH := max(1, height-(appPadding*2))
 	showSidebar := width > sidebarHideWidth
+	showInputSeparator := innerH >= minimumHeightWithSep
 
 	mainW := innerW
 	if showSidebar {
 		mainW = max(1, innerW-sidebarWidth-mainSidebarGap)
 	}
 
-	messageH, inputH := computePaneHeights(innerH)
+	contentH := innerH
+	if showInputSeparator {
+		contentH = max(1, innerH-inputSeparatorHeight)
+	}
+
+	messageH, inputH := computePaneHeights(contentH)
 	requiredInput := defaultInputLines + m.mentionAutocompleteHeight()
 	if requiredInput > inputH {
-		maxInput := max(1, innerH-1)
+		maxInput := max(1, contentH-1)
 		if requiredInput > maxInput {
 			requiredInput = maxInput
 		}
 		inputH = requiredInput
-		messageH = max(1, innerH-inputH)
+		messageH = max(1, contentH-inputH)
 	}
 
 	return layoutState{
-		valid:          true,
-		outerWidth:     width,
-		outerHeight:    height,
-		innerWidth:     innerW,
-		innerHeight:    innerH,
-		showSidebar:    showSidebar,
-		mainWidth:      mainW,
-		sidebarWidth:   sidebarWidth,
-		messageHeight:  messageH,
-		inputHeight:    inputH,
-		inputBoxWidth:  max(1, mainW-inputBoxWidthOffset),
-		inputTextWidth: max(1, mainW-inputTextWidthOffset),
+		valid:              true,
+		outerWidth:         width,
+		outerHeight:        height,
+		innerWidth:         innerW,
+		innerHeight:        innerH,
+		showSidebar:        showSidebar,
+		showInputSeparator: showInputSeparator,
+		mainWidth:          mainW,
+		sidebarWidth:       sidebarWidth,
+		messageHeight:      messageH,
+		inputHeight:        inputH,
+		inputBoxWidth:      max(1, mainW-inputBoxWidthOffset),
+		inputTextWidth:     max(1, mainW-inputTextWidthOffset),
 	}
 }
 
