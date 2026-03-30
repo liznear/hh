@@ -249,6 +249,8 @@ func (s *Storage) LoadItems(id string) ([]ItemEntry, error) {
 
 	var entries []ItemEntry
 	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 10*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
