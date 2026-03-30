@@ -10,8 +10,8 @@
 - [ ] Support copy content
 - [ ] Support copy image
 - [x] Compact
-- [ ] Fix resume
-- [ ] Move status line below the input area.
+- [x] Fix resume
+- [x] Move status line below the input area.
 - [ ] Add agent name in the run separator.
 - [ ] Fix queued badge not removed.
 - [x] Add path in grep tool line
