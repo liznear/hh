@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,17 +14,24 @@ import (
 
 func TestBuildMentionSuggestions_SubAgentsBeforePathsAndLimit(t *testing.T) {
 	origSubAgents := listSubAgents
-	origPaths := listMentionPaths
+	origGlob := globMentionPaths
 	defer func() {
 		listSubAgents = origSubAgents
-		listMentionPaths = origPaths
+		globMentionPaths = origGlob
 	}()
 
 	listSubAgents = func() ([]string, error) {
 		return []string{"explorer", "tester"}, nil
 	}
-	listMentionPaths = func(string) ([]mentionPath, error) {
-		return []mentionPath{{Value: "alpha/"}, {Value: "beta.txt"}, {Value: "docs/tree.md"}, {Value: "target.txt"}, {Value: "tmp/file.txt"}, {Value: "todo.md"}}, nil
+	globMentionPaths = func(string, string) ([]mentionPath, error) {
+		return []mentionPath{
+			{Value: "alpha/"},
+			{Value: "beta.txt"},
+			{Value: "docs/tree.md"},
+			{Value: "target.txt"},
+			{Value: "tmp/file.txt"},
+			{Value: "todo.md"},
+		}, nil
 	}
 
 	suggestions, err := buildMentionSuggestions("", ".")
@@ -43,16 +51,16 @@ func TestBuildMentionSuggestions_SubAgentsBeforePathsAndLimit(t *testing.T) {
 
 func TestBuildMentionSuggestions_IgnoredPathsComeAfterRegularPaths(t *testing.T) {
 	origSubAgents := listSubAgents
-	origPaths := listMentionPaths
+	origGlob := globMentionPaths
 	defer func() {
 		listSubAgents = origSubAgents
-		listMentionPaths = origPaths
+		globMentionPaths = origGlob
 	}()
 
 	listSubAgents = func() ([]string, error) {
 		return nil, nil
 	}
-	listMentionPaths = func(string) ([]mentionPath, error) {
+	globMentionPaths = func(string, string) ([]mentionPath, error) {
 		return []mentionPath{
 			{Value: "aa-regular.txt", Ignored: false},
 			{Value: "bb-ignored.txt", Ignored: true},
@@ -78,17 +86,23 @@ func TestBuildMentionSuggestions_IgnoredPathsComeAfterRegularPaths(t *testing.T)
 
 func TestBuildMentionSuggestions_QueryMatchesAgentAndPathBasePrefix(t *testing.T) {
 	origSubAgents := listSubAgents
-	origPaths := listMentionPaths
+	origGlob := globMentionPaths
 	defer func() {
 		listSubAgents = origSubAgents
-		listMentionPaths = origPaths
+		globMentionPaths = origGlob
 	}()
 
 	listSubAgents = func() ([]string, error) {
 		return []string{"explorer", "tester"}, nil
 	}
-	listMentionPaths = func(string) ([]mentionPath, error) {
-		return []mentionPath{{Value: "target.txt"}, {Value: "tmp/file.txt"}, {Value: "docs/tree.md"}, {Value: "todo.md"}, {Value: "zeta.md"}}, nil
+	globMentionPaths = func(string, string) ([]mentionPath, error) {
+		return []mentionPath{
+			{Value: "target.txt"},
+			{Value: "tmp/file.txt"},
+			{Value: "docs/tree.md"},
+			{Value: "todo.md"},
+			{Value: "zeta.md"},
+		}, nil
 	}
 
 	suggestions, err := buildMentionSuggestions("t", ".")
@@ -113,12 +127,12 @@ func TestUpdate_TabAppliesMentionAutocompleteBeforeAgentSwitch(t *testing.T) {
 	m.input.SetValue("@e")
 
 	origSubAgents := listSubAgents
-	origPaths := listMentionPaths
+	origGlob := globMentionPaths
 	origList := listAvailableAgents
 	origUpdate := updateRunnerForAgent
 	defer func() {
 		listSubAgents = origSubAgents
-		listMentionPaths = origPaths
+		globMentionPaths = origGlob
 		listAvailableAgents = origList
 		updateRunnerForAgent = origUpdate
 	}()
@@ -126,7 +140,7 @@ func TestUpdate_TabAppliesMentionAutocompleteBeforeAgentSwitch(t *testing.T) {
 	listSubAgents = func() ([]string, error) {
 		return []string{"explorer"}, nil
 	}
-	listMentionPaths = func(string) ([]mentionPath, error) {
+	globMentionPaths = func(string, string) ([]mentionPath, error) {
 		return nil, nil
 	}
 	listAvailableAgents = func() ([]string, error) {
@@ -171,16 +185,16 @@ func TestUpdate_UpDownSelectsMentionSuggestionAndTabAppliesSelection(t *testing.
 	m.input.MoveToEnd()
 
 	origSubAgents := listSubAgents
-	origPaths := listMentionPaths
+	origGlob := globMentionPaths
 	defer func() {
 		listSubAgents = origSubAgents
-		listMentionPaths = origPaths
+		globMentionPaths = origGlob
 	}()
 
 	listSubAgents = func() ([]string, error) {
 		return []string{"tester"}, nil
 	}
-	listMentionPaths = func(string) ([]mentionPath, error) {
+	globMentionPaths = func(string, string) ([]mentionPath, error) {
 		return []mentionPath{{Value: "target.txt"}, {Value: "tmp/file.txt"}}, nil
 	}
 	m.updateMentionAutocomplete()
@@ -204,16 +218,16 @@ func TestUpdate_UpDownMentionSelectionClamps(t *testing.T) {
 	m.input.MoveToEnd()
 
 	origSubAgents := listSubAgents
-	origPaths := listMentionPaths
+	origGlob := globMentionPaths
 	defer func() {
 		listSubAgents = origSubAgents
-		listMentionPaths = origPaths
+		globMentionPaths = origGlob
 	}()
 
 	listSubAgents = func() ([]string, error) {
 		return []string{"tester"}, nil
 	}
-	listMentionPaths = func(string) ([]mentionPath, error) {
+	globMentionPaths = func(string, string) ([]mentionPath, error) {
 		return []mentionPath{{Value: "target.txt"}}, nil
 	}
 	m.updateMentionAutocomplete()
@@ -240,6 +254,125 @@ func TestUpdate_UpDownMentionSelectionClamps(t *testing.T) {
 	afterSecondUp := updated.(*model)
 	if got := afterSecondUp.mentionSelectionIndex; got != 0 {
 		t.Fatalf("mentionSelectionIndex after second up = %d, want 0", got)
+	}
+}
+
+func TestGlobMentionPaths_UsesGlobNotWalk(t *testing.T) {
+	// Create a temp directory with a known structure and verify globMentionPaths
+	// returns matching entries without walking the entire tree.
+	tempDir := t.TempDir()
+	dirs := []string{
+		"alpha",
+		"docs",
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(filepath.Join(tempDir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		"alpha/a.txt":  "a",
+		"beta.txt":     "b",
+		"target.txt":   "t1",
+		"tmp/file.txt": "t2",
+		"docs/tree.md": "tree",
+		"todo.md":      "todo",
+		"zeta.md":      "z",
+	}
+	for name, content := range files {
+		full := filepath.Join(tempDir, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	paths, err := globMentionPaths(tempDir, "t")
+	if err != nil {
+		t.Fatalf("globMentionPaths error: %v", err)
+	}
+
+	got := make([]string, 0, len(paths))
+	for _, p := range paths {
+		got = append(got, p.Value)
+	}
+	// Should find entries whose path starts with "t" or basename starts with "t"
+	for _, expected := range []string{"target.txt", "tmp/file.txt", "docs/tree.md", "todo.md"} {
+		found := false
+		for _, g := range got {
+			if g == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected %q in results, got %v", expected, got)
+		}
+	}
+}
+
+func TestGlobMentionPaths_GitIgnoresExcludedFiles(t *testing.T) {
+	// Create a git repo with a .gitignore so we test the git ls-files path.
+	tempDir := t.TempDir()
+	run := func(name string, args ...string) {
+		cmd := exec.Command(name, args...)
+		cmd.Dir = tempDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("run %s %v: %v", name, args, err)
+		}
+	}
+	run("git", "init")
+	run("git", "config", "user.email", "test@test.com")
+	run("git", "config", "user.name", "test")
+
+	// Write .gitignore before adding files.
+	if err := os.WriteFile(filepath.Join(tempDir, ".gitignore"), []byte("ignored.txt\nbuild/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create files.
+	for _, name := range []string{"main.go", "ignored.txt", "build/output.bin"} {
+		full := filepath.Join(tempDir, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("git", "add", ".gitignore", "main.go")
+	run("git", "commit", "-m", "init")
+
+	paths, err := globMentionPaths(tempDir, "")
+	if err != nil {
+		t.Fatalf("globMentionPaths error: %v", err)
+	}
+
+	got := make([]string, 0, len(paths))
+	for _, p := range paths {
+		got = append(got, p.Value)
+	}
+
+	// main.go and .gitignore should be present; ignored.txt and build/ should not.
+	for _, unexpected := range []string{"ignored.txt", "build/output.bin", "build/"} {
+		for _, g := range got {
+			if g == unexpected {
+				t.Fatalf("found ignored path %q in results %v", unexpected, got)
+			}
+		}
+	}
+
+	found := false
+	for _, g := range got {
+		if g == "main.go" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected main.go in results, got %v", got)
 	}
 }
 

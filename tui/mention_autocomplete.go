@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -12,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/liznear/hh/tui/agents"
 )
@@ -48,93 +48,114 @@ var listSubAgents = func() ([]string, error) {
 	return names, nil
 }
 
-var listMentionPaths = func(workingDir string) ([]mentionPath, error) {
+// globMentionPaths returns file/directory paths matching the query. It uses
+// git ls-files in git repos (fast, respects .gitignore) and falls back to
+// filesystem glob (skipping dot-prefixed entries) otherwise.
+var globMentionPaths = globMentionPathsImpl
+
+func globMentionPathsImpl(workingDir string, query string) ([]mentionPath, error) {
 	root := strings.TrimSpace(workingDir)
 	if root == "" {
 		return nil, nil
 	}
 
-	entries := make([]string, 0, 128)
-	err := filepath.WalkDir(root, func(fullPath string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
-		}
-		if fullPath == root {
-			return nil
-		}
-
-		rel, err := filepath.Rel(root, fullPath)
+	// Try git ls-files first — uses the index so it's fast and automatically
+	// respects .gitignore. Falls back to filesystem glob for non-git dirs.
+	entries, err := gitLsFiles(root)
+	if err != nil {
+		entries, err = globFiles(root)
 		if err != nil {
-			return nil
+			return nil, err
 		}
-		rel = filepath.ToSlash(rel)
-		if rel == "." || rel == "" {
-			return nil
-		}
+	}
 
-		base := path.Base(rel)
-		if strings.HasPrefix(base, ".git") {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
+	// Filter by query.
+	lowerQuery := strings.ToLower(query)
+	filtered := make([]mentionPath, 0, len(entries))
+	for _, entry := range entries {
+		if !pathMatchesQuery(entry, lowerQuery) {
+			continue
 		}
+		filtered = append(filtered, mentionPath{Value: entry})
+	}
+	return filtered, nil
+}
 
-		if d.IsDir() {
-			entries = append(entries, rel+"/")
-			return nil
-		}
-
-		entries = append(entries, rel)
-		return nil
-	})
+// gitLsFiles returns all non-ignored files and derived directory entries using
+// git's index. Returns an error if the directory is not a git repo.
+func gitLsFiles(root string) ([]string, error) {
+	cmd := exec.Command("git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard")
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(entries)
 
-	ignoredSet := detectIgnoredMentionPaths(root, entries)
-	paths := make([]mentionPath, 0, len(entries))
-	for _, entry := range entries {
-		_, ignored := ignoredSet[strings.TrimSuffix(entry, "/")]
-		paths = append(paths, mentionPath{Value: entry, Ignored: ignored})
-	}
-	return paths, nil
-}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	seen := map[string]struct{}{}
+	entries := make([]string, 0, len(lines)*2)
 
-func detectIgnoredMentionPaths(workingDir string, entries []string) map[string]struct{} {
-	ignored := map[string]struct{}{}
-	if len(entries) == 0 {
-		return ignored
-	}
-
-	inputs := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		trimmed := strings.TrimSuffix(entry, "/")
-		if trimmed == "" {
-			continue
-		}
-		inputs = append(inputs, trimmed)
-	}
-	if len(inputs) == 0 {
-		return ignored
-	}
-
-	cmd := exec.Command("git", "-C", workingDir, "check-ignore", "--stdin")
-	cmd.Stdin = strings.NewReader(strings.Join(inputs, "\n") + "\n")
-	out, err := cmd.Output()
-	if err != nil {
-		return ignored
-	}
-
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		ignored[line] = struct{}{}
+		if _, ok := seen[line]; ok {
+			continue
+		}
+		seen[line] = struct{}{}
+		entries = append(entries, filepath.ToSlash(line))
+
+		// Derive directory entries from file paths.
+		dir := path.Dir(line)
+		for dir != "." && dir != "" {
+			slashDir := dir + "/"
+			if _, ok := seen[slashDir]; !ok {
+				seen[slashDir] = struct{}{}
+				entries = append(entries, slashDir)
+			}
+			dir = path.Dir(dir)
+		}
 	}
-	return ignored
+
+	sort.Strings(entries)
+	return entries, nil
+}
+
+// globFiles is a fallback for non-git directories using filesystem glob.
+func globFiles(root string) ([]string, error) {
+	fsys := os.DirFS(root)
+	opts := []doublestar.GlobOption{doublestar.WithNoHidden(), doublestar.WithCaseInsensitive()}
+
+	seen := map[string]struct{}{}
+	var entries []string
+
+	matches, err := doublestar.Glob(fsys, "**", opts...)
+	if err != nil {
+		return nil, err
+	}
+	for _, match := range matches {
+		if match == "." || match == "" {
+			continue
+		}
+		if _, ok := seen[match]; ok {
+			continue
+		}
+		seen[match] = struct{}{}
+
+		fullPath := filepath.Join(root, filepath.FromSlash(match))
+		info, err := os.Stat(fullPath)
+		if err != nil {
+			continue
+		}
+		if info.IsDir() {
+			entries = append(entries, match+"/")
+		} else {
+			entries = append(entries, match)
+		}
+	}
+
+	sort.Strings(entries)
+	return entries, nil
 }
 
 func (m *model) updateMentionAutocomplete() {
@@ -162,6 +183,54 @@ func (m *model) updateMentionAutocomplete() {
 	if m.mentionSelectionIndex >= len(m.mentionSuggestions) {
 		m.mentionSelectionIndex = len(m.mentionSuggestions) - 1
 	}
+}
+
+func buildMentionSuggestions(query string, workingDir string) ([]mentionSuggestion, error) {
+	query = strings.ToLower(strings.TrimSpace(query))
+	out := make([]mentionSuggestion, 0, mentionAutocompleteMaxItems)
+
+	subAgents, err := listSubAgents()
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range subAgents {
+		if !strings.HasPrefix(name, query) {
+			continue
+		}
+		out = append(out, mentionSuggestion{Value: name, IsAgent: true})
+		if len(out) == mentionAutocompleteMaxItems {
+			return out, nil
+		}
+	}
+
+	paths, err := globMentionPaths(workingDir, query)
+	if err != nil {
+		return nil, err
+	}
+	regular := make([]mentionPath, 0, len(paths))
+	ignored := make([]mentionPath, 0, len(paths))
+	for _, candidate := range paths {
+		if candidate.Ignored {
+			ignored = append(ignored, candidate)
+		} else {
+			regular = append(regular, candidate)
+		}
+	}
+
+	for _, candidate := range regular {
+		out = append(out, mentionSuggestion{Value: candidate.Value, Ignored: false})
+		if len(out) == mentionAutocompleteMaxItems {
+			return out, nil
+		}
+	}
+	for _, candidate := range ignored {
+		out = append(out, mentionSuggestion{Value: candidate.Value, Ignored: true})
+		if len(out) == mentionAutocompleteMaxItems {
+			break
+		}
+	}
+
+	return out, nil
 }
 
 func (m *model) applyMentionAutocomplete() bool {
@@ -252,57 +321,6 @@ func (m *model) renderMentionAutocomplete(width int) string {
 		lines = append(lines, line)
 	}
 	return lipgloss.NewStyle().Width(popupWidth).Render(strings.Join(lines, "\n"))
-}
-
-func buildMentionSuggestions(query string, workingDir string) ([]mentionSuggestion, error) {
-	query = strings.ToLower(strings.TrimSpace(query))
-	out := make([]mentionSuggestion, 0, mentionAutocompleteMaxItems)
-
-	subAgents, err := listSubAgents()
-	if err != nil {
-		return nil, err
-	}
-	for _, name := range subAgents {
-		if !strings.HasPrefix(name, query) {
-			continue
-		}
-		out = append(out, mentionSuggestion{Value: name, IsAgent: true})
-		if len(out) == mentionAutocompleteMaxItems {
-			return out, nil
-		}
-	}
-
-	paths, err := listMentionPaths(workingDir)
-	if err != nil {
-		return nil, err
-	}
-	regular := make([]mentionPath, 0, len(paths))
-	ignored := make([]mentionPath, 0, len(paths))
-	for _, candidate := range paths {
-		if !pathMatchesQuery(candidate.Value, query) {
-			continue
-		}
-		if candidate.Ignored {
-			ignored = append(ignored, candidate)
-		} else {
-			regular = append(regular, candidate)
-		}
-	}
-
-	for _, candidate := range regular {
-		out = append(out, mentionSuggestion{Value: candidate.Value, Ignored: false})
-		if len(out) == mentionAutocompleteMaxItems {
-			return out, nil
-		}
-	}
-	for _, candidate := range ignored {
-		out = append(out, mentionSuggestion{Value: candidate.Value, Ignored: true})
-		if len(out) == mentionAutocompleteMaxItems {
-			break
-		}
-	}
-
-	return out, nil
 }
 
 func pathMatchesQuery(candidate, query string) bool {
