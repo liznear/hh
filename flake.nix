@@ -27,7 +27,7 @@
             # Only build/install the root command, exclude binaries under cmd/
             subPackages = [ "." ];
 
-            vendorHash = "sha256-1dVIJtgRkHyr/Qr7llpKhOP2NLC2RgbyJQC9AsPSVw4=";
+            vendorHash = "sha256-z4ArXg77odsSFfjKkoXMk1nuWNGESdvc8YSjr56PlI4=";
 
             # Use the Go version specified
             inherit go;
