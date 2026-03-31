@@ -44,7 +44,7 @@ func (m *model) handleMouseReleaseMsg(msg tea.MouseReleaseMsg, statusCmd tea.Cmd
 				if content != "" {
 					cmd := func() tea.Msg {
 						clipboard.WriteAll(content)
-						return nil
+						return copyIndicatorMsg{}
 					}
 					m.refreshViewport()
 					return m, tea.Batch(statusCmd, cmd)

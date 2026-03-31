@@ -107,6 +107,7 @@ func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
 			Elapsed:       m.stopwatch.Elapsed(),
 			EscPending:    m.escPending,
 			ShellMode:     m.shellModeActive(),
+			CopiedActive:  !m.copiedAt.IsZero(),
 		},
 		sidebarLines: m.buildSidebarLines(layout.sidebarWidth),
 	}
@@ -470,13 +471,23 @@ type statusWidgetModel struct {
 	Elapsed       time.Duration
 	EscPending    bool
 	ShellMode     bool
+	CopiedActive  bool
 }
 
 func renderStatusWidget(vm statusWidgetModel, theme Theme) string {
 	padding := "  "
 
+	var copyBadge string
+	if vm.CopiedActive {
+		// A bold, high-contrast badge indicating text was copied
+		copyBadge = " · " + lipgloss.NewStyle().
+			Foreground(theme.Color(ThemeColorCopiedIndicatorForeground)).
+			Bold(true).
+			Render("COPIED")
+	}
+
 	if vm.ShellMode && !vm.Busy {
-		return padding + "Shell"
+		return padding + "Shell" + copyBadge
 	}
 	base := strings.TrimSpace(vm.AgentName)
 	if base == "" {
@@ -493,15 +504,15 @@ func renderStatusWidget(vm statusWidgetModel, theme Theme) string {
 		if vm.EscPending {
 			hint = lipgloss.NewStyle().Foreground(theme.Color(ThemeColorStatusInterruptHintForeground)).Render(" esc again to interrupt")
 		}
-		return fmt.Sprintf("%s%s · %s %s%s", padding, base, durationView, spinnerView, hint)
+		return fmt.Sprintf("%s%s · %s %s%s%s", padding, base, durationView, spinnerView, hint, copyBadge)
 	}
 
 	if vm.ShowRunResult {
 		durationView := lipgloss.NewStyle().Foreground(theme.Color(ThemeColorStatusDurationForeground)).Render(formatElapsedSeconds(vm.Elapsed))
-		return fmt.Sprintf("%s%s · %s", padding, base, durationView)
+		return fmt.Sprintf("%s%s · %s%s", padding, base, durationView, copyBadge)
 	}
 
-	return padding + base
+	return padding + base + copyBadge
 }
 
 func formatElapsedSeconds(d time.Duration) string {

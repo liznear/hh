@@ -138,6 +138,7 @@ type runtimeState struct {
 	mouseDragX     int
 	mouseDragY     int
 	mouseClickTime time.Time
+	copiedAt       time.Time
 }
 
 type sidebarModifiedFileLine struct {
@@ -360,6 +361,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case taskSessionPlaybackTickMsg:
 		return m.handleTaskSessionPlaybackTickMsg(statusCmd)
+
+	case copyIndicatorMsg:
+		m.copiedAt = time.Now()
+		m.refreshViewport()
+		cmd := tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return clearCopyIndicatorMsg{}
+		})
+		return m, tea.Batch(statusCmd, cmd)
+
+	case clearCopyIndicatorMsg:
+		m.copiedAt = time.Time{}
+		m.refreshViewport()
+		return m, statusCmd
 	}
 
 	var cmd tea.Cmd
@@ -1450,6 +1464,9 @@ type streamBatchMsg struct {
 	done    bool
 	doneErr error
 }
+
+type copyIndicatorMsg struct{}
+type clearCopyIndicatorMsg struct{}
 
 func startAgentStreamCmd(runner *agent.AgentRunner, prompt string) tea.Cmd {
 	return startAgentStreamCmdWithContext(context.Background(), runner, prompt, "")

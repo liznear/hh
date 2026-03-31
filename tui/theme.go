@@ -25,6 +25,7 @@ const (
 	ThemeColorSidebarErrorForeground        = "sidebar_error_foreground"
 	ThemeColorSidebarSuccessForeground      = "sidebar_success_foreground"
 	ThemeColorSidebarSeparatorForeground    = "sidebar_separator_foreground"
+	ThemeColorCopiedIndicatorForeground     = "copied_indicator_foreground"
 	ThemeColorModelPickerSelectedForeground = "model_picker_selected_foreground"
 	ThemeColorModelPickerMutedForeground    = "model_picker_muted_foreground"
 	ThemeColorModelPickerBorderForeground   = "model_picker_border_foreground"
@@ -98,6 +99,7 @@ func NewTheme(palette Base16Palette) Theme {
 			ThemeColorSidebarErrorForeground:        "Base01",
 			ThemeColorSidebarSuccessForeground:      "Base02",
 			ThemeColorSidebarSeparatorForeground:    "Base07",
+			ThemeColorCopiedIndicatorForeground:     "Base0C",
 			ThemeColorModelPickerSelectedForeground: "Base00",
 			ThemeColorModelPickerMutedForeground:    "Base08",
 			ThemeColorModelPickerBorderForeground:   "Base0E",
