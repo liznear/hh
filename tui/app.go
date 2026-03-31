@@ -130,6 +130,14 @@ type runtimeState struct {
 	mentionSelectionIndex int
 
 	ephemeralItems []ephemeralItem
+
+	// Text selection
+	mouseDown      bool
+	mouseDownX     int
+	mouseDownY     int
+	mouseDragX     int
+	mouseDragY     int
+	mouseClickTime time.Time
 }
 
 type sidebarModifiedFileLine struct {
@@ -316,6 +324,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseClickMsg:
 		return m.handleMouseClickMsg(msg, statusCmd)
+
+	case tea.MouseMotionMsg:
+		return m.handleMouseMotionMsg(msg, statusCmd)
+
+	case tea.MouseReleaseMsg:
+		return m.handleMouseReleaseMsg(msg, statusCmd)
 
 	case shellCommandDoneMsg:
 		return m.handleShellCommandDoneMsg(msg, statusCmd)
@@ -1197,6 +1211,17 @@ func (m *model) handleMouseClickMsg(msg tea.MouseClickMsg, statusCmd tea.Cmd) (t
 		m.refreshViewport()
 		return m, statusCmd
 	}
+
+	// Start text selection
+	if msg.Button == tea.MouseLeft {
+		m.mouseDown = true
+		m.mouseDownX = msg.X
+		m.mouseDownY = msg.Y
+		m.mouseDragX = msg.X
+		m.mouseDragY = msg.Y
+		m.refreshViewport()
+	}
+
 	return m, statusCmd
 }
 

@@ -7,6 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"encoding/json"
 	"fmt"
+	"image"
 	"os"
 	"reflect"
 	"strings"
@@ -84,6 +85,14 @@ func (m *model) buildFrameViewModel(layout layoutState) frameViewModel {
 		messageList = m.renderResumePickerDialog(layout.mainWidth, layout.messageHeight)
 	} else if m.modelPicker != nil {
 		messageList = m.renderModelPickerDialog(layout.mainWidth, layout.messageHeight)
+	}
+
+	if m.mouseDown && (m.mouseDownX != m.mouseDragX || m.mouseDownY != m.mouseDragY) {
+		startLine, startCol, endLine, endCol := m.getHighlightRange(layout)
+		if startLine >= 0 && endLine >= 0 {
+			area := image.Rect(0, 0, layout.mainWidth, layout.messageHeight)
+			messageList = Highlight(messageList, area, startLine, startCol, endLine, endCol, nil)
+		}
 	}
 
 	return frameViewModel{

@@ -10,10 +10,10 @@ import (
 )
 
 type WriteResult struct {
-	Path        string
-	OldContent  string
-	NewContent  string
-	AddedLines  int
+	Path       string
+	OldContent string
+	NewContent string
+	AddedLines int
 }
 
 func (r WriteResult) Summary() string {
