@@ -474,6 +474,7 @@ type statusWidgetModel struct {
 
 func renderStatusWidget(vm statusWidgetModel, theme Theme) string {
 	padding := "  "
+
 	if vm.ShellMode && !vm.Busy {
 		return padding + "Shell"
 	}

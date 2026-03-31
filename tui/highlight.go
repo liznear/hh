@@ -8,14 +8,6 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 )
 
-// NormalizeSpace normalizes whitespace in the given content string.
-func NormalizeSpace(content string) string {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	content = strings.ReplaceAll(content, "\t", "    ")
-	content = strings.TrimSpace(content)
-	return content
-}
-
 // DefaultHighlighter is the default highlighter function that applies inverse style.
 var DefaultHighlighter Highlighter = func(x, y int, c *uv.Cell) *uv.Cell {
 	if c == nil {
@@ -61,8 +53,6 @@ func Highlight(content string, area image.Rectangle, startLine, startCol, endLin
 // HighlightBuffer highlights a region of text within the given content and
 // region, returning a [uv.ScreenBuffer].
 func HighlightBuffer(content string, area image.Rectangle, startLine, startCol, endLine, endCol int, highlighter Highlighter) *uv.ScreenBuffer {
-	content = NormalizeSpace(content)
-
 	if startLine < 0 || startCol < 0 {
 		return nil
 	}

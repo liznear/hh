@@ -58,9 +58,6 @@ func (m *model) handleMouseReleaseMsg(msg tea.MouseReleaseMsg, statusCmd tea.Cmd
 }
 
 func (m *model) getHighlightRange(layout layoutState) (startLine, startCol, endLine, endCol int) {
-	// messagePane is at Y=0 (relative to root? No, we have appPadding and sidebar if present)
-	// Actually, wait, let's find the exact screen coordinates of messagePane.
-	// We know it's at appPadding from top.
 	paneX := appPadding
 	paneY := appPadding
 
