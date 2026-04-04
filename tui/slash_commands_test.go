@@ -76,6 +76,46 @@ func TestUpdate_NewSlashCommandStartsFreshSession(t *testing.T) {
 	}
 }
 
+func TestUpdate_NewSlashCommandClearsRunnerHistory(t *testing.T) {
+	runner := agent.NewAgentRunner("test-model", stubProvider{})
+	if err := runner.Update(agent.WithMessages([]agent.Message{
+		{Role: agent.RoleUser, Content: "stale user"},
+		{Role: agent.RoleAssistant, Content: "stale assistant"},
+	})); err != nil {
+		t.Fatalf("seed runner history: %v", err)
+	}
+
+	m := newInputTestModel()
+	m.runner = runner
+	m.input.SetValue("/new")
+
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	after := updated.(*model)
+	if after.busy {
+		t.Fatal("expected /new not to start run")
+	}
+
+	var endMessages []agent.Message
+	err := runner.Run(context.Background(), agent.Input{Content: "after new", Type: "text"}, func(e agent.Event) {
+		if e.Type != agent.EventTypeAgentEnd {
+			return
+		}
+		endMessages = e.Data.(agent.EventDataAgentEnd).Messages
+	})
+	if err != nil {
+		t.Fatalf("runner run: %v", err)
+	}
+
+	if len(endMessages) == 0 {
+		t.Fatal("expected agent end messages")
+	}
+	for _, message := range endMessages {
+		if strings.Contains(message.Content, "stale user") || strings.Contains(message.Content, "stale assistant") {
+			t.Fatalf("found stale history after /new in run messages: %+v", message)
+		}
+	}
+}
+
 func TestUpdate_UnknownSlashCommandShowsErrorItem(t *testing.T) {
 	m := newTestModel()
 	m.input.SetValue("/does-not-exist")

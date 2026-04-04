@@ -68,6 +68,11 @@ func (m *model) executeSlashCommand(cmd commands.Command, inv commands.Invocatio
 }
 
 func (m *model) startNewSession() {
+	var resetErr error
+	if m.runner != nil {
+		resetErr = m.runner.Update(agent.WithMessages(nil))
+	}
+
 	m.session = session.NewState(m.modelName)
 	m.toolCalls = map[string]*session.ToolCallItem{}
 	m.listOffsetIdx = 0
@@ -78,6 +83,9 @@ func (m *model) startNewSession() {
 	m.itemRenderCache = map[uintptr]itemRenderCacheEntry{}
 	m.ephemeralItems = nil
 	m.contextWindowUsed = 0
+	if resetErr != nil {
+		m.addItem(&session.ErrorItem{Message: fmt.Sprintf("failed to reset runner context: %v", resetErr)})
+	}
 	m.persistState()
 }
 
