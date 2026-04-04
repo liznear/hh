@@ -16,6 +16,7 @@ var nowEditPlan = time.Now
 
 var nonSlugChars = regexp.MustCompile(`[^a-z0-9-]+`)
 var repeatedHyphens = regexp.MustCompile(`-+`)
+var leadingDatePrefixWithSuffix = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}-(.+)$`)
 
 type EditPlanResult struct {
 	Path         string
@@ -107,5 +108,8 @@ func slugifyPlanName(planName string) string {
 	slug = nonSlugChars.ReplaceAllString(slug, "-")
 	slug = repeatedHyphens.ReplaceAllString(slug, "-")
 	slug = strings.Trim(slug, "-")
+	if matches := leadingDatePrefixWithSuffix.FindStringSubmatch(slug); len(matches) == 2 {
+		slug = strings.Trim(matches[1], "-")
+	}
 	return slug
 }

@@ -112,6 +112,54 @@ func TestEditPlanTool_UpdatesExistingPlanFile(t *testing.T) {
 	}
 }
 
+func TestEditPlanTool_StripsDatePrefixFromPlanName(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWd)
+	}()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir temp dir: %v", err)
+	}
+
+	oldNow := nowEditPlan
+	nowEditPlan = func() time.Time { return time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC) }
+	defer func() {
+		nowEditPlan = oldNow
+	}()
+
+	args := map[string]any{
+		"plan_name": "2026-03-28 New Feature Plan",
+		"content":   "# Plan\n",
+	}
+
+	res := NewEditPlanTool().Handler.Handle(context.Background(), args)
+	if res.IsErr {
+		t.Fatalf("expected success, got error: %s", res.Data)
+	}
+
+	expectedPath := filepath.Join(".hh", "plans", "2026-03-28-new-feature-plan.md")
+	if _, err := os.Stat(expectedPath); err != nil {
+		t.Fatalf("expected plan at %q: %v", expectedPath, err)
+	}
+
+	unexpectedPath := filepath.Join(".hh", "plans", "2026-03-28-2026-03-28-new-feature-plan.md")
+	if _, err := os.Stat(unexpectedPath); !os.IsNotExist(err) {
+		t.Fatalf("unexpected duplicated-date plan path exists: %q", unexpectedPath)
+	}
+
+	structured, ok := res.Result.(EditPlanResult)
+	if !ok {
+		t.Fatalf("unexpected result type: %T", res.Result)
+	}
+	if structured.Path != expectedPath {
+		t.Fatalf("unexpected path: got %q want %q", structured.Path, expectedPath)
+	}
+}
+
 func TestEditPlanTool_InvalidPlanName(t *testing.T) {
 	args := map[string]any{
 		"plan_name": "!!!",
