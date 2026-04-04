@@ -7,7 +7,7 @@
 - [ ] Shell mode during busy
 - [ ] Auto memory
 - [ ] Auto dream
-- [ ] Support copy content
+- [x] Support copy content
 - [ ] Support copy image
 - [ ] Fix queued badge not removed.
 - [x] Compact
