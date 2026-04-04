@@ -625,16 +625,9 @@ func wrapString(s string, width int, bg color.Color) []string {
 			break
 		}
 
-		// Find truncation point - we need to handle ANSI codes carefully
-		truncated := ansi.Truncate(remaining, width, "")
-		lines = append(lines, truncated)
-
-		// Calculate how many visible chars we took
-		tookWidth := ansi.StringWidth(truncated)
-
-		// Skip past the taken characters in the original string
-		// We need to strip ANSI codes to count properly
-		remaining = skipVisibleChars(remaining, tookWidth)
+		// Cut by visible cell width while preserving ANSI escapes.
+		lines = append(lines, ansi.Cut(remaining, 0, width))
+		remaining = ansi.Cut(remaining, width, remWidth)
 	}
 
 	if len(lines) == 0 {
@@ -642,43 +635,4 @@ func wrapString(s string, width int, bg color.Color) []string {
 	}
 
 	return lines
-}
-
-// skipVisibleChars skips n visible characters in a string with ANSI codes
-func skipVisibleChars(s string, n int) string {
-	// Use ansi.Truncate to get first n chars, then strip them
-	first := ansi.Truncate(s, n, "")
-	if len(first) >= len(s) {
-		return ""
-	}
-
-	// Strip ANSI sequences from first part to count raw bytes
-	// We need to find where the nth visible character ends
-	inEscape := false
-	visibleCount := 0
-	bytePos := 0
-
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c == '\x1b' {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if c == 'm' || c == 'K' || c == 'J' || c == 'H' || c == 'f' {
-				inEscape = false
-			}
-			continue
-		}
-		visibleCount++
-		bytePos = i + 1
-		if visibleCount > n {
-			// Check if this is a multi-byte UTF-8 character
-			for bytePos < len(s) && s[bytePos]&0xC0 == 0x80 {
-				bytePos++
-			}
-			return s[bytePos:]
-		}
-	}
-	return ""
 }

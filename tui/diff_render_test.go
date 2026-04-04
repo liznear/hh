@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -101,5 +102,27 @@ func unchanged() {
 	}
 	if !hasHunkHeader {
 		t.Fatal("expected hunk header")
+	}
+}
+
+func TestWrapString_PreservesContentAcrossWrappedSegments(t *testing.T) {
+	s := lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("prefix-") +
+		lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("**Architecture:** Single `tasks` table with `status` discriminator + JSONB payload columns + DB CHECK constraints; TypeScript discriminated union mirrors DB invariants.")
+
+	parts := wrapString(s, 30, nil)
+	if len(parts) < 2 {
+		t.Fatalf("expected wrapped output, got %d part(s)", len(parts))
+	}
+
+	var joined string
+	for _, part := range parts {
+		if ansi.StringWidth(part) > 30 {
+			t.Fatalf("expected part width <= 30, got %d", ansi.StringWidth(part))
+		}
+		joined += ansi.Strip(part)
+	}
+
+	if joined != ansi.Strip(s) {
+		t.Fatalf("wrapped content mismatch\nwant: %q\ngot:  %q", ansi.Strip(s), joined)
 	}
 }
